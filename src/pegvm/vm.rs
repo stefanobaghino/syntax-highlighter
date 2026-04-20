@@ -382,16 +382,44 @@ impl<'p, 'i> VM<'p, 'i> {
     fn fail(&mut self) -> bool {
         self.maybe_snapshot();
         while let Some(entry) = self.stack.pop() {
-            if let StackEntry::Backtrack {
-                ip,
-                sp,
-                capture_len,
-            } = entry
-            {
-                self.ip = ip;
-                self.sp = sp;
-                self.captures.truncate(capture_len);
-                return true;
+            // Explicit match on all three variants — silently dropping a
+            // `Memo` frame would skip caching its failure and leak
+            // re-executions on future hits at the same sp.
+            match entry {
+                StackEntry::Backtrack {
+                    ip,
+                    sp,
+                    capture_len,
+                } => {
+                    self.ip = ip;
+                    self.sp = sp;
+                    self.captures.truncate(capture_len);
+                    return true;
+                }
+                StackEntry::Memo {
+                    memo_id,
+                    start_sp,
+                    capture_start_len: _,
+                } => {
+                    // Cache the failure so a future call at the same sp
+                    // short-circuits into `fail()` without re-executing the
+                    // body. Captures produced inside the rule will be
+                    // truncated by whichever `Backtrack` ultimately catches
+                    // this unwind (its `capture_len` was snapshotted *before*
+                    // MemoOpen pushed this frame).
+                    self.memo.insert(
+                        (memo_id, start_sp),
+                        MemoEntry {
+                            end_sp: None,
+                            captures: Vec::new(),
+                        },
+                    );
+                }
+                StackEntry::Return { .. } => {
+                    // Rule-call frame unwinding past its caller. The caller's
+                    // Backtrack (if any) is deeper on the stack and will be
+                    // found by continued popping.
+                }
             }
         }
         false
