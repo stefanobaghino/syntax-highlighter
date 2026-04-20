@@ -18,6 +18,9 @@ properties described in *Why this approach* below are **design goals that
 this MVP is trying to prove** — the architecture supports them, but none are
 yet demonstrated across more than one grammar. Expect breaking changes.
 
+Malformed or incomplete inputs render the longest valid prefix styled and
+the rest plain (see `src/pegvm/vm.rs` for the farthest-failure tracking).
+
 ## Why this approach
 
 The aim is a small, efficient runtime with compact grammars and
@@ -87,11 +90,6 @@ These need no new VM or compiler machinery.
 
 Each item is a self-contained feature that unlocks further work.
 
-- **Partial-match rendering.** Small VM change: on failure, surface the
-  deepest `sp` reached and the captures valid at that point. Lets the
-  highlighter render `input[..matched]` styled and `input[matched..]`
-  plain, eliminating the "plain → styled → plain → styled" flicker when
-  rendering incomplete input.
 - **Memoization (packrat parsing).** Caches rule results per input
   position. Primary payoff: *incremental parsing* — O(Δ) per input
   change instead of O(n). Covers both the easy case (append-only

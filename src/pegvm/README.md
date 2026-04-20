@@ -9,12 +9,12 @@ This document is a guided tour of the **types** that make up the module: what ea
 Three transformations connect the key types:
 
 ```
-&str  ──parse_grammar──▶  Grammar  ──compile_grammar──▶  Program  ──VM::run──▶  Option<MatchResult>
+&str  ──parse_grammar──▶  Grammar  ──compile_grammar──▶  Program  ──VM::run──▶  MatchResult
 ```
 
 - `parse_grammar` is text-level: it consumes a grammar source and produces a `Grammar` value.
 - `compile_grammar` is AST-level: it consumes a `Grammar` and produces a `Program` (bytecode plus metadata).
-- `VM::run` is runtime-level: it consumes a `Program` and an input and produces (if the input matches) a `MatchResult`.
+- `VM::run` is runtime-level: it consumes a `Program` and an input and produces a `MatchResult` whose `complete` flag distinguishes full matches from partial ones.
 
 Every other type in the module exists to serve one of these three stages.
 
@@ -158,8 +158,9 @@ pub struct Capture {
 }
 
 pub struct MatchResult {
-    pub matched: usize,          // bytes consumed
+    pub matched: usize,
     pub captures: Vec<Capture>,
+    pub complete: bool,
 }
 ```
 
@@ -168,9 +169,14 @@ A `Capture` is a closed span over the input paired with a kind tag: "these bytes
 Captures returned in a `MatchResult` have two non-obvious guarantees:
 
 1. **They form a properly-nested forest over the input.** Because PEG syntactic structure nests, captures can only stand in a sibling-or-parent relationship — never partially overlap. This is what lets the highlighter use a stack-based renderer rather than an interval tree.
-2. **They reflect only alternatives that actually succeeded.** Captures begun inside a failed choice are discarded during backtracking (see `VM::fail`). The caller sees a history consistent with the winning parse, not with everything the VM tried.
+2. **They reflect only alternatives that actually succeeded up to `matched`.** Captures begun inside a failed choice are discarded during backtracking (see `VM::fail`). The caller sees a history consistent with the winning parse, not with everything the VM tried.
 
-A `MatchResult` is emitted only when the VM reaches `End` — partial matches (grammar fits a prefix but not the whole input) are expressed by `matched < input.len()`, not by a partial result. A full non-match returns `None`.
+A `MatchResult` is always returned. The `complete` flag distinguishes the two cases:
+
+- `complete == true`: the VM reached `End`. `matched` is the `sp` at that point (potentially less than `input.len()` if the grammar is designed to stop early — no trailing `!.`).
+- `complete == false`: the VM exhausted its backtrack stack without reaching `End`. `matched` is the farthest input position the VM ever reached before retreating — the "farthest failure position" heuristic of Ford 2004, used for error reporting by LPegLabel and the `lpeg-ffp` fork — and `captures` are the captures valid at that point, with any still-open captures closed at `matched`.
+
+This partial result is what lets the highlighter render a styled prefix and a plain tail for malformed input, without the VM knowing anything about highlighting.
 
 ## Error types
 
@@ -179,7 +185,7 @@ The module has two error types, one per transformation in the pipeline that can 
 - `ParseError` is returned by `parse_grammar` when the grammar source is malformed (unterminated string, missing `<-`, duplicate rule, etc.). It carries line and column information.
 - `CompileError` is returned by `compile_grammar` when the grammar is well-formed text but semantically invalid — a `NonTerminal("foo")` with no matching rule, or a start rule that doesn't exist.
 
-Runtime mismatch (the input doesn't match the grammar) is not an error type: `VM::run` returns `Option<MatchResult>` and a failed parse is `None`. The distinction is deliberate — a grammar error is an author bug (the grammar needs fixing), a runtime non-match is a data bug (the input didn't conform).
+Runtime mismatch (the input doesn't match the grammar) is not an error type: `VM::run` returns a `MatchResult` whose `complete` flag is `false` when the input didn't conform. The distinction is deliberate — a grammar error is an author bug (the grammar needs fixing), a runtime non-match is a data bug (the input didn't conform).
 
 ## Invariants the types alone can't express
 
@@ -187,7 +193,8 @@ Some properties the module relies on can't be encoded in the Rust type system. T
 
 1. **`PartialCommit` must target the body of a repetition, not the `Choice` that starts it.** `PartialCommit` updates the existing top backtrack frame rather than pushing a new one; jumping back to the `Choice` would push a fresh frame every iteration, exhausting memory and — worse — corrupting the stack so that an enclosing `Return` pops the wrong kind of entry. This is the first thing to check when extending the compiler.
 2. **Captures are truncated on backtrack.** Any instruction that enters the fail protocol routes through `VM::fail`, which restores the capture buffer length from the backtrack frame. New backtracking instructions must reuse this helper rather than re-implement it.
-3. **Byte-oriented.** `CharSet` is a set of `u8` values; UTF-8 is never decoded. This is a deliberate simplification appropriate for the MVP and will need to be revisited before serious Unicode-aware grammars.
+3. **`VM::fail` and `BackCommit` are the only sites where `sp` retreats.** Both must route through `VM::maybe_snapshot` so the farthest-failure bookkeeping sees every retreat. Between retreats `sp` is monotone non-decreasing, which is why snapshots at those two sites capture the true deepest point reached. Any new instruction that rewinds `sp` must update this invariant.
+4. **Byte-oriented.** `CharSet` is a set of `u8` values; UTF-8 is never decoded. This is a deliberate simplification appropriate for the MVP and will need to be revisited before serious Unicode-aware grammars.
 
 ## References
 

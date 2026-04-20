@@ -11,13 +11,24 @@
 //! coloring. PEG nesting guarantees captures form a forest (no overlap),
 //! which is why a stack works rather than an interval tree.
 //!
+//! # Partial-match rendering
+//!
+//! When the VM cannot match the full input, it still returns captures
+//! valid at the farthest position it reached (see `MatchResult` in
+//! [`crate::pegvm`]). The renderer styles `input[..matched]` using those
+//! captures and emits `input[matched..]` plain. This is why malformed or
+//! in-progress inputs show a styled prefix followed by a plain tail,
+//! rather than the whole input going unstyled on the first character
+//! that fails to parse.
+//!
 //! # Load-bearing invariant
 //!
 //! Stripping the ANSI escape codes from `highlight(input)` must yield the
-//! original `input` unchanged. The renderer never reorders, drops, or
-//! substitutes input bytes — it only inserts color codes around them.
-//! The integration tests assert this directly with a `strip_ansi` helper;
-//! any change to the renderer must preserve the property.
+//! original `input` unchanged, *including* for inputs the VM only
+//! partially matches. The renderer never reorders, drops, or substitutes
+//! input bytes — it only inserts color codes around them. The integration
+//! tests assert this directly with a `strip_ansi` helper; any change to
+//! the renderer must preserve the property.
 
 pub mod theme;
 
@@ -67,11 +78,14 @@ impl Highlighter {
 
     /// Run the VM and return raw captures alongside how many bytes matched.
     /// Useful for tests and debugging.
+    ///
+    /// On partial match (VM failed to reach `End`), the returned `matched`
+    /// is the farthest input position reached and `captures` are the spans
+    /// valid at that point — so the renderer naturally styles the valid
+    /// prefix and emits the unparseable tail plain.
     pub fn captures(&self, input: &str) -> (usize, Vec<Capture>) {
-        match VM::new(&self.program.code, input.as_bytes()).run() {
-            Some(r) => (r.matched, r.captures),
-            None => (0, Vec::new()),
-        }
+        let r = VM::new(&self.program.code, input.as_bytes()).run();
+        (r.matched, r.captures)
     }
 
     pub fn capture_kinds(&self) -> &[String] {

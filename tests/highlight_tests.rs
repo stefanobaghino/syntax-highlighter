@@ -73,17 +73,27 @@ fn parses_string_with_unicode_escape() {
 }
 
 #[test]
-fn rejects_unterminated_string() {
+fn partial_unterminated_string_advances_past_quote() {
+    // On malformed input the VM no longer gives up at sp=0; it surfaces the
+    // farthest position reached. The quote itself is consumed before the
+    // string body starts failing.
     let h = hl();
-    let (matched, _) = h.captures(r#""oops"#);
-    assert_eq!(matched, 0);
+    let input = r#""oops"#;
+    let (matched, _) = h.captures(input);
+    assert!(matched > 0, "expected some progress, got {}", matched);
+    assert!(matched <= input.len());
 }
 
 #[test]
-fn rejects_trailing_garbage() {
+fn partial_trailing_garbage_reports_max_sp() {
+    // The json rule ends with `!.`; trailing garbage fails the top-level
+    // parse. The VM now reports the farthest position reached (the end of
+    // the valid JSON prefix) rather than zero.
     let h = hl();
-    let (matched, _) = h.captures(r#"{"a": 1} extra"#);
-    assert_eq!(matched, 0, "json rule has !. so trailing junk must fail");
+    let input = r#"{"a": 1} extra"#;
+    let (matched, _) = h.captures(input);
+    assert!(matched > 0, "expected progress past the valid prefix");
+    assert!(matched <= input.len());
 }
 
 #[test]
@@ -149,6 +159,40 @@ fn highlighting_preserves_input_text() {
     let out = h.highlight(input);
     let stripped = strip_ansi(&out);
     assert_eq!(stripped, input);
+}
+
+#[test]
+fn partial_match_renders_prefix_styled_and_tail_plain() {
+    // The valid JSON prefix must be styled; the trailing garbage must appear
+    // verbatim in the output (no ANSI codes wrapping it). The round-trip
+    // invariant must hold for the whole output.
+    let h = hl();
+    let input = r#"{"a": 1} extra"#;
+    let out = h.highlight(input);
+    assert_eq!(strip_ansi(&out), input, "round-trip must be preserved");
+    assert!(
+        out.contains(theme::color_for("number")) || out.contains(theme::color_for("string")),
+        "expected some styling on the valid prefix, got {:?}",
+        out
+    );
+    // The literal " extra" substring must appear without any ANSI codes
+    // interleaved between its bytes.
+    assert!(
+        out.contains(" extra"),
+        "trailing garbage must render verbatim, got {:?}",
+        out
+    );
+}
+
+#[test]
+fn unterminated_string_still_round_trips() {
+    // The load-bearing strip_ansi invariant must hold even when the input
+    // is malformed — partial-match rendering must not reorder, drop, or
+    // substitute input bytes.
+    let h = hl();
+    let input = r#"{"a": "oops"#;
+    let out = h.highlight(input);
+    assert_eq!(strip_ansi(&out), input);
 }
 
 fn strip_ansi(s: &str) -> String {

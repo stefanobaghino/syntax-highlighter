@@ -5,7 +5,7 @@ use syntax_highlighter::pegvm::{
     MatchResult, Pattern, VM,
 };
 
-fn run_pattern(pat: &Pattern, input: &[u8]) -> Option<MatchResult> {
+fn run_pattern(pat: &Pattern, input: &[u8]) -> MatchResult {
     let prog = compile_pattern(pat);
     VM::new(&prog.code, input).run()
 }
@@ -24,12 +24,13 @@ fn literal_pattern() {
     let p = Pattern::literal("hi");
     assert_eq!(
         run_pattern(&p, b"hi"),
-        Some(MatchResult {
+        MatchResult {
             matched: 2,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
-    assert_eq!(run_pattern(&p, b"ho"), None);
+    assert!(!run_pattern(&p, b"ho").complete);
 }
 
 #[test]
@@ -37,12 +38,13 @@ fn char_class_pattern() {
     let p = Pattern::CharClass(CharSet::from_ranges(&[(b'0', b'9')]));
     assert_eq!(
         run_pattern(&p, b"5"),
-        Some(MatchResult {
+        MatchResult {
             matched: 1,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
-    assert_eq!(run_pattern(&p, b"x"), None);
+    assert!(!run_pattern(&p, b"x").complete);
 }
 
 #[test]
@@ -50,12 +52,13 @@ fn any_char_pattern() {
     let p = Pattern::AnyChar;
     assert_eq!(
         run_pattern(&p, b"q"),
-        Some(MatchResult {
+        MatchResult {
             matched: 1,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
-    assert_eq!(run_pattern(&p, b""), None);
+    assert!(!run_pattern(&p, b"").complete);
 }
 
 #[test]
@@ -63,12 +66,13 @@ fn sequence_pattern() {
     let p = Pattern::seq(vec![Pattern::literal("ab"), Pattern::literal("cd")]);
     assert_eq!(
         run_pattern(&p, b"abcd"),
-        Some(MatchResult {
+        MatchResult {
             matched: 4,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
-    assert_eq!(run_pattern(&p, b"abce"), None);
+    assert!(!run_pattern(&p, b"abce").complete);
 }
 
 #[test]
@@ -76,19 +80,21 @@ fn ordered_choice_two() {
     let p = Pattern::choice(vec![Pattern::literal("ab"), Pattern::literal("ax")]);
     assert_eq!(
         run_pattern(&p, b"ab"),
-        Some(MatchResult {
+        MatchResult {
             matched: 2,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
     assert_eq!(
         run_pattern(&p, b"ax"),
-        Some(MatchResult {
+        MatchResult {
             matched: 2,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
-    assert_eq!(run_pattern(&p, b"ay"), None);
+    assert!(!run_pattern(&p, b"ay").complete);
 }
 
 #[test]
@@ -100,26 +106,29 @@ fn ordered_choice_three() {
     ]);
     assert_eq!(
         run_pattern(&p, b"foo"),
-        Some(MatchResult {
+        MatchResult {
             matched: 3,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
     assert_eq!(
         run_pattern(&p, b"bar"),
-        Some(MatchResult {
+        MatchResult {
             matched: 3,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
     assert_eq!(
         run_pattern(&p, b"baz"),
-        Some(MatchResult {
+        MatchResult {
             matched: 3,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
-    assert_eq!(run_pattern(&p, b"qux"), None);
+    assert!(!run_pattern(&p, b"qux").complete);
 }
 
 #[test]
@@ -127,44 +136,49 @@ fn repeat_zero_or_more() {
     let p = Pattern::Repeat(Box::new(Pattern::literal("a")));
     assert_eq!(
         run_pattern(&p, b""),
-        Some(MatchResult {
+        MatchResult {
             matched: 0,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
     assert_eq!(
         run_pattern(&p, b"aaa"),
-        Some(MatchResult {
+        MatchResult {
             matched: 3,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
     assert_eq!(
         run_pattern(&p, b"aab"),
-        Some(MatchResult {
+        MatchResult {
             matched: 2,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
 }
 
 #[test]
 fn repeat_one_or_more() {
     let p = Pattern::RepeatOne(Box::new(Pattern::literal("a")));
-    assert_eq!(run_pattern(&p, b""), None);
+    assert!(!run_pattern(&p, b"").complete);
     assert_eq!(
         run_pattern(&p, b"a"),
-        Some(MatchResult {
+        MatchResult {
             matched: 1,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
     assert_eq!(
         run_pattern(&p, b"aaa"),
-        Some(MatchResult {
+        MatchResult {
             matched: 3,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
 }
 
@@ -176,19 +190,21 @@ fn optional_pattern() {
     ]);
     assert_eq!(
         run_pattern(&p, b"x"),
-        Some(MatchResult {
+        MatchResult {
             matched: 1,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
     assert_eq!(
         run_pattern(&p, b"-x"),
-        Some(MatchResult {
+        MatchResult {
             matched: 2,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
-    assert_eq!(run_pattern(&p, b"--x"), None);
+    assert!(!run_pattern(&p, b"--x").complete);
 }
 
 #[test]
@@ -199,12 +215,13 @@ fn not_predicate_pattern() {
     ]);
     assert_eq!(
         run_pattern(&p, b"b"),
-        Some(MatchResult {
+        MatchResult {
             matched: 1,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
-    assert_eq!(run_pattern(&p, b"a"), None);
+    assert!(!run_pattern(&p, b"a").complete);
 }
 
 #[test]
@@ -217,12 +234,13 @@ fn and_predicate_pattern() {
     ]);
     assert_eq!(
         run_pattern(&p, b"ab"),
-        Some(MatchResult {
+        MatchResult {
             matched: 2,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
-    assert_eq!(run_pattern(&p, b"bb"), None);
+    assert!(!run_pattern(&p, b"bb").complete);
 }
 
 #[test]
@@ -232,10 +250,11 @@ fn capture_records_kind_and_span() {
     assert_eq!(prog.capture_kinds, vec!["number".to_string()]);
     assert_eq!(
         VM::new(&prog.code, b"42").run(),
-        Some(MatchResult {
+        MatchResult {
             matched: 2,
             captures: vec![cap(0, 0, 2)],
-        })
+            complete: true,
+        }
     );
 }
 
@@ -257,14 +276,15 @@ fn nested_captures_flow_through_compile() {
     );
     assert_eq!(
         VM::new(&prog.code, b"ab").run(),
-        Some(MatchResult {
+        MatchResult {
             matched: 2,
             captures: vec![
                 cap(0, 0, 2), // @outer
                 cap(1, 0, 1), // @inner "a"
                 cap(1, 1, 2), // @inner "b"
             ],
-        })
+            complete: true,
+        }
     );
 }
 
@@ -284,12 +304,13 @@ fn grammar_with_nonterminals() {
     let prog = compile_grammar(&rules, "start").unwrap();
     assert_eq!(
         VM::new(&prog.code, b"123abc").run(),
-        Some(MatchResult {
+        MatchResult {
             matched: 3,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
-    assert_eq!(VM::new(&prog.code, b"abc").run(), None);
+    assert!(!VM::new(&prog.code, b"abc").run().complete);
 }
 
 #[test]
