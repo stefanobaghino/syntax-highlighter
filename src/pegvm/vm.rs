@@ -1,4 +1,4 @@
-use super::instruction::{CaptureKind, Instruction};
+use super::instruction::{CaptureKind, Instruction, MemoId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Capture {
@@ -16,6 +16,17 @@ enum StackEntry {
     },
     Return {
         ip: usize,
+    },
+    /// Frame for an in-flight memoized rule call. Pushed by `MemoOpen` on a
+    /// cache miss, popped by `MemoClose` on success (which records the entry)
+    /// or by `fail()` when the rule escapes via failure (which records a
+    /// failure entry). Holds enough state to locate the cache slot
+    /// (`memo_id`, `start_sp`) and to slice the captures produced inside the
+    /// rule (`capture_start_len`).
+    Memo {
+        memo_id: MemoId,
+        start_sp: usize,
+        capture_start_len: usize,
     },
 }
 
@@ -178,10 +189,51 @@ impl<'p, 'i> VM<'p, 'i> {
                 Instruction::Return => {
                     let ret_ip = match self.stack.pop() {
                         Some(StackEntry::Return { ip }) => ip,
-                        Some(_) => panic!("Return found Backtrack on stack"),
+                        Some(other) => {
+                            panic!("Return expected Return on stack top, got {:?}", other)
+                        }
                         None => panic!("Return on empty stack"),
                     };
                     self.ip = ret_ip;
+                }
+                Instruction::MemoOpen(memo_id, _return_label) => {
+                    self.stack.push(StackEntry::Memo {
+                        memo_id: *memo_id,
+                        start_sp: self.sp,
+                        capture_start_len: self.captures.len(),
+                    });
+                    self.ip += 1;
+                }
+                Instruction::MemoClose(memo_id) => {
+                    match self.stack.pop() {
+                        Some(StackEntry::Memo {
+                            memo_id: top_id,
+                            start_sp,
+                            capture_start_len,
+                        }) => {
+                            debug_assert_eq!(
+                                top_id, *memo_id,
+                                "MemoClose id mismatch: expected {:?}, found {:?}",
+                                memo_id, top_id,
+                            );
+                            debug_assert!(
+                                start_sp <= self.sp,
+                                "MemoClose: rule body retreated past start_sp ({} > {})",
+                                start_sp,
+                                self.sp,
+                            );
+                            debug_assert!(
+                                capture_start_len <= self.captures.len(),
+                                "MemoClose: capture buffer shrank below entry baseline ({} > {})",
+                                capture_start_len,
+                                self.captures.len(),
+                            );
+                        }
+                        other => {
+                            panic!("MemoClose expected Memo on stack top, got {:?}", other)
+                        }
+                    }
+                    self.ip += 1;
                 }
                 Instruction::CaptureBegin(kind) => {
                     self.captures.push(OpenCapture {

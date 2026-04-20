@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use syntax_highlighter::pegvm::{
     compile_grammar, compile_pattern, Capture, CaptureKind, CharSet, Instruction, Label,
-    MatchResult, Pattern, VM,
+    MatchResult, MemoId, Pattern, VM,
 };
 
 fn run_pattern(pat: &Pattern, input: &[u8]) -> MatchResult {
@@ -357,6 +357,43 @@ fn repeat_emits_partial_commit() {
             Instruction::Char(b'a'),
             Instruction::PartialCommit(Label(1)),
             Instruction::End,
+        ]
+    );
+}
+
+#[test]
+fn grammar_rules_are_wrapped_in_memo_open_close() {
+    // start <- "a"
+    // other <- "b"
+    // Layout:
+    //   0: Call(start)
+    //   1: End
+    //   2: MemoOpen(0, L5)   ; start's Return is at 5
+    //   3: Char 'a'
+    //   4: MemoClose(0)
+    //   5: Return
+    //   6: MemoOpen(1, L9)   ; other's Return is at 9
+    //   7: Char 'b'
+    //   8: MemoClose(1)
+    //   9: Return
+    let mut rules = HashMap::new();
+    rules.insert("start".into(), Pattern::literal("a"));
+    rules.insert("other".into(), Pattern::literal("b"));
+    let prog = compile_grammar(&rules, "start").unwrap();
+    assert_eq!(prog.memo_count, 2);
+    assert_eq!(
+        prog.code,
+        vec![
+            Instruction::Call(Label(2)),
+            Instruction::End,
+            Instruction::MemoOpen(MemoId(0), Label(5)),
+            Instruction::Char(b'a'),
+            Instruction::MemoClose(MemoId(0)),
+            Instruction::Return,
+            Instruction::MemoOpen(MemoId(1), Label(9)),
+            Instruction::Char(b'b'),
+            Instruction::MemoClose(MemoId(1)),
+            Instruction::Return,
         ]
     );
 }
