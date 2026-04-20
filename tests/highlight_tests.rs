@@ -161,6 +161,40 @@ fn highlighting_preserves_input_text() {
     assert_eq!(stripped, input);
 }
 
+#[test]
+fn partial_match_renders_prefix_styled_and_tail_plain() {
+    // The valid JSON prefix must be styled; the trailing garbage must appear
+    // verbatim in the output (no ANSI codes wrapping it). The round-trip
+    // invariant must hold for the whole output.
+    let h = hl();
+    let input = r#"{"a": 1} extra"#;
+    let out = h.highlight(input);
+    assert_eq!(strip_ansi(&out), input, "round-trip must be preserved");
+    assert!(
+        out.contains(theme::color_for("number")) || out.contains(theme::color_for("string")),
+        "expected some styling on the valid prefix, got {:?}",
+        out
+    );
+    // The literal " extra" substring must appear without any ANSI codes
+    // interleaved between its bytes.
+    assert!(
+        out.contains(" extra"),
+        "trailing garbage must render verbatim, got {:?}",
+        out
+    );
+}
+
+#[test]
+fn unterminated_string_still_round_trips() {
+    // The load-bearing strip_ansi invariant must hold even when the input
+    // is malformed — partial-match rendering must not reorder, drop, or
+    // substitute input bytes.
+    let h = hl();
+    let input = r#"{"a": "oops"#;
+    let out = h.highlight(input);
+    assert_eq!(strip_ansi(&out), input);
+}
+
 fn strip_ansi(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
