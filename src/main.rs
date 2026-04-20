@@ -1,14 +1,113 @@
 use std::io::{self, Read, Write};
+use std::path::Path;
 use std::process::ExitCode;
 
 use syntax_highlighter::highlight::Highlighter;
 
 const JSON_GRAMMAR: &str = include_str!("../grammars/json.peg");
+const TOML_GRAMMAR: &str = include_str!("../grammars/toml.peg");
+
+#[derive(Clone, Copy)]
+enum Lang {
+    Json,
+    Toml,
+}
+
+impl Lang {
+    fn grammar(self) -> &'static str {
+        match self {
+            Lang::Json => JSON_GRAMMAR,
+            Lang::Toml => TOML_GRAMMAR,
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "json" => Some(Lang::Json),
+            "toml" => Some(Lang::Toml),
+            _ => None,
+        }
+    }
+
+    fn from_extension(path: &Path) -> Option<Self> {
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .and_then(Self::from_name)
+    }
+}
+
+struct Cli {
+    lang: Option<Lang>,
+    path: Option<String>,
+}
+
+fn parse_args<I: Iterator<Item = String>>(args: I) -> Result<Cli, String> {
+    let mut lang = None;
+    let mut path = None;
+    let mut it = args.peekable();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "-l" | "--lang" => {
+                let name = it
+                    .next()
+                    .ok_or_else(|| format!("{} requires a value (json|toml)", arg))?;
+                lang =
+                    Some(Lang::from_name(&name).ok_or_else(|| {
+                        format!("unknown language {:?} (expected json|toml)", name)
+                    })?);
+            }
+            other if other.starts_with("--lang=") => {
+                let name = &other["--lang=".len()..];
+                lang =
+                    Some(Lang::from_name(name).ok_or_else(|| {
+                        format!("unknown language {:?} (expected json|toml)", name)
+                    })?);
+            }
+            _ => {
+                if path.is_some() {
+                    return Err(format!("unexpected extra argument {:?}", arg));
+                }
+                path = Some(arg);
+            }
+        }
+    }
+    Ok(Cli { lang, path })
+}
+
+fn pick_lang(cli: &Cli) -> Result<Lang, String> {
+    if let Some(l) = cli.lang {
+        return Ok(l);
+    }
+    match &cli.path {
+        Some(p) => Lang::from_extension(Path::new(p)).ok_or_else(|| {
+            format!(
+                "cannot infer language from path {:?}; pass --lang json|toml",
+                p
+            )
+        }),
+        None => Ok(Lang::Json),
+    }
+}
 
 fn main() -> ExitCode {
-    let mut args = std::env::args().skip(1);
-    let input = match args.next() {
-        Some(path) => match std::fs::read_to_string(&path) {
+    let cli = match parse_args(std::env::args().skip(1)) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("syntax-highlighter: {}", e);
+            return ExitCode::from(2);
+        }
+    };
+
+    let lang = match pick_lang(&cli) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("syntax-highlighter: {}", e);
+            return ExitCode::from(2);
+        }
+    };
+
+    let input = match &cli.path {
+        Some(path) => match std::fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("syntax-highlighter: {}: {}", path, e);
@@ -25,7 +124,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let highlighter = match Highlighter::new(JSON_GRAMMAR) {
+    let highlighter = match Highlighter::new(lang.grammar()) {
         Ok(h) => h,
         Err(e) => {
             eprintln!("syntax-highlighter: grammar error: {}", e);

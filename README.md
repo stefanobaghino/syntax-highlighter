@@ -13,10 +13,14 @@ that can scale to many languages without binary bloat.
 
 ## Status
 
-Early MVP. Ships a single JSON grammar and an ANSI-coloring CLI. The
+Early MVP. Ships JSON and TOML grammars and an ANSI-coloring CLI. The
 properties described in *Why this approach* below are **design goals that
-this MVP is trying to prove** — the architecture supports them, but none are
-yet demonstrated across more than one grammar. Expect breaking changes.
+this MVP is trying to prove** — the architecture supports them, and the
+first cross-language validation (JSON + TOML) is in. Expect breaking
+changes.
+
+The CLI picks a grammar by file extension (`.json`, `.toml`) or an
+explicit `-l json|toml` flag; stdin without a flag defaults to JSON.
 
 Malformed or incomplete inputs render the longest valid prefix styled and
 the rest plain (see `src/pegvm/vm.rs` for the farthest-failure tracking).
@@ -50,10 +54,17 @@ quantifying the resulting binary footprint — is the work ahead.
 echo '{"key": [1, true, "hello"], "nested": {"a": null}}' | cargo run
 ```
 
-Or point it at a file:
+Or point it at a file (grammar picked by extension):
 
 ```bash
 cargo run -- path/to/file.json
+cargo run -- Cargo.toml
+```
+
+For stdin with a non-default language, pass `-l`:
+
+```bash
+printf '[package]\nname = "demo"\n' | cargo run -- -l toml
 ```
 
 ## Grammar format
@@ -73,8 +84,12 @@ largest piece of work.
 
 These need no new VM or compiler machinery.
 
-- **More language grammars.** Adding a language means writing a grammar
-  file. Candidates: Python, Rust, TOML, YAML, a SQL dialect or two.
+- **More language grammars.** JSON and TOML ship today. Adding a language
+  means writing a grammar file. Remaining candidates: Python, Rust, CSS
+  or a SQL dialect (both have the shared-prefix alternatives that would
+  stress a future packrat cache). YAML is deferred — its context-sensitive
+  indentation semantics make it a poor fit for PEG without additional
+  machinery.
 - **User-configurable themes.** The capture-name → ANSI mapping is
   hard-coded today; lifting it to a theme file (TOML or similar) is
   orthogonal to the VM.
