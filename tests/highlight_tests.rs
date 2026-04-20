@@ -1,5 +1,9 @@
 use syntax_highlighter::highlight::{theme, Highlighter};
 
+#[path = "common/mod.rs"]
+mod common;
+use common::strip_ansi;
+
 const JSON_GRAMMAR: &str = include_str!("../grammars/json.peg");
 
 fn hl() -> Highlighter {
@@ -193,25 +197,4 @@ fn unterminated_string_still_round_trips() {
     let input = r#"{"a": "oops"#;
     let out = h.highlight(input);
     assert_eq!(strip_ansi(&out), input);
-}
-
-fn strip_ansi(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
-            i += 2;
-            while i < bytes.len() && !bytes[i].is_ascii_alphabetic() {
-                i += 1;
-            }
-            if i < bytes.len() {
-                i += 1;
-            }
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8(out).unwrap()
 }
