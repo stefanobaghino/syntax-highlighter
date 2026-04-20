@@ -1,0 +1,39 @@
+# JSON grammar with highlight annotations.
+# The first rule is the start rule.
+
+json        <- spacing value spacing !.
+
+value       <- @string{string}
+             / @number{number}
+             / object
+             / array
+             / @constant{true_lit}
+             / @constant{false_lit}
+             / @constant{null_lit}
+
+object      <- @punctuation{'{'} spacing
+               (pair (spacing @punctuation{','} spacing pair)*)?
+               spacing @punctuation{'}'}
+
+pair        <- @property{string} spacing @punctuation{':'} spacing value
+
+array       <- @punctuation{'['} spacing
+               (value (spacing @punctuation{','} spacing value)*)?
+               spacing @punctuation{']'}
+
+string      <- '"' string_char* '"'
+string_char <- '\\' ["\\/bfnrt]
+             / '\\' 'u' hex hex hex hex
+             / [^"\\]
+
+number      <- '-'? int frac? exp?
+int         <- '0' / [1-9] [0-9]*
+frac        <- '.' [0-9]+
+exp         <- [eE] [+\-]? [0-9]+
+
+true_lit    <- 'true'
+false_lit   <- 'false'
+null_lit    <- 'null'
+
+hex         <- [0-9a-fA-F]
+spacing     <- [ \t\n\r]*
