@@ -175,7 +175,8 @@ fn end_to_end_grammar_compile_run() {
     use syntax_highlighter::pegvm::{compile_grammar, VM};
     let g = parse("number <- [0-9]+");
     let prog = compile_grammar(&g.rules, &g.start).unwrap();
-    let r = VM::new(&prog.code, b"42abc").run().unwrap();
+    let r = VM::new(&prog.code, b"42abc").run();
+    assert!(r.complete);
     assert_eq!(r.matched, 2);
 }
 

@@ -19,10 +19,21 @@ enum StackEntry {
     },
 }
 
+/// Outcome of running a compiled [`Program`](super::Program) against an input.
+///
+/// - `complete == true`: the VM reached `End`. `matched` is the `sp` at that
+///   point, which may be less than `input.len()` if the grammar is designed
+///   to stop early (no trailing `!.`).
+/// - `complete == false`: the VM exhausted its backtrack stack without
+///   reaching `End`. `matched` is the farthest input position the VM ever
+///   reached before retreating (Ford 2004's "farthest failure position"),
+///   and `captures` are the captures that were valid at that point — any
+///   captures left open at `matched` are closed there.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchResult {
     pub matched: usize,
     pub captures: Vec<Capture>,
+    pub complete: bool,
 }
 
 pub struct VM<'p, 'i> {
@@ -32,6 +43,8 @@ pub struct VM<'p, 'i> {
     sp: usize,
     stack: Vec<StackEntry>,
     captures: Vec<OpenCapture>,
+    max_sp: usize,
+    max_captures: Vec<OpenCapture>,
 }
 
 #[derive(Debug, Clone)]
@@ -50,19 +63,24 @@ impl<'p, 'i> VM<'p, 'i> {
             sp: 0,
             stack: Vec::new(),
             captures: Vec::new(),
+            max_sp: 0,
+            max_captures: Vec::new(),
         }
     }
 
-    pub fn run(mut self) -> Option<MatchResult> {
+    pub fn run(mut self) -> MatchResult {
         loop {
-            let instr = self.program.get(self.ip)?;
+            let instr = match self.program.get(self.ip) {
+                Some(i) => i,
+                None => return self.finalize_partial(),
+            };
             match instr {
                 Instruction::Char(b) => {
                     if self.input.get(self.sp) == Some(b) {
                         self.sp += 1;
                         self.ip += 1;
                     } else if !self.fail() {
-                        return None;
+                        return self.finalize_partial();
                     }
                 }
                 Instruction::Set(set) => match self.input.get(self.sp) {
@@ -72,7 +90,7 @@ impl<'p, 'i> VM<'p, 'i> {
                     }
                     _ => {
                         if !self.fail() {
-                            return None;
+                            return self.finalize_partial();
                         }
                     }
                 },
@@ -82,7 +100,7 @@ impl<'p, 'i> VM<'p, 'i> {
                         self.sp += n;
                         self.ip += 1;
                     } else if !self.fail() {
-                        return None;
+                        return self.finalize_partial();
                     }
                 }
                 Instruction::TestChar(b, label) => {
@@ -131,6 +149,7 @@ impl<'p, 'i> VM<'p, 'i> {
                     self.ip = label.0;
                 }
                 Instruction::BackCommit(label) => {
+                    self.maybe_snapshot();
                     let entry = self.pop_backtrack();
                     if let StackEntry::Backtrack {
                         sp, capture_len, ..
@@ -144,12 +163,12 @@ impl<'p, 'i> VM<'p, 'i> {
                 Instruction::FailTwice => {
                     self.pop_backtrack();
                     if !self.fail() {
-                        return None;
+                        return self.finalize_partial();
                     }
                 }
                 Instruction::Fail => {
                     if !self.fail() {
-                        return None;
+                        return self.finalize_partial();
                     }
                 }
                 Instruction::Call(label) => {
@@ -182,18 +201,11 @@ impl<'p, 'i> VM<'p, 'i> {
                     self.ip += 1;
                 }
                 Instruction::End => {
-                    return Some(MatchResult {
+                    return MatchResult {
                         matched: self.sp,
-                        captures: self
-                            .captures
-                            .into_iter()
-                            .map(|c| Capture {
-                                kind: c.kind,
-                                start: c.start,
-                                end: c.end.unwrap_or(c.start),
-                            })
-                            .collect(),
-                    });
+                        captures: close_captures(self.captures, self.sp),
+                        complete: true,
+                    };
                 }
             }
         }
@@ -207,6 +219,7 @@ impl<'p, 'i> VM<'p, 'i> {
     }
 
     fn fail(&mut self) -> bool {
+        self.maybe_snapshot();
         while let Some(entry) = self.stack.pop() {
             if let StackEntry::Backtrack {
                 ip,
@@ -222,4 +235,35 @@ impl<'p, 'i> VM<'p, 'i> {
         }
         false
     }
+
+    /// Update the farthest-failure snapshot if `sp` has advanced past the
+    /// previous maximum. Called from the only two sites where `sp` retreats —
+    /// [`fail`](Self::fail) and the `BackCommit` handler — plus defensively
+    /// at finalize time. Between retreats `sp` is monotone non-decreasing,
+    /// so these hooks capture the true deepest point.
+    fn maybe_snapshot(&mut self) {
+        if self.sp > self.max_sp {
+            self.max_sp = self.sp;
+            self.max_captures = self.captures.clone();
+        }
+    }
+
+    fn finalize_partial(mut self) -> MatchResult {
+        self.maybe_snapshot();
+        MatchResult {
+            matched: self.max_sp,
+            captures: close_captures(self.max_captures, self.max_sp),
+            complete: false,
+        }
+    }
+}
+
+fn close_captures(open: Vec<OpenCapture>, close_at: usize) -> Vec<Capture> {
+    open.into_iter()
+        .map(|c| Capture {
+            kind: c.kind,
+            start: c.start,
+            end: c.end.unwrap_or(close_at),
+        })
+        .collect()
 }

@@ -2,7 +2,7 @@ use syntax_highlighter::pegvm::{
     Capture, CaptureKind, CharSet, Instruction, Label, MatchResult, VM,
 };
 
-fn run(program: &[Instruction], input: &[u8]) -> Option<MatchResult> {
+fn run(program: &[Instruction], input: &[u8]) -> MatchResult {
     VM::new(program, input).run()
 }
 
@@ -25,20 +25,36 @@ fn match_literal_abc() {
     ];
     assert_eq!(
         run(&prog, b"abc"),
-        Some(MatchResult {
+        MatchResult {
             matched: 3,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
     assert_eq!(
         run(&prog, b"abcd"),
-        Some(MatchResult {
+        MatchResult {
             matched: 3,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
-    assert_eq!(run(&prog, b"abx"), None);
-    assert_eq!(run(&prog, b"ab"), None);
+    assert_eq!(
+        run(&prog, b"abx"),
+        MatchResult {
+            matched: 2,
+            captures: vec![],
+            complete: false,
+        }
+    );
+    assert_eq!(
+        run(&prog, b"ab"),
+        MatchResult {
+            matched: 2,
+            captures: vec![],
+            complete: false,
+        }
+    );
 }
 
 #[test]
@@ -47,13 +63,28 @@ fn match_charset() {
     let prog = [Instruction::Set(digits), Instruction::End];
     assert_eq!(
         run(&prog, b"7"),
-        Some(MatchResult {
+        MatchResult {
             matched: 1,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
-    assert_eq!(run(&prog, b"a"), None);
-    assert_eq!(run(&prog, b""), None);
+    assert_eq!(
+        run(&prog, b"a"),
+        MatchResult {
+            matched: 0,
+            captures: vec![],
+            complete: false,
+        }
+    );
+    assert_eq!(
+        run(&prog, b""),
+        MatchResult {
+            matched: 0,
+            captures: vec![],
+            complete: false,
+        }
+    );
 }
 
 #[test]
@@ -61,12 +92,20 @@ fn any_skips_n_bytes() {
     let prog = [Instruction::Any(3), Instruction::End];
     assert_eq!(
         run(&prog, b"xyz"),
-        Some(MatchResult {
+        MatchResult {
             matched: 3,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
-    assert_eq!(run(&prog, b"xy"), None);
+    assert_eq!(
+        run(&prog, b"xy"),
+        MatchResult {
+            matched: 0,
+            captures: vec![],
+            complete: false,
+        }
+    );
 }
 
 #[test]
@@ -84,19 +123,22 @@ fn ordered_choice_first_alternative() {
     ];
     assert_eq!(
         run(&prog, b"ab"),
-        Some(MatchResult {
+        MatchResult {
             matched: 2,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
     assert_eq!(
         run(&prog, b"ax"),
-        Some(MatchResult {
+        MatchResult {
             matched: 2,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
-    assert_eq!(run(&prog, b"ay"), None);
+    let r = run(&prog, b"ay");
+    assert!(!r.complete);
 }
 
 #[test]
@@ -112,31 +154,35 @@ fn repetition_zero_or_more() {
     ];
     assert_eq!(
         run(&prog, b""),
-        Some(MatchResult {
+        MatchResult {
             matched: 0,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
     assert_eq!(
         run(&prog, b"a"),
-        Some(MatchResult {
+        MatchResult {
             matched: 1,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
     assert_eq!(
         run(&prog, b"aaaa"),
-        Some(MatchResult {
+        MatchResult {
             matched: 4,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
     assert_eq!(
         run(&prog, b"aaab"),
-        Some(MatchResult {
+        MatchResult {
             matched: 3,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
 }
 
@@ -153,13 +199,16 @@ fn not_predicate() {
     ];
     assert_eq!(
         run(&prog, b"b"),
-        Some(MatchResult {
+        MatchResult {
             matched: 1,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
-    assert_eq!(run(&prog, b"a"), None);
-    assert_eq!(run(&prog, b""), None);
+    let r_a = run(&prog, b"a");
+    assert!(!r_a.complete);
+    let r_empty = run(&prog, b"");
+    assert!(!r_empty.complete);
 }
 
 #[test]
@@ -181,12 +230,15 @@ fn call_and_return() {
     ];
     assert_eq!(
         run(&prog, b"aa"),
-        Some(MatchResult {
+        MatchResult {
             matched: 2,
-            captures: vec![]
-        })
+            captures: vec![],
+            complete: true,
+        }
     );
-    assert_eq!(run(&prog, b"ab"), None);
+    let r = run(&prog, b"ab");
+    assert!(!r.complete);
+    assert_eq!(r.matched, 1);
 }
 
 #[test]
@@ -206,10 +258,11 @@ fn captures_recorded_on_success() {
     ];
     assert_eq!(
         run(&prog, b"ab"),
-        Some(MatchResult {
+        MatchResult {
             matched: 2,
             captures: vec![cap(7, 0, 2)],
-        })
+            complete: true,
+        }
     );
 }
 
@@ -241,10 +294,11 @@ fn captures_truncated_on_backtrack() {
     ];
     assert_eq!(
         run(&prog, b"ax"),
-        Some(MatchResult {
+        MatchResult {
             matched: 2,
             captures: vec![], // discarded during backtrack
-        })
+            complete: true,
+        }
     );
 }
 
@@ -273,14 +327,15 @@ fn nested_captures_kept_in_order() {
     ];
     assert_eq!(
         run(&prog, b"ab"),
-        Some(MatchResult {
+        MatchResult {
             matched: 2,
             captures: vec![
                 cap(1, 0, 2), // outer
                 cap(2, 0, 1), // inner 1
                 cap(2, 1, 2), // inner 2
             ],
-        })
+            complete: true,
+        }
     );
 }
 
@@ -293,4 +348,73 @@ fn charset_negate_and_union() {
     let merged = vowels.union(&CharSet::from_bytes(b"y"));
     assert!(merged.contains(b'y'));
     assert!(merged.contains(b'a'));
+}
+
+#[test]
+fn partial_match_on_failure_returns_max_sp_and_open_captures() {
+    // Grammar: "ab" @mark{ "cd" }  — match "ab", then a captured "cd".
+    //  0: Char a
+    //  1: Char b
+    //  2: CaptureBegin 0
+    //  3: Char c
+    //  4: Char d
+    //  5: CaptureEnd
+    //  6: End
+    //
+    // Input "abcX" advances to sp=3 inside the @mark capture, then fails
+    // on 'd' vs 'X'. Expect complete:false, matched=3, and one capture
+    // still open at the failure point closed at sp=3 (start=2).
+    let prog = [
+        Instruction::Char(b'a'),
+        Instruction::Char(b'b'),
+        Instruction::CaptureBegin(CaptureKind(0)),
+        Instruction::Char(b'c'),
+        Instruction::Char(b'd'),
+        Instruction::CaptureEnd,
+        Instruction::End,
+    ];
+    let r = run(&prog, b"abcX");
+    assert!(!r.complete);
+    assert_eq!(r.matched, 3);
+    assert_eq!(r.captures, vec![cap(0, 2, 3)]);
+}
+
+#[test]
+fn partial_match_fail_before_any_progress() {
+    let prog = [Instruction::Char(b'a'), Instruction::End];
+    let r = run(&prog, b"z");
+    assert!(!r.complete);
+    assert_eq!(r.matched, 0);
+    assert_eq!(r.captures, vec![]);
+}
+
+#[test]
+fn partial_match_prefers_deepest_point_across_backtracks() {
+    // Grammar: "aaa" / "aab"
+    // First alternative advances to sp=2 on "aaX" before failing on 'a'
+    // vs 'X'; second alternative fails earlier. max_sp should stick at 2.
+    //
+    //  0: Choice L1 (=5)
+    //  1: Char a
+    //  2: Char a
+    //  3: Char a
+    //  4: Commit L2 (=8)
+    //  5: Char a   (L1)
+    //  6: Char a
+    //  7: Char b
+    //  8: End      (L2)
+    let prog = [
+        Instruction::Choice(Label(5)),
+        Instruction::Char(b'a'),
+        Instruction::Char(b'a'),
+        Instruction::Char(b'a'),
+        Instruction::Commit(Label(8)),
+        Instruction::Char(b'a'),
+        Instruction::Char(b'a'),
+        Instruction::Char(b'b'),
+        Instruction::End,
+    ];
+    let r = run(&prog, b"aaX");
+    assert!(!r.complete);
+    assert_eq!(r.matched, 2);
 }

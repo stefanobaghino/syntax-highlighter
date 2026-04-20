@@ -73,17 +73,27 @@ fn parses_string_with_unicode_escape() {
 }
 
 #[test]
-fn rejects_unterminated_string() {
+fn partial_unterminated_string_advances_past_quote() {
+    // On malformed input the VM no longer gives up at sp=0; it surfaces the
+    // farthest position reached. The quote itself is consumed before the
+    // string body starts failing.
     let h = hl();
-    let (matched, _) = h.captures(r#""oops"#);
-    assert_eq!(matched, 0);
+    let input = r#""oops"#;
+    let (matched, _) = h.captures(input);
+    assert!(matched > 0, "expected some progress, got {}", matched);
+    assert!(matched <= input.len());
 }
 
 #[test]
-fn rejects_trailing_garbage() {
+fn partial_trailing_garbage_reports_max_sp() {
+    // The json rule ends with `!.`; trailing garbage fails the top-level
+    // parse. The VM now reports the farthest position reached (the end of
+    // the valid JSON prefix) rather than zero.
     let h = hl();
-    let (matched, _) = h.captures(r#"{"a": 1} extra"#);
-    assert_eq!(matched, 0, "json rule has !. so trailing junk must fail");
+    let input = r#"{"a": 1} extra"#;
+    let (matched, _) = h.captures(input);
+    assert!(matched > 0, "expected progress past the valid prefix");
+    assert!(matched <= input.len());
 }
 
 #[test]

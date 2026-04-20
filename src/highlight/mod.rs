@@ -67,11 +67,14 @@ impl Highlighter {
 
     /// Run the VM and return raw captures alongside how many bytes matched.
     /// Useful for tests and debugging.
+    ///
+    /// On partial match (VM failed to reach `End`), the returned `matched`
+    /// is the farthest input position reached and `captures` are the spans
+    /// valid at that point — so the renderer naturally styles the valid
+    /// prefix and emits the unparseable tail plain.
     pub fn captures(&self, input: &str) -> (usize, Vec<Capture>) {
-        match VM::new(&self.program.code, input.as_bytes()).run() {
-            Some(r) => (r.matched, r.captures),
-            None => (0, Vec::new()),
-        }
+        let r = VM::new(&self.program.code, input.as_bytes()).run();
+        (r.matched, r.captures)
     }
 
     pub fn capture_kinds(&self) -> &[String] {
