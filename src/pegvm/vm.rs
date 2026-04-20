@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::instruction::{CaptureKind, Instruction, MemoId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +49,20 @@ pub struct MatchResult {
     pub complete: bool,
 }
 
+/// Diagnostic counters for the memoization cache, exposed via
+/// [`VM::run_with_memo_stats`]. Primarily used by tests and benchmarks to
+/// prove the cache is doing its job.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MemoStats {
+    /// Number of distinct `(memo_id, start_sp)` pairs in the table at the
+    /// end of the run. Each entry represents one cached rule outcome
+    /// (success or failure).
+    pub entries: usize,
+    /// Number of times `MemoOpen` resolved via a cached entry instead of
+    /// re-executing the rule body.
+    pub hits: usize,
+}
+
 pub struct VM<'p, 'i> {
     program: &'p [Instruction],
     input: &'i [u8],
@@ -56,6 +72,24 @@ pub struct VM<'p, 'i> {
     captures: Vec<OpenCapture>,
     max_sp: usize,
     max_captures: Vec<OpenCapture>,
+    /// Packrat memo table, keyed by `(memo_id, start_sp)`. Populated by
+    /// `MemoClose` on success and by `fail()` on failure escape (Commit 5).
+    memo: HashMap<(MemoId, usize), MemoEntry>,
+    /// Running count of resolved cache hits, exposed via `MemoStats`.
+    memo_hits: usize,
+}
+
+/// A memo-table entry for a rule invocation at a specific input position.
+///
+/// `end_sp.is_some()` encodes success and carries the sp at which the rule
+/// finished matching, plus the captures it produced (already closed).
+/// `end_sp.is_none()` encodes a cached failure — future hits at the same
+/// `(memo_id, start_sp)` enter `fail()` directly without re-running the
+/// rule body.
+#[derive(Debug, Clone)]
+struct MemoEntry {
+    end_sp: Option<usize>,
+    captures: Vec<Capture>,
 }
 
 #[derive(Debug, Clone)]
@@ -76,10 +110,16 @@ impl<'p, 'i> VM<'p, 'i> {
             captures: Vec::new(),
             max_sp: 0,
             max_captures: Vec::new(),
+            memo: HashMap::new(),
+            memo_hits: 0,
         }
     }
 
-    pub fn run(mut self) -> MatchResult {
+    pub fn run(self) -> MatchResult {
+        self.run_with_memo_stats().0
+    }
+
+    pub fn run_with_memo_stats(mut self) -> (MatchResult, MemoStats) {
         loop {
             let instr = match self.program.get(self.ip) {
                 Some(i) => i,
@@ -196,43 +236,105 @@ impl<'p, 'i> VM<'p, 'i> {
                     };
                     self.ip = ret_ip;
                 }
-                Instruction::MemoOpen(memo_id, _return_label) => {
-                    self.stack.push(StackEntry::Memo {
-                        memo_id: *memo_id,
-                        start_sp: self.sp,
-                        capture_start_len: self.captures.len(),
-                    });
-                    self.ip += 1;
+                Instruction::MemoOpen(memo_id, return_label) => {
+                    if let Some(entry) = self.memo.get(&(*memo_id, self.sp)) {
+                        self.memo_hits += 1;
+                        match entry.end_sp {
+                            Some(end_sp) => {
+                                // Success hit: replay captures into the live
+                                // buffer. They are keyed by absolute offsets
+                                // and valid iff this hit fires at the same
+                                // start_sp — which is exactly the key we just
+                                // matched on. Insert as already-closed so the
+                                // enclosing `CaptureEnd`'s `rposition` search
+                                // (which binds to the innermost still-open
+                                // capture) skips over them.
+                                for c in &entry.captures {
+                                    self.captures.push(OpenCapture {
+                                        kind: c.kind,
+                                        start: c.start,
+                                        end: Some(c.end),
+                                    });
+                                }
+                                self.sp = end_sp;
+                                self.ip = return_label.0;
+                                // Applying a hit advances `sp` past code that
+                                // did not execute; the farthest-failure
+                                // bookkeeping must see the advance.
+                                self.maybe_snapshot();
+                            }
+                            None => {
+                                // Cached failure: enter fail() immediately
+                                // without re-executing the rule body. Do not
+                                // push a Memo frame.
+                                if !self.fail() {
+                                    return self.finalize_partial();
+                                }
+                            }
+                        }
+                    } else {
+                        self.stack.push(StackEntry::Memo {
+                            memo_id: *memo_id,
+                            start_sp: self.sp,
+                            capture_start_len: self.captures.len(),
+                        });
+                        self.ip += 1;
+                    }
                 }
                 Instruction::MemoClose(memo_id) => {
-                    match self.stack.pop() {
+                    let (top_id, start_sp, capture_start_len) = match self.stack.pop() {
                         Some(StackEntry::Memo {
-                            memo_id: top_id,
+                            memo_id,
                             start_sp,
                             capture_start_len,
-                        }) => {
-                            debug_assert_eq!(
-                                top_id, *memo_id,
-                                "MemoClose id mismatch: expected {:?}, found {:?}",
-                                memo_id, top_id,
-                            );
-                            debug_assert!(
-                                start_sp <= self.sp,
-                                "MemoClose: rule body retreated past start_sp ({} > {})",
-                                start_sp,
-                                self.sp,
-                            );
-                            debug_assert!(
-                                capture_start_len <= self.captures.len(),
-                                "MemoClose: capture buffer shrank below entry baseline ({} > {})",
-                                capture_start_len,
-                                self.captures.len(),
-                            );
-                        }
+                        }) => (memo_id, start_sp, capture_start_len),
                         other => {
                             panic!("MemoClose expected Memo on stack top, got {:?}", other)
                         }
-                    }
+                    };
+                    debug_assert_eq!(
+                        top_id, *memo_id,
+                        "MemoClose id mismatch: expected {:?}, found {:?}",
+                        memo_id, top_id,
+                    );
+                    debug_assert!(
+                        start_sp <= self.sp,
+                        "MemoClose: rule body retreated past start_sp ({} > {})",
+                        start_sp,
+                        self.sp,
+                    );
+                    debug_assert!(
+                        capture_start_len <= self.captures.len(),
+                        "MemoClose: capture buffer shrank below entry baseline ({} > {})",
+                        capture_start_len,
+                        self.captures.len(),
+                    );
+                    // Snapshot the captures produced inside the rule. All of
+                    // them must be closed at this point — PEG captures are
+                    // lexically scoped to `@name{...}` and cannot straddle a
+                    // rule boundary, so any `OpenCapture` with `end.is_none()`
+                    // would be a compiler bug.
+                    let rule_captures: Vec<Capture> = self.captures[capture_start_len..]
+                        .iter()
+                        .map(|c| {
+                            debug_assert!(
+                                c.end.is_some(),
+                                "MemoClose: open capture straddles rule boundary"
+                            );
+                            Capture {
+                                kind: c.kind,
+                                start: c.start,
+                                end: c.end.unwrap_or(self.sp),
+                            }
+                        })
+                        .collect();
+                    self.memo.insert(
+                        (*memo_id, start_sp),
+                        MemoEntry {
+                            end_sp: Some(self.sp),
+                            captures: rule_captures,
+                        },
+                    );
                     self.ip += 1;
                 }
                 Instruction::CaptureBegin(kind) => {
@@ -253,11 +355,18 @@ impl<'p, 'i> VM<'p, 'i> {
                     self.ip += 1;
                 }
                 Instruction::End => {
-                    return MatchResult {
-                        matched: self.sp,
-                        captures: close_captures(self.captures, self.sp),
-                        complete: true,
+                    let stats = MemoStats {
+                        entries: self.memo.len(),
+                        hits: self.memo_hits,
                     };
+                    return (
+                        MatchResult {
+                            matched: self.sp,
+                            captures: close_captures(self.captures, self.sp),
+                            complete: true,
+                        },
+                        stats,
+                    );
                 }
             }
         }
@@ -300,13 +409,18 @@ impl<'p, 'i> VM<'p, 'i> {
         }
     }
 
-    fn finalize_partial(mut self) -> MatchResult {
+    fn finalize_partial(mut self) -> (MatchResult, MemoStats) {
         self.maybe_snapshot();
-        MatchResult {
+        let stats = MemoStats {
+            entries: self.memo.len(),
+            hits: self.memo_hits,
+        };
+        let result = MatchResult {
             matched: self.max_sp,
             captures: close_captures(self.max_captures, self.max_sp),
             complete: false,
-        }
+        };
+        (result, stats)
     }
 }
 
