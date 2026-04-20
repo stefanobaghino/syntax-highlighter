@@ -1,0 +1,334 @@
+# SQLite SELECT grammar with highlight annotations.
+# The first rule is the start rule.
+#
+# Scope: SQLite SELECT statements sufficient to highlight realistic
+# read-only queries. Covers expressions, JOINs, simple (non-recursive)
+# CTEs, compound SELECT (UNION / INTERSECT / EXCEPT), CASE, CAST, EXISTS,
+# scalar subqueries, function calls, bind parameters, string / BLOB /
+# numeric / NULL / boolean literals, and line / block comments.
+#
+# Deferred: INSERT / UPDATE / DELETE / DDL / triggers / PRAGMA /
+# transactions; WITH RECURSIVE; window functions (`OVER(...)`).
+# Expanding to the full SQLite dialect is intended future work with two
+# specific payoffs (see README.md roadmap):
+#   - a large-grammar bytecode-size datapoint (vs. JSON and TOML)
+#   - a multi-statement error-recovery use case, which single-SELECT
+#     does not exercise
+#
+# Capture kinds (all present in src/highlight/theme.rs):
+#   keyword, string, number, comment, operator, punctuation,
+#   type, function, constant, variable.
+#
+# Capture-kind notes:
+#   - Table names in FROM / JOIN / CTE heads are @type; column
+#     references are @variable. The same lexeme gets a different kind
+#     depending on syntactic position — a genuine win of grammar-driven
+#     highlighting over scope-based matchers.
+#   - BLOB literals X'...' are @string (byte strings; no @bytes kind).
+#   - Bind parameters (?, ?N, :name, @name, $name) are @variable.
+#   - Quoted identifiers ("...", `...`, [...]) are @variable.
+#
+# This grammar deliberately exercises shared-prefix backtracking in the
+# expression rules (function_call vs qualified_column_ref vs bare
+# column_ref; paren_expr vs scalar subquery). These patterns motivate
+# the memoization work in the README roadmap.
+
+# --- Top level --------------------------------------------------------
+
+sql_file   <- ws (statement (stmt_sep statement)*)? stmt_sep? ws !.
+stmt_sep   <- ws @punctuation{';'} ws
+statement  <- select_stmt
+
+# --- SELECT statement -------------------------------------------------
+
+select_stmt    <- with_clause? select_core compound_tail* order_clause? limit_clause?
+
+with_clause    <- kw_with ws cte_defn (ws @punctuation{','} ws cte_defn)* ws
+cte_defn       <- @type{bare_ident} ws kw_as ws @punctuation{'('} ws select_stmt ws @punctuation{')'}
+
+select_core    <- kw_select (ws (kw_distinct / kw_all))? ws result_list
+                  (ws from_clause)? (ws where_clause)? (ws group_clause)? (ws having_clause)?
+
+result_list    <- result_column (ws @punctuation{','} ws result_column)*
+result_column  <- table_star / @operator{'*'} / aliased_expr
+table_star     <- @type{bare_ident_nonkw} @punctuation{'.'} @operator{'*'}
+aliased_expr   <- expr (ws kw_as ws @variable{bare_ident_nonkw}
+                      / ws @variable{bare_ident_nonkw})?
+
+compound_tail  <- ws (kw_union (ws kw_all)? / kw_intersect / kw_except) ws select_core
+
+from_clause    <- kw_from ws table_or_subquery (ws join_clause)*
+table_or_subquery <- @punctuation{'('} ws select_stmt ws @punctuation{')'} (ws table_alias)?
+                   / qualified_table_name (ws table_alias)?
+qualified_table_name <- @type{bare_ident_nonkw} (@punctuation{'.'} @type{bare_ident_nonkw})?
+table_alias    <- kw_as ws @variable{bare_ident_nonkw}
+                / @variable{bare_ident_nonkw}
+
+join_clause    <- join_op ws table_or_subquery (ws join_constraint)?
+join_op        <- @punctuation{','}
+                / kw_natural (ws join_type)? ws kw_join
+                / join_type ws kw_join
+                / kw_join
+join_type      <- kw_left (ws kw_outer)?
+                / kw_right (ws kw_outer)?
+                / kw_full (ws kw_outer)?
+                / kw_inner
+                / kw_cross
+join_constraint<- kw_on ws expr
+                / kw_using ws @punctuation{'('} ws ident_list ws @punctuation{')'}
+ident_list     <- @variable{bare_ident_nonkw} (ws @punctuation{','} ws @variable{bare_ident_nonkw})*
+
+where_clause   <- kw_where ws expr
+group_clause   <- kw_group ws kw_by ws expr (ws @punctuation{','} ws expr)*
+having_clause  <- kw_having ws expr
+
+order_clause   <- ws kw_order ws kw_by ws order_item (ws @punctuation{','} ws order_item)*
+order_item     <- expr (ws (kw_asc / kw_desc))?
+
+limit_clause   <- ws kw_limit ws expr (ws kw_offset ws expr
+                                     / ws @punctuation{','} ws expr)?
+
+# --- Expressions (low → high precedence) -------------------------------
+# Classic precedence-climbing without left recursion. Each level either
+# matches the next-higher level or chains several of them with an
+# operator. No shared-prefix issues between levels.
+
+expr        <- or_expr
+or_expr     <- and_expr (ws kw_or ws and_expr)*
+and_expr    <- not_expr (ws kw_and ws not_expr)*
+not_expr    <- kw_not ws not_expr / cmp_expr
+cmp_expr    <- bit_expr cmp_tail*
+cmp_tail    <- ws kw_is ws (kw_not ws)? bit_expr
+             / ws (kw_not ws)? kw_between ws bit_expr ws kw_and ws bit_expr
+             / ws (kw_not ws)? kw_in ws @punctuation{'('} ws in_args? ws @punctuation{')'}
+             / ws (kw_not ws)? kw_like ws bit_expr (ws kw_escape ws bit_expr)?
+             / ws (kw_not ws)? kw_glob ws bit_expr
+             / ws (kw_not ws)? kw_match ws bit_expr
+             / ws (kw_not ws)? kw_regexp ws bit_expr
+             / ws cmp_op ws bit_expr
+in_args     <- select_stmt / expr (ws @punctuation{','} ws expr)*
+cmp_op      <- @operator{'=='} / @operator{'<='} / @operator{'>='}
+             / @operator{'!='} / @operator{'<>'} / @operator{'='}
+             / @operator{'<'} / @operator{'>'}
+bit_expr    <- add_expr (ws bit_op ws add_expr)*
+bit_op      <- @operator{'<<'} / @operator{'>>'} / @operator{'&'} / @operator{'|'}
+add_expr    <- mul_expr (ws add_op ws mul_expr)*
+add_op      <- @operator{'+'} / @operator{'-'}
+mul_expr    <- concat_expr (ws mul_op ws concat_expr)*
+mul_op      <- @operator{'*'} / @operator{'/'} / @operator{'%'}
+concat_expr <- unary_expr (ws @operator{'||'} ws unary_expr)*
+unary_expr  <- (@operator{'-'} / @operator{'+'} / @operator{'~'}) ws unary_expr
+             / primary
+
+# Shared-prefix hotspots: function_call / qualified_column_ref /
+# column_ref_bare all start with an identifier — the classic packrat
+# motivator.
+primary     <- literal
+             / case_expr
+             / cast_expr
+             / exists_expr
+             / paren_primary
+             / function_call
+             / qualified_column_ref
+             / column_ref_bare
+             / bind_param
+
+paren_primary <- @punctuation{'('} ws (select_stmt / expr) ws @punctuation{')'}
+
+function_call <- @function{bare_ident_nonkw} ws @punctuation{'('} ws func_args? ws @punctuation{')'}
+func_args   <- @operator{'*'}
+             / (kw_distinct ws)? expr (ws @punctuation{','} ws expr)*
+
+qualified_column_ref <- @variable{bare_ident_nonkw} @punctuation{'.'} @variable{bare_ident_nonkw}
+column_ref_bare      <- @variable{bare_ident_nonkw}
+
+case_expr   <- kw_case (ws expr)? (ws when_clause)+ (ws kw_else ws expr)? ws kw_end
+when_clause <- kw_when ws expr ws kw_then ws expr
+
+cast_expr   <- kw_cast ws @punctuation{'('} ws expr ws kw_as ws @type{bare_ident} ws @punctuation{')'}
+
+exists_expr <- kw_exists ws @punctuation{'('} ws select_stmt ws @punctuation{')'}
+
+# --- Literals ---------------------------------------------------------
+# Order matters: blob before string (X' prefix consumed first); number
+# tries hex / float / int in that order inside number_body.
+
+literal     <- blob_lit / string_lit / @number{number_body} / null_lit / bool_lit
+
+null_lit    <- @constant{null_body !ident_char}
+bool_lit    <- @constant{bool_body !ident_char}
+null_body   <- [nN][uU][lL][lL]
+bool_body   <- [tT][rR][uU][eE] / [fF][aA][lL][sS][eE]
+
+blob_lit    <- @string{blob_body}
+blob_body   <- [xX] "'" [0-9a-fA-F]* "'"
+string_lit  <- @string{string_body}
+string_body <- "'" ("''" / !"'" .)* "'"
+
+number_body <- '0x' [0-9a-fA-F]+ !ident_char
+             / float_body
+             / int_body
+float_body  <- [0-9]+ '.' [0-9]+ ([eE] [+\-]? [0-9]+)?
+             / [0-9]+ [eE] [+\-]? [0-9]+
+int_body    <- [0-9]+
+
+# Bind parameters are placeholders bound at execute time — lexically
+# variables, not named constants.
+bind_param  <- @variable{bind_body}
+bind_body   <- '?' [0-9]*
+             / [:@$] ident_start ident_cont*
+
+# --- Identifiers ------------------------------------------------------
+# Four syntactic forms — bare, double-quoted, backtick, bracketed.
+# `bare_ident_nonkw` excludes SQL keywords via a big negative lookahead
+# (the expected-slow path that memoization is meant to accelerate).
+# `bare_ident` allows keyword-named identifiers (used inside CAST type
+# names and CTE heads where a keyword like INTEGER is actually the
+# content we want to capture as @type).
+
+bare_ident_nonkw  <- quoted_ident / !keyword_word bare_raw
+bare_ident        <- quoted_ident / bare_raw
+quoted_ident      <- double_quoted_id / backtick_id / bracket_id
+
+bare_raw          <- ident_start ident_cont*
+ident_start       <- [a-zA-Z_]
+ident_cont        <- [a-zA-Z0-9_]
+ident_char        <- [a-zA-Z0-9_]
+
+double_quoted_id  <- '"' ('""' / !'"' !linebreak .)* '"'
+backtick_id       <- '`' ('``' / !'`' !linebreak .)* '`'
+bracket_id        <- '[' (!']' !linebreak .)* ']'
+
+# --- Keywords (case-insensitive) --------------------------------------
+# Per-letter character classes give case-insensitive matching without
+# VM support. Every kw_* wraps its body in @keyword{...} and appends
+# the `!ident_char` boundary so `SELECT` doesn't match the prefix of
+# `SELECTED`. `keyword_word` reuses the same boundary for the
+# identifier-exclusion negative lookahead.
+
+kw_select    <- @keyword{sel_body !ident_char}
+kw_from      <- @keyword{from_body !ident_char}
+kw_where     <- @keyword{where_body !ident_char}
+kw_group     <- @keyword{group_body !ident_char}
+kw_by        <- @keyword{by_body !ident_char}
+kw_having    <- @keyword{having_body !ident_char}
+kw_order     <- @keyword{order_body !ident_char}
+kw_asc       <- @keyword{asc_body !ident_char}
+kw_desc      <- @keyword{desc_body !ident_char}
+kw_limit     <- @keyword{limit_body !ident_char}
+kw_offset    <- @keyword{offset_body !ident_char}
+kw_join      <- @keyword{join_body !ident_char}
+kw_inner     <- @keyword{inner_body !ident_char}
+kw_left      <- @keyword{left_body !ident_char}
+kw_right     <- @keyword{right_body !ident_char}
+kw_full      <- @keyword{full_body !ident_char}
+kw_outer     <- @keyword{outer_body !ident_char}
+kw_cross     <- @keyword{cross_body !ident_char}
+kw_natural   <- @keyword{natural_body !ident_char}
+kw_on        <- @keyword{on_body !ident_char}
+kw_using     <- @keyword{using_body !ident_char}
+kw_as        <- @keyword{as_body !ident_char}
+kw_distinct  <- @keyword{distinct_body !ident_char}
+kw_all       <- @keyword{all_body !ident_char}
+kw_union     <- @keyword{union_body !ident_char}
+kw_intersect <- @keyword{intersect_body !ident_char}
+kw_except    <- @keyword{except_body !ident_char}
+kw_with      <- @keyword{with_body !ident_char}
+kw_and       <- @keyword{and_body !ident_char}
+kw_or        <- @keyword{or_body !ident_char}
+kw_not       <- @keyword{not_body !ident_char}
+kw_is        <- @keyword{is_body !ident_char}
+kw_in        <- @keyword{in_body !ident_char}
+kw_like      <- @keyword{like_body !ident_char}
+kw_glob      <- @keyword{glob_body !ident_char}
+kw_match     <- @keyword{match_body !ident_char}
+kw_regexp    <- @keyword{regexp_body !ident_char}
+kw_between   <- @keyword{between_body !ident_char}
+kw_escape    <- @keyword{escape_body !ident_char}
+kw_case      <- @keyword{case_body !ident_char}
+kw_when      <- @keyword{when_body !ident_char}
+kw_then      <- @keyword{then_body !ident_char}
+kw_else      <- @keyword{else_body !ident_char}
+kw_end       <- @keyword{end_body !ident_char}
+kw_cast      <- @keyword{cast_body !ident_char}
+kw_exists    <- @keyword{exists_body !ident_char}
+kw_collate   <- @keyword{collate_body !ident_char}
+
+# Keyword bodies — raw letter matchers, no boundary check.
+
+sel_body       <- [sS][eE][lL][eE][cC][tT]
+from_body      <- [fF][rR][oO][mM]
+where_body     <- [wW][hH][eE][rR][eE]
+group_body     <- [gG][rR][oO][uU][pP]
+by_body        <- [bB][yY]
+having_body    <- [hH][aA][vV][iI][nN][gG]
+order_body     <- [oO][rR][dD][eE][rR]
+asc_body       <- [aA][sS][cC]
+desc_body      <- [dD][eE][sS][cC]
+limit_body     <- [lL][iI][mM][iI][tT]
+offset_body    <- [oO][fF][fF][sS][eE][tT]
+join_body      <- [jJ][oO][iI][nN]
+inner_body     <- [iI][nN][nN][eE][rR]
+left_body      <- [lL][eE][fF][tT]
+right_body     <- [rR][iI][gG][hH][tT]
+full_body      <- [fF][uU][lL][lL]
+outer_body     <- [oO][uU][tT][eE][rR]
+cross_body     <- [cC][rR][oO][sS][sS]
+natural_body   <- [nN][aA][tT][uU][rR][aA][lL]
+on_body        <- [oO][nN]
+using_body     <- [uU][sS][iI][nN][gG]
+as_body        <- [aA][sS]
+distinct_body  <- [dD][iI][sS][tT][iI][nN][cC][tT]
+all_body       <- [aA][lL][lL]
+union_body     <- [uU][nN][iI][oO][nN]
+intersect_body <- [iI][nN][tT][eE][rR][sS][eE][cC][tT]
+except_body    <- [eE][xX][cC][eE][pP][tT]
+with_body      <- [wW][iI][tT][hH]
+and_body       <- [aA][nN][dD]
+or_body        <- [oO][rR]
+not_body       <- [nN][oO][tT]
+is_body        <- [iI][sS]
+in_body        <- [iI][nN]
+like_body      <- [lL][iI][kK][eE]
+glob_body      <- [gG][lL][oO][bB]
+match_body     <- [mM][aA][tT][cC][hH]
+regexp_body    <- [rR][eE][gG][eE][xX][pP]
+between_body   <- [bB][eE][tT][wW][eE][eE][nN]
+escape_body    <- [eE][sS][cC][aA][pP][eE]
+case_body      <- [cC][aA][sS][eE]
+when_body      <- [wW][hH][eE][nN]
+then_body      <- [tT][hH][eE][nN]
+else_body      <- [eE][lL][sS][eE]
+end_body       <- [eE][nN][dD]
+cast_body      <- [cC][aA][sS][tT]
+exists_body    <- [eE][xX][iI][sS][tT][sS]
+collate_body   <- [cC][oO][lL][lL][aA][tT][eE]
+
+# Keyword negative-lookahead for the identifier rule. Ordering: among
+# alternatives that share a prefix, put the longer body first so PEG
+# first-match doesn't accept a shorter keyword when a longer one would
+# match (e.g. INTERSECT before IN, NATURAL before NOT, DISTINCT before
+# DESC, OUTER before OR). `!ident_char` is applied once at the outside
+# so each body stays boundary-free.
+keyword_word <-
+    ( intersect_body / between_body / distinct_body / collate_body
+    / natural_body / regexp_body / outer_body / offset_body
+    / having_body / except_body / exists_body / escape_body
+    / sel_body / union_body / inner_body / right_body
+    / group_body / order_body / where_body / match_body / cross_body
+    / limit_body / from_body / join_body / left_body
+    / full_body / glob_body / desc_body / with_body / cast_body
+    / case_body / when_body / then_body / else_body / like_body
+    / null_body / bool_body / using_body / asc_body / all_body
+    / end_body / and_body / not_body
+    / in_body / is_body / on_body / or_body / as_body / by_body
+    ) !ident_char
+
+# --- Whitespace & comments -------------------------------------------
+
+ws            <- (comment / [ \t\n\r])*
+comment       <- line_comment / block_comment
+line_comment  <- @comment{'--' (!linebreak .)*}
+block_comment <- @comment{'/*' block_body '*/'}
+block_body    <- (!'*/' .)*
+linebreak     <- '\r'? '\n'
