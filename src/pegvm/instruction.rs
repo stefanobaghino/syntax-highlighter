@@ -23,6 +23,12 @@ impl std::fmt::Debug for Label {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
 pub struct CaptureKind(pub u16);
 
+/// Opaque tag identifying a memoized rule. Assigned 1:1 with rule addresses
+/// by `compile_grammar`. The VM uses it as an index into its memo table.
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+pub struct MemoId(pub u32);
+
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct CharSet([u8; 32]);
@@ -150,6 +156,16 @@ pub enum Instruction {
 
     Call(Label),
     Return,
+
+    /// Rule-level memoization prologue. On a cache hit the VM advances `sp`
+    /// to the cached end and jumps to the `Label` (the rule's `Return`
+    /// address); on a miss it pushes a `StackEntry::Memo` frame and falls
+    /// through to the rule body.
+    MemoOpen(MemoId, Label),
+    /// Rule-level memoization epilogue. Pops the matching `StackEntry::Memo`
+    /// frame and records a success entry for this rule at the frame's
+    /// `start_sp`.
+    MemoClose(MemoId),
 
     CaptureBegin(CaptureKind),
     CaptureEnd,

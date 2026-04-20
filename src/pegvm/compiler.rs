@@ -1,12 +1,16 @@
 use std::collections::HashMap;
 
-use super::instruction::{CaptureKind, Instruction, Label};
+use super::instruction::{CaptureKind, Instruction, Label, MemoId};
 use super::pattern::Pattern;
 
 #[derive(Debug, Clone)]
 pub struct Program {
     pub code: Vec<Instruction>,
     pub capture_kinds: Vec<String>,
+    /// Number of memoized rules. Each rule gets a distinct `MemoId` in the
+    /// range `0..memo_count`, assigned in compilation order, so the VM can
+    /// size its memo table once up front.
+    pub memo_count: usize,
 }
 
 #[derive(Debug)]
@@ -76,6 +80,7 @@ impl Compiler {
             Instruction::TestChar(b, _) => Instruction::TestChar(*b, target),
             Instruction::TestSet(s, _) => Instruction::TestSet(*s, target),
             Instruction::Call(_) => Instruction::Call(target),
+            Instruction::MemoOpen(id, _) => Instruction::MemoOpen(*id, target),
             other => panic!("patch_jump: not a jump instruction: {:?}", other),
         };
         self.code[idx] = new;
@@ -203,6 +208,7 @@ pub fn compile_pattern(pat: &Pattern) -> Program {
     Program {
         code: c.code,
         capture_kinds: c.capture_names,
+        memo_count: 0,
     }
 }
 
@@ -235,10 +241,19 @@ pub fn compile_grammar(
     }
 
     let mut rule_addrs: HashMap<String, usize> = HashMap::new();
+    let mut memo_count: u32 = 0;
     for name in ordered {
         rule_addrs.insert(name.clone(), c.pos());
+        let memo_id = MemoId(memo_count);
+        memo_count += 1;
+        // MemoOpen's Label is patched to the Return address below so a cache
+        // hit can skip straight past the body to the rule's Return.
+        let memo_open = c.emit(Instruction::MemoOpen(memo_id, Label(0)));
         c.compile_pat(&rules[name]);
+        c.emit(Instruction::MemoClose(memo_id));
+        let return_addr = c.pos();
         c.emit(Instruction::Return);
+        c.patch_jump(memo_open, return_addr);
     }
 
     // Patch the bootstrap Call.
@@ -257,5 +272,6 @@ pub fn compile_grammar(
     Ok(Program {
         code: c.code,
         capture_kinds: c.capture_names,
+        memo_count: memo_count as usize,
     })
 }
