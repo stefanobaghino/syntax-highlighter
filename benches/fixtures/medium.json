@@ -1,0 +1,36 @@
+{
+  "project": "syntax-highlighter",
+  "version": "0.1.0",
+  "authors": ["alice", "bob", "carol"],
+  "license": "MIT OR Apache-2.0",
+  "metadata": {
+    "keywords": ["peg", "parser", "vm", "highlight"],
+    "categories": ["parser-implementations", "text-processing"],
+    "homepage": "https://example.invalid/",
+    "stars": 128,
+    "forks": 17,
+    "open_issues": 3
+  },
+  "features": {
+    "ansi": true,
+    "html": false,
+    "incremental": false,
+    "memoization": true
+  },
+  "grammars": [
+    {"name": "json", "size": 1024, "rules": 13, "captures": ["string", "number", "constant", "property", "punctuation"]},
+    {"name": "toml", "size": 5120, "rules": 36, "captures": ["string", "number", "constant", "property", "punctuation", "type", "comment"]},
+    {"name": "sql",  "size": 15360, "rules": 74, "captures": ["keyword", "string", "number", "comment", "operator", "punctuation", "type", "function", "constant", "variable"]}
+  ],
+  "benchmarks": {
+    "corpus": {
+      "small": 64,
+      "medium": 1024,
+      "large": 8192
+    },
+    "thresholds": [0, 32, 64, 128, 256, 512, 1024, 2048, 4096],
+    "runs_per_cell": 11
+  },
+  "deps": [],
+  "notes": "This fixture exercises nested objects, arrays, mixed types, and strings with escapes like \"quoted\" text."
+}

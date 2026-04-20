@@ -1,0 +1,187 @@
+# A larger TOML corpus shaped like a dependency manifest. Exercises many
+# sections, arrays of tables, and a wide distribution of key/value shapes.
+schema = "corpus.v1"
+generated = 2026-04-20T12:00:00Z
+seed = 42
+
+[meta]
+count = 24
+thresholds = [0, 32, 64, 128, 256, 512, 1024, 2048, 4096]
+runs_per_cell = 11
+grammars = ["json", "toml", "sql"]
+
+[[package]]
+name = "alpha"
+version = "0.1.0"
+authors = ["alice"]
+license = "MIT"
+keywords = ["parser", "vm"]
+
+[[package]]
+name = "beta"
+version = "0.2.3"
+authors = ["bob", "carol"]
+license = "Apache-2.0"
+keywords = ["peg", "runtime"]
+
+[[package]]
+name = "gamma"
+version = "1.0.0"
+authors = ["dave"]
+license = "MIT OR Apache-2.0"
+keywords = ["compiler", "bytecode"]
+
+[[package]]
+name = "delta"
+version = "0.4.1"
+authors = ["erin"]
+license = "MIT"
+keywords = ["highlight", "ansi"]
+
+[[package]]
+name = "epsilon"
+version = "2.1.4"
+authors = ["frank", "grace"]
+license = "BSD-3-Clause"
+keywords = ["text", "tooling"]
+
+[[package]]
+name = "zeta"
+version = "0.9.0"
+authors = ["heidi"]
+license = "MIT"
+keywords = ["incremental", "editor"]
+
+[[package]]
+name = "eta"
+version = "1.2.3"
+authors = ["ivan", "judy"]
+license = "Apache-2.0"
+keywords = ["lsp", "adapter"]
+
+[[package]]
+name = "theta"
+version = "0.3.7"
+authors = ["kate"]
+license = "MIT"
+keywords = ["theme", "config"]
+
+[[package]]
+name = "iota"
+version = "0.0.1"
+authors = ["leon"]
+license = "MIT OR Apache-2.0"
+keywords = ["prototype"]
+
+[[package]]
+name = "kappa"
+version = "3.4.5"
+authors = ["mallory", "niaj"]
+license = "MPL-2.0"
+keywords = ["renderer"]
+
+[[package]]
+name = "lambda"
+version = "0.5.2"
+authors = ["olivia"]
+license = "MIT"
+keywords = ["functional", "binding"]
+
+[[package]]
+name = "mu"
+version = "1.0.0-rc.1"
+authors = ["peggy"]
+license = "Unlicense"
+keywords = ["experimental"]
+
+[[package]]
+name = "nu"
+version = "0.11.0"
+authors = ["quentin", "ruth"]
+license = "MIT"
+keywords = ["shell", "pipeline"]
+
+[[package]]
+name = "xi"
+version = "2.0.0"
+authors = ["sybil"]
+license = "Apache-2.0"
+keywords = ["editor", "core"]
+
+[[package]]
+name = "omicron"
+version = "0.2.0"
+authors = ["trent"]
+license = "MIT"
+keywords = ["network"]
+
+[[package]]
+name = "pi"
+version = "3.14.1"
+authors = ["uma", "victor"]
+license = "MIT OR Apache-2.0"
+keywords = ["math", "constants"]
+
+[[package]]
+name = "rho"
+version = "0.7.3"
+authors = ["wendy"]
+license = "BSD-2-Clause"
+keywords = ["density", "metric"]
+
+[[package]]
+name = "sigma"
+version = "1.5.0"
+authors = ["xavier"]
+license = "MIT"
+keywords = ["sum", "aggregate"]
+
+[[package]]
+name = "tau"
+version = "0.25.0"
+authors = ["yvonne", "zack"]
+license = "Apache-2.0"
+keywords = ["circle", "angle"]
+
+[[package]]
+name = "upsilon"
+version = "0.1.2"
+authors = ["alice"]
+license = "MIT"
+keywords = ["vowel"]
+
+[[package]]
+name = "phi"
+version = "1.0.0"
+authors = ["bob"]
+license = "MIT"
+keywords = ["golden", "ratio"]
+
+[[package]]
+name = "chi"
+version = "0.3.0"
+authors = ["carol"]
+license = "Apache-2.0"
+keywords = ["test"]
+
+[[package]]
+name = "psi"
+version = "2.2.2"
+authors = ["dave", "erin"]
+license = "MIT OR Apache-2.0"
+keywords = ["wave"]
+
+[[package]]
+name = "omega"
+version = "9.9.9"
+authors = ["frank"]
+license = "MIT"
+keywords = ["final"]
+
+[workspace]
+members = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota", "kappa", "lambda", "mu", "nu", "xi", "omicron", "pi", "rho", "sigma", "tau", "upsilon", "phi", "chi", "psi", "omega"]
+exclude = ["target", "benches/fixtures", "vendor"]
+
+[workspace.metadata.notes]
+purpose = "A synthetic manifest used solely as a benchmark fixture."
+license-audit = "All entries are fictional; licenses listed are illustrative."

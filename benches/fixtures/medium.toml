@@ -1,0 +1,66 @@
+# Project metadata. Exercises comments, dotted keys, inline tables,
+# arrays, multi-line strings, and a variety of value shapes.
+title = "syntax-highlighter"
+version = "0.1.0"
+authors = ["alice", "bob", "carol"]
+license = "MIT OR Apache-2.0"
+edition = 2021
+release_date = 2026-04-20
+
+[package]
+name = "syntax-highlighter"
+description = "A compact syntax highlighting engine."
+repository = "https://example.invalid/repo"
+keywords = ["peg", "parser", "vm", "highlight"]
+categories = ["parser-implementations", "text-processing"]
+
+[package.metadata]
+msrv = "1.78"
+zero_deps = true
+notes = """
+Three-line summary of the project.
+Second line, with some "quoted" content.
+Third line.
+"""
+
+[features]
+ansi = true
+html = false
+incremental = false
+memoization = true
+
+[dependencies]
+# none on purpose; keeping the library dep-free.
+
+[[bin]]
+name = "syntax-highlighter"
+path = "src/main.rs"
+
+[[bench]]
+name = "memo"
+path = "benches/memo.rs"
+harness = false
+
+[grammars.json]
+rules = 13
+size_bytes = 1024
+kinds = ["string", "number", "constant", "property", "punctuation"]
+
+[grammars.toml]
+rules = 36
+size_bytes = 5120
+kinds = ["string", "number", "constant", "property", "punctuation", "type", "comment"]
+
+[grammars.sql]
+rules = 74
+size_bytes = 15360
+kinds = ["keyword", "string", "number", "comment", "operator", "punctuation", "type", "function", "constant", "variable"]
+
+[bench.corpus]
+small = 64
+medium = 1024
+large = 8192
+
+[bench.sweep]
+thresholds = [0, 32, 64, 128, 256, 512, 1024, 2048, 4096]
+runs_per_cell = 11

@@ -118,10 +118,13 @@ Each item is a self-contained feature that unlocks further work.
   win, and empirically that is where most of the memo-table memory is
   wasted (Yedidia thesis §5.2.4 — gains flatten around 4096 bytes;
   GPeg defaults to 512 and benchmarks at 128). No grammar changes, one
-  configurable constant. Needs a benchmark harness first to pick a
-  sensible default. Listed before incremental parsing because it is
-  what makes a persistent memo table memory-feasible — GPeg's
-  rationale for having this filter at all.
+  configurable constant. The sweep harness at `benches/memo.rs`
+  (`cargo bench --bench memo`) produces the `(time, entries, hit_rate)`
+  data to pick the default from; the VM already exposes
+  `VM::with_memo_threshold`. The remaining work is choosing the default
+  and wiring it through the public API. Listed before incremental
+  parsing because it is what makes a persistent memo table
+  memory-feasible — GPeg's rationale for having this filter at all.
 - **Incremental parsing.** O(Δ) per input change instead of O(n), by
   invalidating only the memo entries whose spans cross the edit point
   (Yedidia's thesis, Ch. 4). Covers both append-only streaming (an LLM

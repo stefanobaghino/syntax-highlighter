@@ -20,3 +20,8 @@ path = "src/lib.rs"
 [[bin]]
 name = "syntax-highlighter"
 path = "src/main.rs"
+
+[[bench]]
+name = "memo"
+path = "benches/memo.rs"
+harness = false
