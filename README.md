@@ -112,19 +112,44 @@ These need no new VM or compiler machinery.
 
 Each item is a self-contained feature that unlocks further work.
 
-- **Memoization (packrat parsing).** Caches rule results per input
-  position. Primary payoff: *incremental parsing* — O(Δ) per input
-  change instead of O(n). Covers both the easy case (append-only
-  streaming — an LLM response arriving character-by-character in a TUI)
-  and the general case (arbitrary-position edits — a cursor insertion
-  or deletion anywhere in the input), because both reduce to
-  "invalidate the memo entries whose spans cross the edit point and
-  re-parse from there" per Yedidia's thesis, Ch. 4. Also a prerequisite
-  for left-recursion support.
+- **Threshold-based memoization.** Runtime filter on `MemoClose`: skip
+  inserting an entry whose matched span is shorter than some byte
+  threshold. Tiny leaf rules pay the lookup cost without the storage
+  win, and empirically that is where most of the memo-table memory is
+  wasted (Yedidia thesis §5.2.4 — gains flatten around 4096 bytes;
+  GPeg defaults to 512 and benchmarks at 128). No grammar changes, one
+  configurable constant. Needs a benchmark harness first to pick a
+  sensible default. Listed before incremental parsing because it is
+  what makes a persistent memo table memory-feasible — GPeg's
+  rationale for having this filter at all.
+- **Incremental parsing.** O(Δ) per input change instead of O(n), by
+  invalidating only the memo entries whose spans cross the edit point
+  (Yedidia's thesis, Ch. 4). Covers both append-only streaming (an LLM
+  response arriving character-by-character in a TUI) and arbitrary-
+  position edits (a cursor insertion or deletion anywhere in the input).
+  Builds on the memoization layer — the memo table is the substrate;
+  this task adds the public edit/diff API and the invalidation protocol.
+  Depends on threshold-based memoization above for memory feasibility:
+  without the threshold, every rule call at every position accumulates
+  an entry in a table that must survive across edits.
 - **Left recursion support.** Not needed for JSON, but natural for some
-  grammar idioms (especially arithmetic-expression grammars). Most modern
-  PEG implementations support it via Warth et al.'s algorithm; most of
-  those require memoization.
+  grammar idioms (especially arithmetic-expression grammars). The
+  intended reference is Medeiros, Mascarenhas & Ierusalimschy 2014 —
+  §5 gives a parsing-machine extension matching ours, and its
+  bounded-recursion L table is stack-structured and separate from the
+  packrat memo, so it composes cleanly with threshold-based memoization
+  above. Warth/Douglass/Millstein 2008 is the seminal paper and the
+  most widely cited approach, but it couples seed-and-grow to the memo
+  table itself — which would fight the threshold filter — and inherits
+  the nullable-LR bugs Medeiros 2014 §6 documents.
+- **Explicit memoization opt-out.** Maybe. Per-rule or per-expression
+  annotation (e.g. `Rule <-! body` or `{{! expr }}`) disabling caching
+  on named hot spots. Grammar authors should not have to reason about
+  cache strategy — that is the library's job — so this is reserved as
+  an escape hatch, not a default. Add it only if, after threshold-based
+  memoization, profiling still points at specific rules where rematch
+  beats lookup. Inverts GPeg's `{{ p }}` opt-in at this level, which
+  maps cleanly if the need arises.
 - **Bytecode serialization.** Pre-compile grammars once and ship the
   `Vec<Instruction>` plus capture-name table as data. Useful for embedded
   distributions and startup-time-sensitive consumers.
@@ -134,7 +159,10 @@ Each item is a self-contained feature that unlocks further work.
   streaming responses, in-progress code). The ability to recover past
   a syntax error and continue highlighting the rest of the input is
   important; this is a real extension to the VM and a known research
-  area in PEG implementations.
+  area in PEG implementations. If left recursion lands first, the
+  recovery protocol must unwind Medeiros' L table consistently
+  alongside the VM stack — analogous to how `fail()` already handles
+  `Memo` frames.
 
 ### Self-hosting — parsing PEG grammars using pegvm itself
 
@@ -147,7 +175,10 @@ syntax itself, executed by the VM. Prerequisites, in order:
    parse, captures must be able to produce user values (e.g. a `Pattern`
    node) rather than spans. LPEG calls these *function captures*;
    Yedidia's thesis discusses them. This is a real VM feature, not a
-   refactor.
+   refactor. Interacts with memoization: a memo entry's `captures`
+   field today stores `Vec<Capture>` (plain spans); with typed captures
+   it becomes a vector of user values, which will need to be
+   clone-able or reference-counted to replay from cache.
 2. **Write `peg.peg`.** A PEG grammar that describes PEG grammar syntax.
    A few dozen rules; the language is small.
 3. **Hand-compile `peg.peg` to bytecode.** The bootstrap artifact: a

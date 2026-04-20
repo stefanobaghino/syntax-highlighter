@@ -80,6 +80,7 @@ Each `Pattern` variant maps to a small fixed sequence of `Instruction`s. The ins
 | Matching | `Char`, `Set`, `Any`, `TestChar`, `TestSet` | Consume input bytes, or fall through to a label if the current byte doesn't match. |
 | Control flow | `Jump`, `Choice`, `Commit`, `PartialCommit`, `BackCommit`, `FailTwice`, `Fail` | Express ordered choice, repetition, and predicates in terms of pushing and popping backtrack records. |
 | Calls | `Call`, `Return` | Invoke a named rule and return from it — the `NonTerminal` variant compiles to `Call(address)`. |
+| Memoization | `MemoOpen`, `MemoClose` | Rule-level packrat cache. The compiler wraps every rule body with a pair; on a hit `MemoOpen` replays cached captures and jumps to the rule's `Return`; on a miss it pushes a `Memo` frame that `MemoClose` commits as a success entry or `fail()` commits as a failure entry. |
 | Captures | `CaptureBegin`, `CaptureEnd` | Bracket a matched span with a kind tag so the VM can record it. |
 | Termination | `End` | Mark the end of a successful match. |
 
@@ -195,6 +196,9 @@ Some properties the module relies on can't be encoded in the Rust type system. T
 2. **Captures are truncated on backtrack.** Any instruction that enters the fail protocol routes through `VM::fail`, which restores the capture buffer length from the backtrack frame. New backtracking instructions must reuse this helper rather than re-implement it.
 3. **`VM::fail` and `BackCommit` are the only sites where `sp` retreats.** Both must route through `VM::maybe_snapshot` so the farthest-failure bookkeeping sees every retreat. Between retreats `sp` is monotone non-decreasing, which is why snapshots at those two sites capture the true deepest point reached. Any new instruction that rewinds `sp` must update this invariant.
 4. **Byte-oriented.** `CharSet` is a set of `u8` values; UTF-8 is never decoded. This is a deliberate simplification appropriate for the MVP and will need to be revisited before serious Unicode-aware grammars.
+5. **Memo replay is absolute-sp.** Cached captures carry the original `start`/`end` byte offsets; a `MemoOpen` hit only fires when `sp == start_sp`, so the stored values are replayed verbatim. Entries are inserted as already-closed `OpenCapture`s so the enclosing `CaptureEnd`'s innermost-still-open search (`rposition(c.end.is_none())`) binds to the caller's open capture rather than a replayed one.
+6. **`VM::fail` records every `Memo` frame it traverses.** When unwinding to find a `Backtrack`, each `Memo` frame encountered is committed as a failure entry before being discarded. Silently dropping a frame would leak re-executions on future calls at the same sp. The loop is an exhaustive `match` over `StackEntry` specifically to make omissions a compiler error.
+7. **`MemoOpen` calls `maybe_snapshot` after applying a success hit.** The hit advances `sp` past code that didn't execute; without the snapshot call the farthest-failure bookkeeping would miss the advance and `MatchResult.complete == false` would report a stale deepest point.
 
 ## References
 
@@ -204,6 +208,12 @@ Some properties the module relies on can't be encoded in the Rust type system. T
 - Sérgio Medeiros and Roberto Ierusalimschy, [*A Parsing Machine for PEGs*](https://www.inf.puc-rio.br/~roberto/docs/ry08-4.pdf). DLS 2008.
 - Roberto Ierusalimschy, [*A Text Pattern-Matching Tool based on Parsing Expression Grammars*](https://www.inf.puc-rio.br/~roberto/docs/peg.pdf). Software: Practice and Experience, 39(3):221–258, 2009.
 - Zachary Yedidia, [*Incremental PEG Parsing*](https://zyedidia.github.io/notes/yedidia_thesis.pdf). Ph.D. thesis, 2021. Chapter 3 ("A PEG Parsing Machine") is the clearest modern presentation of the instruction set used here and the reference to read first.
+
+Left recursion (roadmap-adjacent; not implemented):
+
+- Alessandro Warth, James R. Douglass, and Todd Millstein, [*Packrat Parsers Can Support Left Recursion*](https://web.cs.ucla.edu/~todd/research/pepm08.pdf). PEPM 2008. Seminal seed-and-grow algorithm; couples left-recursion handling to the packrat memo table.
+- Laurence Tratt, [*Direct Left-Recursive Parsing Expression Grammars*](http://tratt.net/laurie/research/pubs/papers/tratt__direct_left_recursive_parsing_expression_grammars.pdf). Middlesex University Technical Report EIS-10-01, 2010. Adapts Warth's idea to PEGs without packrat memoization; direct left recursion only.
+- Sérgio Medeiros, Fabio Mascarenhas, and Roberto Ierusalimschy, [*Left recursion in parsing expression grammars*](https://arxiv.org/pdf/1207.0443.pdf). Science of Computer Programming 96:177–190, 2014. "Bounded left recursion" semantics with §5 giving a parsing-machine extension matching ours; L table is stack-structured and separate from the packrat memo. Fixes nullable-LR bugs that Warth's algorithm has.
 
 ### Reference implementations
 
