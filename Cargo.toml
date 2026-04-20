@@ -1,0 +1,22 @@
+[package]
+name = "syntax-highlighter"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.78"
+license = "MIT OR Apache-2.0"
+authors = ["Stefano Baghino <stefano@baghino.me>"]
+description = "A compact syntax highlighting engine."
+repository = "https://github.com/stefanobaghino/syntax-highlighter"
+homepage = "https://github.com/stefanobaghino/syntax-highlighter"
+readme = "README.md"
+keywords = ["syntax-highlighting", "peg", "parser"]
+categories = ["command-line-utilities", "parser-implementations", "text-processing"]
+publish = false
+exclude = [".github"]
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "syntax-highlighter"
+path = "src/main.rs"
