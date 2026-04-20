@@ -61,6 +61,13 @@ pub struct MemoStats {
     /// Number of times `MemoOpen` resolved via a cached entry instead of
     /// re-executing the rule body.
     pub hits: usize,
+    /// Number of `MemoOpen` invocations that did *not* find a cached entry
+    /// and had to execute the rule body. With the memo threshold at 0,
+    /// every miss produces an entry; with a non-zero threshold, successful
+    /// miss bodies shorter than the threshold are not written back, so
+    /// `entries` and `misses` diverge. `hits + misses` is the total
+    /// lookup count.
+    pub misses: usize,
 }
 
 pub struct VM<'p, 'i> {
@@ -77,6 +84,15 @@ pub struct VM<'p, 'i> {
     memo: HashMap<(MemoId, usize), MemoEntry>,
     /// Running count of resolved cache hits, exposed via `MemoStats`.
     memo_hits: usize,
+    /// Running count of `MemoOpen` cache misses, exposed via `MemoStats`.
+    memo_misses: usize,
+    /// Minimum successful-span length (in bytes) for which `MemoClose` will
+    /// write the outcome back to the cache. `0` = memoize everything (the
+    /// packrat default). Non-zero values skip tiny leaf-rule entries that
+    /// pay lookup cost without a meaningful storage win — see GPeg
+    /// (default 512) and Yedidia §5.2.4 (knee near 4096). Failure entries
+    /// in `fail()` are not filtered; their value is short-circuiting.
+    memo_threshold: usize,
 }
 
 /// A memo-table entry for a rule invocation at a specific input position.
@@ -112,7 +128,17 @@ impl<'p, 'i> VM<'p, 'i> {
             max_captures: Vec::new(),
             memo: HashMap::new(),
             memo_hits: 0,
+            memo_misses: 0,
+            memo_threshold: 0,
         }
+    }
+
+    /// Filter out successful memo entries whose matched span is shorter
+    /// than `bytes`. The default is `0` (memoize every success). See
+    /// [`VM::memo_threshold`] on the struct for the rationale.
+    pub fn with_memo_threshold(mut self, bytes: usize) -> Self {
+        self.memo_threshold = bytes;
+        self
     }
 
     pub fn run(self) -> MatchResult {
@@ -273,6 +299,7 @@ impl<'p, 'i> VM<'p, 'i> {
                             }
                         }
                     } else {
+                        self.memo_misses += 1;
                         self.stack.push(StackEntry::Memo {
                             memo_id: *memo_id,
                             start_sp: self.sp,
@@ -309,32 +336,42 @@ impl<'p, 'i> VM<'p, 'i> {
                         capture_start_len,
                         self.captures.len(),
                     );
-                    // Snapshot the captures produced inside the rule. All of
-                    // them must be closed at this point — PEG captures are
-                    // lexically scoped to `@name{...}` and cannot straddle a
-                    // rule boundary, so any `OpenCapture` with `end.is_none()`
-                    // would be a compiler bug.
-                    let rule_captures: Vec<Capture> = self.captures[capture_start_len..]
-                        .iter()
-                        .map(|c| {
-                            debug_assert!(
-                                c.end.is_some(),
-                                "MemoClose: open capture straddles rule boundary"
-                            );
-                            Capture {
-                                kind: c.kind,
-                                start: c.start,
-                                end: c.end.unwrap_or(self.sp),
-                            }
-                        })
-                        .collect();
-                    self.memo.insert(
-                        (*memo_id, start_sp),
-                        MemoEntry {
-                            end_sp: Some(self.sp),
-                            captures: rule_captures,
-                        },
-                    );
+                    // Threshold filter: skip caching if the matched span is
+                    // smaller than `memo_threshold`. Tiny leaf rules pay the
+                    // lookup cost without a meaningful storage win — see
+                    // GPeg's 512-byte default and Yedidia §5.2.4. Captures
+                    // produced inside the rule remain in the live buffer
+                    // (they are the caller's captures now); only the memo
+                    // entry is dropped.
+                    if self.sp - start_sp >= self.memo_threshold {
+                        // Snapshot the captures produced inside the rule.
+                        // All of them must be closed at this point — PEG
+                        // captures are lexically scoped to `@name{...}` and
+                        // cannot straddle a rule boundary, so any
+                        // `OpenCapture` with `end.is_none()` would be a
+                        // compiler bug.
+                        let rule_captures: Vec<Capture> = self.captures[capture_start_len..]
+                            .iter()
+                            .map(|c| {
+                                debug_assert!(
+                                    c.end.is_some(),
+                                    "MemoClose: open capture straddles rule boundary"
+                                );
+                                Capture {
+                                    kind: c.kind,
+                                    start: c.start,
+                                    end: c.end.unwrap_or(self.sp),
+                                }
+                            })
+                            .collect();
+                        self.memo.insert(
+                            (*memo_id, start_sp),
+                            MemoEntry {
+                                end_sp: Some(self.sp),
+                                captures: rule_captures,
+                            },
+                        );
+                    }
                     self.ip += 1;
                 }
                 Instruction::CaptureBegin(kind) => {
@@ -358,6 +395,7 @@ impl<'p, 'i> VM<'p, 'i> {
                     let stats = MemoStats {
                         entries: self.memo.len(),
                         hits: self.memo_hits,
+                        misses: self.memo_misses,
                     };
                     return (
                         MatchResult {
@@ -442,6 +480,7 @@ impl<'p, 'i> VM<'p, 'i> {
         let stats = MemoStats {
             entries: self.memo.len(),
             hits: self.memo_hits,
+            misses: self.memo_misses,
         };
         let result = MatchResult {
             matched: self.max_sp,
