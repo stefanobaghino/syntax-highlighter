@@ -1,0 +1,176 @@
+pub mod theme;
+
+use crate::pegvm::{
+    compile_grammar, parse_grammar, Capture, CompileError, ParseError, Program, VM,
+};
+
+#[derive(Debug)]
+pub enum HighlightError {
+    Parse(ParseError),
+    Compile(CompileError),
+}
+
+impl std::fmt::Display for HighlightError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HighlightError::Parse(e) => write!(f, "{}", e),
+            HighlightError::Compile(e) => write!(f, "{}", e),
+        }
+    }
+}
+
+impl std::error::Error for HighlightError {}
+
+impl From<ParseError> for HighlightError {
+    fn from(e: ParseError) -> Self {
+        HighlightError::Parse(e)
+    }
+}
+
+impl From<CompileError> for HighlightError {
+    fn from(e: CompileError) -> Self {
+        HighlightError::Compile(e)
+    }
+}
+
+pub struct Highlighter {
+    program: Program,
+}
+
+impl Highlighter {
+    pub fn new(grammar_source: &str) -> Result<Self, HighlightError> {
+        let g = parse_grammar(grammar_source)?;
+        let program = compile_grammar(&g.rules, &g.start)?;
+        Ok(Highlighter { program })
+    }
+
+    /// Run the VM and return raw captures alongside how many bytes matched.
+    /// Useful for tests and debugging.
+    pub fn captures(&self, input: &str) -> (usize, Vec<Capture>) {
+        match VM::new(&self.program.code, input.as_bytes()).run() {
+            Some(r) => (r.matched, r.captures),
+            None => (0, Vec::new()),
+        }
+    }
+
+    pub fn capture_kinds(&self) -> &[String] {
+        &self.program.capture_kinds
+    }
+
+    pub fn highlight(&self, input: &str) -> String {
+        let (_, captures) = self.captures(input);
+        render(input, &captures, &self.program.capture_kinds)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum EventKind {
+    Begin,
+    End,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Event {
+    pos: usize,
+    kind: EventKind,
+    cap_idx: usize,
+}
+
+/// Walk through input emitting ANSI-colored output. The active color at each
+/// position is determined by the innermost still-open capture (a stack).
+fn render(input: &str, captures: &[Capture], capture_kinds: &[String]) -> String {
+    if captures.is_empty() {
+        return input.to_string();
+    }
+
+    let mut events: Vec<Event> = Vec::with_capacity(captures.len() * 2);
+    for (i, c) in captures.iter().enumerate() {
+        events.push(Event {
+            pos: c.start,
+            kind: EventKind::Begin,
+            cap_idx: i,
+        });
+        events.push(Event {
+            pos: c.end,
+            kind: EventKind::End,
+            cap_idx: i,
+        });
+    }
+
+    // Order events at the same position so the stack stays consistent with
+    // properly nested captures:
+    //   - END events come before BEGIN events (a capture that ends here closes
+    //     before a sibling that starts here).
+    //   - For ENDs at the same position, inner captures (higher cap_idx) end first.
+    //   - For BEGINs at the same position, outer captures (lower cap_idx) start first.
+    events.sort_by(|a, b| {
+        a.pos.cmp(&b.pos).then_with(|| match (a.kind, b.kind) {
+            (EventKind::End, EventKind::Begin) => std::cmp::Ordering::Less,
+            (EventKind::Begin, EventKind::End) => std::cmp::Ordering::Greater,
+            (EventKind::End, EventKind::End) => b.cap_idx.cmp(&a.cap_idx),
+            (EventKind::Begin, EventKind::Begin) => a.cap_idx.cmp(&b.cap_idx),
+        })
+    });
+
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(bytes.len() + 32 * captures.len());
+    let mut stack: Vec<usize> = Vec::new(); // capture indices, innermost on top
+    let mut cursor = 0usize;
+
+    let active_color = |stack: &Vec<usize>| -> &'static str {
+        stack
+            .last()
+            .map(|&i| theme::color_for(&capture_kinds[captures[i].kind.0 as usize]))
+            .unwrap_or("")
+    };
+
+    let mut current_color: &'static str = "";
+
+    for ev in events {
+        // Emit input slice from cursor to ev.pos under the current color.
+        if ev.pos > cursor {
+            let new_color = active_color(&stack);
+            if new_color != current_color {
+                if !current_color.is_empty() {
+                    out.push_str(theme::RESET);
+                }
+                if !new_color.is_empty() {
+                    out.push_str(new_color);
+                }
+                current_color = new_color;
+            }
+            out.push_str(std::str::from_utf8(&bytes[cursor..ev.pos]).unwrap_or(""));
+            cursor = ev.pos;
+        }
+        match ev.kind {
+            EventKind::Begin => stack.push(ev.cap_idx),
+            EventKind::End => {
+                // With proper PEG nesting, the matching capture is on top of the stack.
+                if let Some(top) = stack.last() {
+                    if *top == ev.cap_idx {
+                        stack.pop();
+                    } else {
+                        // Defensive: search and remove (shouldn't happen for valid grammars).
+                        if let Some(pos) = stack.iter().rposition(|&i| i == ev.cap_idx) {
+                            stack.remove(pos);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Trailing input after the last event.
+    if cursor < bytes.len() {
+        if !current_color.is_empty() {
+            out.push_str(theme::RESET);
+            current_color = "";
+        }
+        let _ = current_color;
+        out.push_str(std::str::from_utf8(&bytes[cursor..]).unwrap_or(""));
+    } else if !current_color.is_empty() {
+        out.push_str(theme::RESET);
+    }
+
+    out
+}
