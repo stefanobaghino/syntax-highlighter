@@ -13,14 +13,16 @@ that can scale to many languages without binary bloat.
 
 ## Status
 
-Early MVP. Ships JSON and TOML grammars and an ANSI-coloring CLI. The
-properties described in *Why this approach* below are **design goals that
-this MVP is trying to prove** — the architecture supports them, and the
-first cross-language validation (JSON + TOML) is in. Expect breaking
-changes.
+Early MVP. Ships JSON, TOML, and SQLite-SELECT grammars and an
+ANSI-coloring CLI. The properties described in *Why this approach*
+below are **design goals that this MVP is trying to prove** — the
+architecture supports them, and cross-language validation spans three
+grammar shapes (JSON, TOML, and a backtracking-heavy SQL SELECT
+subset). Expect breaking changes.
 
-The CLI picks a grammar by file extension (`.json`, `.toml`) or an
-explicit `-l json|toml` flag; stdin without a flag defaults to JSON.
+The CLI picks a grammar by file extension (`.json`, `.toml`, `.sql`)
+or an explicit `-l json|toml|sql` flag; stdin without a flag defaults
+to JSON.
 
 Malformed or incomplete inputs render the longest valid prefix styled and
 the rest plain (see `src/pegvm/vm.rs` for the farthest-failure tracking).
@@ -65,6 +67,7 @@ For stdin with a non-default language, pass `-l`:
 
 ```bash
 printf '[package]\nname = "demo"\n' | cargo run -- -l toml
+printf 'SELECT id FROM users WHERE active;\n' | cargo run -- -l sql
 ```
 
 ## Grammar format
@@ -84,12 +87,16 @@ largest piece of work.
 
 These need no new VM or compiler machinery.
 
-- **More language grammars.** JSON and TOML ship today. Adding a language
-  means writing a grammar file. Remaining candidates: Python, Rust, CSS
-  or a SQL dialect (both have the shared-prefix alternatives that would
-  stress a future packrat cache). YAML is deferred — its context-sensitive
-  indentation semantics make it a poor fit for PEG without additional
-  machinery.
+- **More language grammars.** JSON, TOML, and a SQLite SELECT subset
+  ship today. Adding a language means writing a grammar file.
+  Expanding the SQLite grammar to the full dialect (INSERT/UPDATE/
+  DELETE/DDL/triggers) is the intended vehicle for two roadmap
+  deliverables it is uniquely positioned to support: a large-grammar
+  bytecode-size datapoint (JSON and TOML are both compact formats) and
+  a multi-statement error-recovery use case (single-SELECT does not
+  exercise it). Remaining candidates beyond SQLite: Python, Rust, CSS.
+  YAML is deferred — its context-sensitive indentation semantics make
+  it a poor fit for PEG without additional machinery.
 - **User-configurable themes.** The capture-name → ANSI mapping is
   hard-coded today; lifting it to a theme file (TOML or similar) is
   orthogonal to the VM.
