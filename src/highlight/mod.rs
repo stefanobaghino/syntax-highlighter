@@ -1,3 +1,24 @@
+//! ANSI-colored syntax highlighting on top of [`crate::pegvm`].
+//!
+//! [`Highlighter`] compiles a PEG grammar once, then renders highlighted
+//! output for any input by running the VM and translating its captures
+//! into ANSI escape codes.
+//!
+//! # Rendering strategy
+//!
+//! The renderer walks captures as Begin/End events, maintains a stack of
+//! currently-open captures, and applies **"innermost capture wins"**
+//! coloring. PEG nesting guarantees captures form a forest (no overlap),
+//! which is why a stack works rather than an interval tree.
+//!
+//! # Load-bearing invariant
+//!
+//! Stripping the ANSI escape codes from `highlight(input)` must yield the
+//! original `input` unchanged. The renderer never reorders, drops, or
+//! substitutes input bytes — it only inserts color codes around them.
+//! The integration tests assert this directly with a `strip_ansi` helper;
+//! any change to the renderer must preserve the property.
+
 pub mod theme;
 
 use crate::pegvm::{
