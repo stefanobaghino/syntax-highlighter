@@ -44,9 +44,11 @@ statement  <- select_stmt
             / create_table_stmt
             / create_index_stmt
             / create_view_stmt
+            / create_trigger_stmt
             / drop_table_stmt
             / drop_index_stmt
             / drop_view_stmt
+            / drop_trigger_stmt
             / alter_table_stmt
 
 # --- SELECT statement -------------------------------------------------
@@ -295,6 +297,29 @@ create_view_stmt  <- kw_create (ws (kw_temporary / kw_temp))? ws kw_view
 
 drop_view_stmt    <- kw_drop ws kw_view (ws kw_if ws kw_exists)? ws qualified_table_name
 
+# --- DDL: CREATE / DROP TRIGGER --------------------------------------
+# Trigger bodies are `;`-separated sequences of DML/SELECT wrapped in
+# BEGIN...END. The inner `;` is mandatory after each body statement,
+# which keeps the nesting disjoint from sql_file's top-level stmt_sep.
+
+create_trigger_stmt <- kw_create (ws (kw_temporary / kw_temp))? ws kw_trigger
+                       (ws kw_if ws kw_not ws kw_exists)?
+                       ws qualified_table_name
+                       (ws (kw_before / kw_after / kw_instead ws kw_of))?
+                       ws trigger_event
+                       ws kw_on ws @type{bare_ident_nonkw}
+                       (ws kw_for ws kw_each ws kw_row)?
+                       (ws kw_when ws expr)?
+                       ws kw_begin
+                       ws (trigger_body_stmt ws @punctuation{';'} ws)+
+                       kw_end
+trigger_event     <- kw_delete
+                   / kw_insert
+                   / kw_update (ws kw_of ws ident_list)?
+trigger_body_stmt <- insert_stmt / update_stmt / delete_stmt / select_stmt
+
+drop_trigger_stmt <- kw_drop ws kw_trigger (ws kw_if ws kw_exists)? ws qualified_table_name
+
 # --- Expressions (low → high precedence) -------------------------------
 # Classic precedence-climbing without left recursion. Each level either
 # matches the next-higher level or chains several of them with an
@@ -540,6 +565,14 @@ kw_without   <- @keyword{without_body !ident_char}
 kw_to        <- @keyword{to_body !ident_char}
 kw_index     <- @keyword{index_body !ident_char}
 kw_view      <- @keyword{view_body !ident_char}
+kw_trigger   <- @keyword{trigger_body !ident_char}
+kw_before    <- @keyword{before_body !ident_char}
+kw_after     <- @keyword{after_body !ident_char}
+kw_instead   <- @keyword{instead_body !ident_char}
+kw_of        <- @keyword{of_body !ident_char}
+kw_for       <- @keyword{for_body !ident_char}
+kw_each      <- @keyword{each_body !ident_char}
+kw_begin     <- @keyword{begin_body !ident_char}
 
 # Keyword bodies — raw letter matchers, no boundary check.
 
@@ -658,6 +691,14 @@ without_body   <- [wW][iI][tT][hH][oO][uU][tT]
 to_body        <- [tT][oO]
 index_body     <- [iI][nN][dD][eE][xX]
 view_body      <- [vV][iI][eE][wW]
+trigger_body   <- [tT][rR][iI][gG][gG][eE][rR]
+before_body    <- [bB][eE][fF][oO][rR][eE]
+after_body     <- [aA][fF][tT][eE][rR]
+instead_body   <- [iI][nN][sS][tT][eE][aA][dD]
+of_body        <- [oO][fF]
+for_body       <- [fF][oO][rR]
+each_body      <- [eE][aA][cC][hH]
+begin_body     <- [bB][eE][gG][iI][nN]
 
 # Keyword negative-lookahead for the identifier rule.
 #
@@ -697,14 +738,17 @@ keyword_word <-
     / collate_body         # 7
     / default_body         # 7
     / foreign_body         # 7
+    / instead_body         # 7
     / natural_body         # 7
     / nothing_body         # 7
     / primary_body         # 7
     / replace_body         # 7
+    / trigger_body         # 7
     / virtual_body         # 7
     / without_body         # 7
     / action_body          # 6
     / always_body          # 6
+    / before_body          # 6
     / column_body          # 6
     / create_body          # 6
     / delete_body          # 6
@@ -725,7 +769,9 @@ keyword_word <-
     / values_body          # 6
     / window_body          # 6
     / abort_body           # 5
+    / after_body           # 5
     / alter_body           # 5
+    / begin_body           # 5
     / bool_body            # 5 (FALSE) / 4 (TRUE); alternation handles both
     / check_body           # 5
     / cross_body           # 5
@@ -746,6 +792,7 @@ keyword_word <-
     / cast_body            # 4
     / desc_body            # 4
     / drop_body            # 4
+    / each_body            # 4
     / else_body            # 4
     / fail_body            # 4
     / from_body            # 4
@@ -767,6 +814,7 @@ keyword_word <-
     / and_body             # 3
     / asc_body             # 3
     / end_body             # 3
+    / for_body             # 3
     / key_body             # 3
     / not_body             # 3
     / set_body             # 3
@@ -777,6 +825,7 @@ keyword_word <-
     / in_body              # 2
     / is_body              # 2
     / no_body              # 2
+    / of_body              # 2
     / on_body              # 2
     / or_body              # 2
     / to_body              # 2

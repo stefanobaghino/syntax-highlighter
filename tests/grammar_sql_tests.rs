@@ -863,6 +863,79 @@ fn drop_view_variants() {
 }
 
 #[test]
+fn create_trigger_after_insert() {
+    assert_complete_full(
+        "CREATE TRIGGER tr AFTER INSERT ON t BEGIN INSERT INTO log VALUES (1); END",
+    );
+}
+
+#[test]
+fn create_trigger_before_update() {
+    assert_complete_full(
+        "CREATE TRIGGER tr BEFORE UPDATE ON t BEGIN UPDATE log SET n = n + 1; END",
+    );
+}
+
+#[test]
+fn create_trigger_instead_of_delete() {
+    assert_complete_full(
+        "CREATE TRIGGER tr INSTEAD OF DELETE ON v BEGIN DELETE FROM u WHERE id = OLD.id; END",
+    );
+}
+
+#[test]
+fn create_trigger_update_of_columns() {
+    assert_complete_full("CREATE TRIGGER tr AFTER UPDATE OF a, b ON t BEGIN SELECT 1; END");
+}
+
+#[test]
+fn create_trigger_for_each_row() {
+    assert_complete_full("CREATE TRIGGER tr AFTER INSERT ON t FOR EACH ROW BEGIN SELECT 1; END");
+}
+
+#[test]
+fn create_trigger_when_clause() {
+    assert_complete_full(
+        "CREATE TRIGGER tr AFTER INSERT ON t FOR EACH ROW WHEN NEW.a > 0 \
+         BEGIN INSERT INTO log VALUES (NEW.a); END",
+    );
+}
+
+#[test]
+fn create_trigger_multi_statement_body() {
+    assert_complete_full(
+        "CREATE TRIGGER tr AFTER INSERT ON t BEGIN \
+           INSERT INTO log VALUES (1); \
+           UPDATE stats SET n = n + 1; \
+           DELETE FROM tmp WHERE id = NEW.id; \
+         END",
+    );
+}
+
+#[test]
+fn create_trigger_if_not_exists() {
+    assert_complete_full("CREATE TRIGGER IF NOT EXISTS tr AFTER INSERT ON t BEGIN SELECT 1; END");
+}
+
+#[test]
+fn create_temp_trigger() {
+    assert_complete_full("CREATE TEMP TRIGGER tr AFTER INSERT ON t BEGIN SELECT 1; END");
+}
+
+#[test]
+fn drop_trigger_variants() {
+    assert_complete_full("DROP TRIGGER tr");
+    assert_complete_full("DROP TRIGGER IF EXISTS main.tr");
+}
+
+#[test]
+fn trigger_then_select_multi_statement() {
+    // Two top-level statements separated by `;`: a trigger (whose body
+    // has its own inner `;`-terminated statements) and a SELECT.
+    assert_complete_full("CREATE TRIGGER tr AFTER INSERT ON t BEGIN SELECT 1; END; SELECT 2");
+}
+
+#[test]
 fn create_table_column_kinds() {
     let input = "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)";
     let (caps, kinds) = assert_complete_full(input);
