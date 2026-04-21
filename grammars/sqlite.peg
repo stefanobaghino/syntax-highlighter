@@ -39,6 +39,8 @@ sql_file   <- ws (statement (stmt_sep statement)*)? stmt_sep? ws !.
 stmt_sep   <- ws @punctuation{';'} ws
 statement  <- select_stmt
             / insert_stmt
+            / update_stmt
+            / delete_stmt
 
 # --- SELECT statement -------------------------------------------------
 
@@ -160,9 +162,36 @@ indexed_col      <- expr (ws kw_collate ws @type{bare_ident})? (ws (kw_asc / kw_
 
 update_set_list <- update_set_item (ws @punctuation{','} ws update_set_item)*
 update_set_item <- @variable{bare_ident_nonkw} ws @operator{'='} ws expr
-                 / @punctuation{'('} ws ident_list ws @punctuation{')'} ws @operator{'='} ws expr
+                 / @punctuation{'('} ws ident_list ws @punctuation{')'} ws @operator{'='} ws row_value
+# RHS of a column-tuple assignment: parens-wrapped row-value (literal
+# list or sub-select) or a single expression that yields a row.
+row_value        <- @punctuation{'('} ws
+                    (select_stmt / expr (ws @punctuation{','} ws expr)*)
+                    ws @punctuation{')'}
+                  / expr
 
 returning_clause <- kw_returning ws result_list
+
+# --- DML: UPDATE, DELETE ---------------------------------------------
+# UPDATE FROM and DELETE reuse `from_clause` and `where_clause` from
+# the SELECT section. ORDER BY + LIMIT are accepted even on builds
+# compiled without SQLITE_ENABLE_UPDATE_DELETE_LIMIT — highlighting
+# should not pretend the syntax doesn't exist.
+
+update_stmt <- with_clause? kw_update (ws kw_or ws conflict_action)? ws
+               qualified_table_name (ws table_alias)?
+               ws kw_set ws update_set_list
+               (ws from_clause)?
+               (ws where_clause)?
+               order_clause?
+               limit_clause?
+               (ws returning_clause)?
+
+delete_stmt <- with_clause? kw_delete ws kw_from ws qualified_table_name (ws table_alias)?
+               (ws where_clause)?
+               order_clause?
+               limit_clause?
+               (ws returning_clause)?
 
 # --- Expressions (low → high precedence) -------------------------------
 # Classic precedence-climbing without left recursion. Each level either
@@ -370,6 +399,7 @@ kw_ignore    <- @keyword{ignore_body !ident_char}
 kw_set       <- @keyword{set_body !ident_char}
 kw_returning <- @keyword{returning_body !ident_char}
 kw_update    <- @keyword{update_body !ident_char}
+kw_delete    <- @keyword{delete_body !ident_char}
 
 # Keyword bodies — raw letter matchers, no boundary check.
 
@@ -452,6 +482,7 @@ ignore_body    <- [iI][gG][nN][oO][rR][eE]
 set_body       <- [sS][eE][tT]
 returning_body <- [rR][eE][tT][uU][rR][nN][iI][nN][gG]
 update_body    <- [uU][pP][dD][aA][tT][eE]
+delete_body    <- [dD][eE][lL][eE][tT][eE]
 
 # Keyword negative-lookahead for the identifier rule.
 #
@@ -482,6 +513,7 @@ keyword_word <-
     / natural_body         # 7
     / nothing_body         # 7
     / replace_body         # 7
+    / delete_body          # 6
     / escape_body          # 6
     / except_body          # 6
     / exists_body          # 6

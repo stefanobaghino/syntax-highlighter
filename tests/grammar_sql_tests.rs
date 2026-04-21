@@ -612,6 +612,77 @@ fn insert_into_emits_type_on_table() {
 }
 
 #[test]
+fn update_basic() {
+    assert_complete_full("UPDATE t SET a = 1");
+}
+
+#[test]
+fn update_multi_set_with_where() {
+    assert_complete_full("UPDATE t SET a = 1, b = 2 WHERE c = 3");
+}
+
+#[test]
+fn update_column_tuple() {
+    assert_complete_full("UPDATE t SET (a, b) = (1, 2)");
+}
+
+#[test]
+fn update_or_rollback() {
+    for prefix in [
+        "UPDATE OR ROLLBACK",
+        "UPDATE OR ABORT",
+        "UPDATE OR REPLACE",
+        "UPDATE OR FAIL",
+        "UPDATE OR IGNORE",
+    ] {
+        let input = format!("{prefix} t SET a = 1");
+        assert_complete_full(&input);
+    }
+}
+
+#[test]
+fn update_with_from() {
+    assert_complete_full("UPDATE t SET a = s.a FROM s WHERE t.id = s.id");
+}
+
+#[test]
+fn update_with_returning() {
+    assert_complete_full("UPDATE t SET a = 1 WHERE b > 0 RETURNING a, b");
+}
+
+#[test]
+fn update_with_order_limit() {
+    assert_complete_full("UPDATE t SET a = a + 1 ORDER BY id LIMIT 10");
+}
+
+#[test]
+fn delete_basic() {
+    assert_complete_full("DELETE FROM t");
+}
+
+#[test]
+fn delete_with_where() {
+    assert_complete_full("DELETE FROM t WHERE a = 1");
+}
+
+#[test]
+fn delete_with_returning() {
+    assert_complete_full("DELETE FROM t WHERE a = 1 RETURNING *");
+}
+
+#[test]
+fn delete_with_order_limit() {
+    assert_complete_full("DELETE FROM t WHERE a = 1 ORDER BY id LIMIT 10");
+}
+
+#[test]
+fn delete_with_cte() {
+    assert_complete_full(
+        "WITH cur AS (SELECT id FROM t) DELETE FROM t WHERE id IN (SELECT id FROM cur)",
+    );
+}
+
+#[test]
 fn window_captures_include_over_and_partition() {
     let input = "SELECT SUM(x) OVER (PARTITION BY y ORDER BY z) FROM t";
     let (caps, kinds) = assert_complete_full(input);
