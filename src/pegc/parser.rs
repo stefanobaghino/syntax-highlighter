@@ -1,12 +1,33 @@
 use std::collections::HashMap;
 
+use super::compiler::{compile_rules, CompileError};
 use super::pattern::Pattern;
-use crate::pegvm::CharSet;
+use crate::pegvm::{CharSet, Program};
 
 #[derive(Debug, Clone)]
 pub struct Grammar {
     pub rules: HashMap<String, Pattern>,
     pub start: String,
+}
+
+impl Grammar {
+    /// Construct a grammar from a hand-built rule map. Useful for
+    /// tests that build `Pattern` trees directly without going
+    /// through [`parse`].
+    pub fn new(rules: HashMap<String, Pattern>, start: impl Into<String>) -> Self {
+        Grammar {
+            rules,
+            start: start.into(),
+        }
+    }
+
+    /// Compile this grammar's rules into a runnable
+    /// [`Program`](crate::pegvm::Program). For one-shot grammar source
+    /// → [`Program`] callers, prefer the top-level
+    /// [`compile`](super::compile) instead.
+    pub fn compile(&self) -> Result<Program, CompileError> {
+        compile_rules(&self.rules, &self.start)
+    }
 }
 
 #[derive(Debug)]

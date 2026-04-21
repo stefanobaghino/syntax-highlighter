@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use syntax_highlighter::grammar::{compile, compile_pattern, Pattern};
+use syntax_highlighter::pegc::{compile_pattern, Grammar, Pattern};
 use syntax_highlighter::pegvm::{
     Capture, CaptureKind, CharSet, Instruction, Label, MatchResult, MemoId, VM,
 };
@@ -301,7 +301,7 @@ fn grammar_with_nonterminals() {
         "digit".into(),
         Pattern::CharClass(CharSet::from_ranges(&[(b'0', b'9')])),
     );
-    let prog = compile(&rules, "start").unwrap();
+    let prog = Grammar::new(rules, "start").compile().unwrap();
     assert_eq!(
         VM::new(&prog.code, b"123abc").run(),
         MatchResult {
@@ -317,7 +317,7 @@ fn grammar_with_nonterminals() {
 fn grammar_undefined_rule_errors() {
     let mut rules = HashMap::new();
     rules.insert("start".into(), Pattern::NonTerminal("missing".into()));
-    let err = compile(&rules, "start").unwrap_err();
+    let err = Grammar::new(rules, "start").compile().unwrap_err();
     let msg = format!("{}", err);
     assert!(msg.contains("missing"), "got: {}", msg);
 }
@@ -379,7 +379,7 @@ fn grammar_rules_are_wrapped_in_memo_open_close() {
     let mut rules = HashMap::new();
     rules.insert("start".into(), Pattern::literal("a"));
     rules.insert("other".into(), Pattern::literal("b"));
-    let prog = compile(&rules, "start").unwrap();
+    let prog = Grammar::new(rules, "start").compile().unwrap();
     assert_eq!(prog.memo_count, 2);
     assert_eq!(
         prog.code,

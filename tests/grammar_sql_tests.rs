@@ -1,13 +1,12 @@
 use std::collections::HashSet;
 
-use syntax_highlighter::grammar::{compile, parse};
+use syntax_highlighter::pegc;
 use syntax_highlighter::pegvm::{Capture, Program, VM};
 
 const SQLITE_GRAMMAR: &str = include_str!("../grammars/sqlite.peg");
 
 fn compile_sql() -> Program {
-    let g = parse(SQLITE_GRAMMAR).expect("SQLite grammar should parse");
-    compile(&g.rules, &g.start).expect("SQLite grammar should compile")
+    pegc::compile(SQLITE_GRAMMAR).expect("SQLite grammar should compile")
 }
 
 fn run(input: &str) -> (usize, Vec<Capture>, Vec<String>, bool) {
@@ -66,7 +65,7 @@ fn grammar_parses_and_compiles() {
     assert!(!prog.capture_kinds.is_empty());
     eprintln!(
         "SQLite bytecode: {} rules, {} kinds, {} instr",
-        parse(SQLITE_GRAMMAR).unwrap().rules.len(),
+        pegc::parse(SQLITE_GRAMMAR).unwrap().rules.len(),
         prog.capture_kinds.len(),
         prog.code.len()
     );

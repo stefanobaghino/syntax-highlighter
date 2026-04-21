@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use syntax_highlighter::grammar::{compile, Pattern};
+use syntax_highlighter::pegc::{Grammar, Pattern};
 use syntax_highlighter::pegvm::{Capture, CaptureKind, CharSet, MatchResult, VM};
 
 fn cap(kind: u16, start: usize, end: usize) -> Capture {
@@ -46,7 +46,7 @@ fn second_alternative_reuses_memoized_x() {
         "X".into(),
         Pattern::CharClass(CharSet::from_ranges(&[(b'a', b'z')])),
     );
-    let prog = compile(&rules, "start").unwrap();
+    let prog = Grammar::new(rules, "start").compile().unwrap();
     let (result, stats) = VM::new(&prog.code, b"abb")
         .with_memo_threshold(0)
         .run_with_memo_stats();
@@ -77,7 +77,7 @@ fn memo_table_populates_on_success() {
         "X".into(),
         Pattern::CharClass(CharSet::from_ranges(&[(b'a', b'z')])),
     );
-    let prog = compile(&rules, "start").unwrap();
+    let prog = Grammar::new(rules, "start").compile().unwrap();
     let (_, stats) = VM::new(&prog.code, b"ab")
         .with_memo_threshold(0)
         .run_with_memo_stats();
@@ -138,7 +138,7 @@ fn memo_hit_inside_outer_capture_preserves_nesting() {
             Box::new(Pattern::CharClass(CharSet::from_ranges(&[(b'a', b'z')]))),
         ),
     );
-    let prog = compile(&rules, "start").unwrap();
+    let prog = Grammar::new(rules, "start").compile().unwrap();
     // Capture kind ids are assigned in first-seen order: "outer" = 0, "inner" = 1.
     let outer_kind = prog
         .capture_kinds
@@ -197,7 +197,7 @@ fn cached_failure_short_circuits_not_predicate() {
         ]),
     );
     rules.insert("A".into(), Pattern::literal("a"));
-    let prog = compile(&rules, "start").unwrap();
+    let prog = Grammar::new(rules, "start").compile().unwrap();
     let (result, stats) = VM::new(&prog.code, b"c")
         .with_memo_threshold(0)
         .run_with_memo_stats();
@@ -236,7 +236,7 @@ fn nested_memoized_rule_failures_both_cached() {
         "fallback".into(),
         Pattern::CharClass(CharSet::from_ranges(&[(b'a', b'z')])),
     );
-    let prog = compile(&rules, "start").unwrap();
+    let prog = Grammar::new(rules, "start").compile().unwrap();
     let (result, stats) = VM::new(&prog.code, b"x")
         .with_memo_threshold(0)
         .run_with_memo_stats();
@@ -275,7 +275,7 @@ fn and_predicate_with_memoized_rule() {
         "A".into(),
         Pattern::CharClass(CharSet::from_ranges(&[(b'a', b'z')])),
     );
-    let prog = compile(&rules, "start").unwrap();
+    let prog = Grammar::new(rules, "start").compile().unwrap();
     let (result, stats) = VM::new(&prog.code, b"y")
         .with_memo_threshold(0)
         .run_with_memo_stats();
@@ -298,7 +298,7 @@ fn memoization_does_not_change_results_on_linear_parse() {
         "digit".into(),
         Pattern::CharClass(CharSet::from_ranges(&[(b'0', b'9')])),
     );
-    let prog = compile(&rules, "start").unwrap();
+    let prog = Grammar::new(rules, "start").compile().unwrap();
     let result = VM::new(&prog.code, b"12345").run();
     assert_eq!(
         result,

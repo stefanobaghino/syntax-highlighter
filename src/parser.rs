@@ -8,11 +8,11 @@
 //! full parse; each [`edit`](Parser::edit) / [`append`](Parser::append)
 //! is a warm incremental reparse.
 //!
-//! This module hides the two-step grammar-source → bytecode pipeline
-//! ([`crate::grammar::parse`] + [`crate::grammar::compile`]) and the
-//! stateful VM wiring behind a single type. Callers that need tighter
-//! composition (e.g. to reuse one compiled [`Program`] across multiple
-//! Parser instances) can drop to those lower-level modules directly.
+//! This module hides the grammar-source → bytecode pipeline
+//! ([`crate::pegc::compile`]) and the stateful VM wiring behind a
+//! single type. Callers that need tighter composition (e.g. to reuse
+//! one compiled [`Program`] across multiple Parser instances) can
+//! drop to those lower-level modules directly.
 //!
 //! # Byte-oriented input
 //!
@@ -23,38 +23,26 @@
 //! entry points, backed by the invariant that every mutation enters as
 //! valid UTF-8.
 
-use crate::grammar::{compile, parse, CompileError, ParseError};
+use crate::pegc;
 use crate::pegvm::{incremental::Edit, Capture, MemoCache, MemoStats, Program, VM};
 
-/// Failure mode for [`Parser::new`]. Unifies the grammar-source
-/// parsing and bytecode-compilation error types behind one public
-/// enum so callers learn one type rather than two.
+/// Failure mode for [`Parser::new`]. A thin wrapper around
+/// [`pegc::Error`] so callers learn one parser-shaped type rather
+/// than reaching into [`pegc`] for its error vocabulary.
 #[derive(Debug)]
-pub enum ParserError {
-    Parse(ParseError),
-    Compile(CompileError),
-}
+pub struct ParserError(pub pegc::Error);
 
 impl std::fmt::Display for ParserError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ParserError::Parse(e) => write!(f, "{}", e),
-            ParserError::Compile(e) => write!(f, "{}", e),
-        }
+        self.0.fmt(f)
     }
 }
 
 impl std::error::Error for ParserError {}
 
-impl From<ParseError> for ParserError {
-    fn from(e: ParseError) -> Self {
-        ParserError::Parse(e)
-    }
-}
-
-impl From<CompileError> for ParserError {
-    fn from(e: CompileError) -> Self {
-        ParserError::Compile(e)
+impl From<pegc::Error> for ParserError {
+    fn from(e: pegc::Error) -> Self {
+        ParserError(e)
     }
 }
 
@@ -77,10 +65,8 @@ impl Parser {
     /// Compilation runs once; subsequent `set_input` / `edit` calls
     /// reuse the same [`Program`].
     pub fn new(grammar_source: &str) -> Result<Self, ParserError> {
-        let g = parse(grammar_source)?;
-        let program = compile(&g.rules, &g.start)?;
         Ok(Self {
-            program,
+            program: pegc::compile(grammar_source)?,
             input: Vec::new(),
             cache: MemoCache::new(),
             matched: 0,

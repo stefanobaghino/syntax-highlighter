@@ -1,13 +1,12 @@
 use std::collections::HashSet;
 
-use syntax_highlighter::grammar::{compile, parse};
+use syntax_highlighter::pegc;
 use syntax_highlighter::pegvm::{Capture, Program, VM};
 
 const TOML_GRAMMAR: &str = include_str!("../grammars/toml.peg");
 
 fn compile_toml() -> Program {
-    let g = parse(TOML_GRAMMAR).expect("TOML grammar should parse");
-    compile(&g.rules, &g.start).expect("TOML grammar should compile")
+    pegc::compile(TOML_GRAMMAR).expect("TOML grammar should compile")
 }
 
 fn run(input: &str) -> (usize, Vec<Capture>, Vec<String>, bool) {

@@ -1,7 +1,7 @@
-use syntax_highlighter::grammar::{parse as parse_src, Pattern};
+use syntax_highlighter::pegc::{parse as parse_src, Pattern};
 use syntax_highlighter::pegvm::CharSet;
 
-fn parse(src: &str) -> syntax_highlighter::grammar::Grammar {
+fn parse(src: &str) -> syntax_highlighter::pegc::Grammar {
     parse_src(src).expect("parse failed")
 }
 
@@ -173,10 +173,9 @@ fn dash_in_class_at_end_is_literal() {
 
 #[test]
 fn end_to_end_grammar_compile_run() {
-    use syntax_highlighter::grammar::compile;
     use syntax_highlighter::pegvm::VM;
     let g = parse("number <- [0-9]+");
-    let prog = compile(&g.rules, &g.start).unwrap();
+    let prog = g.compile().unwrap();
     let r = VM::new(&prog.code, b"42abc").run();
     assert!(r.complete);
     assert_eq!(r.matched, 2);

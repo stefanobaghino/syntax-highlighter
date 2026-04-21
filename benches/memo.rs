@@ -15,7 +15,7 @@
 
 use std::time::Instant;
 
-use syntax_highlighter::grammar::{compile, parse};
+use syntax_highlighter::pegc;
 use syntax_highlighter::pegvm::{Program, VM};
 
 #[path = "common.rs"]
@@ -49,8 +49,7 @@ struct GrammarCase {
 }
 
 fn compile_case(name: &str, src: &str) -> Program {
-    let grammar = parse(src).unwrap_or_else(|e| panic!("parse {name}: {e}"));
-    compile(&grammar.rules, &grammar.start).unwrap_or_else(|e| panic!("compile {name}: {e:?}"))
+    pegc::compile(src).unwrap_or_else(|e| panic!("compile {name}: {e}"))
 }
 
 /// Run one cell: `runs` executions of the VM at a fixed threshold. Returns

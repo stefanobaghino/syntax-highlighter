@@ -670,7 +670,7 @@ mod examined_max_tests {
     //! memo map — post-run the public `run_with_memo_stats` has already
     //! discarded it.
     use super::*;
-    use crate::grammar::{compile, Pattern};
+    use crate::pegc::{Grammar, Pattern};
     use std::collections::HashMap;
 
     fn rule(rules: &mut HashMap<String, Pattern>, name: &str, pat: Pattern) {
@@ -691,7 +691,7 @@ mod examined_max_tests {
                 Pattern::AndPredicate(Box::new(Pattern::literal("y"))),
             ]),
         );
-        let prog = compile(&rules, "start").unwrap();
+        let prog = Grammar::new(rules, "start").compile().unwrap();
         let (result, _stats, memo) = VM::new(&prog.code, b"xy").with_memo_threshold(0).run_core();
         assert!(result.complete);
         assert_eq!(result.matched, 1, "only 'x' is consumed");
@@ -720,7 +720,7 @@ mod examined_max_tests {
                 Pattern::AndPredicate(Box::new(Pattern::literal("z"))),
             ]),
         );
-        let prog = compile(&rules, "start").unwrap();
+        let prog = Grammar::new(rules, "start").compile().unwrap();
         let (result, _stats, memo) = VM::new(&prog.code, b"xy").with_memo_threshold(0).run_core();
         assert!(!result.complete, "overall parse must fail");
         let entry = memo
@@ -751,7 +751,7 @@ mod examined_max_tests {
             ]),
         );
         rule(&mut rules, "inner", Pattern::literal("x"));
-        let prog = compile(&rules, "outer").unwrap();
+        let prog = Grammar::new(rules, "outer").compile().unwrap();
         let (result, _stats, memo) = VM::new(&prog.code, b"xy").with_memo_threshold(0).run_core();
         assert!(result.complete);
         assert_eq!(result.matched, 2);
@@ -794,7 +794,7 @@ mod examined_max_tests {
             ]),
         );
         rule(&mut rules, "X", Pattern::literal("a"));
-        let prog = compile(&rules, "start").unwrap();
+        let prog = Grammar::new(rules, "start").compile().unwrap();
         let (result, stats, memo) = VM::new(&prog.code, b"abb")
             .with_memo_threshold(0)
             .run_core();

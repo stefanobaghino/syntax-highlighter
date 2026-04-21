@@ -191,7 +191,7 @@ pub fn compile_pattern(pat: &Pattern) -> Program {
     c.emit(Instruction::End);
     if let Some((_, name)) = c.pending_calls.first() {
         panic!(
-            "compile_pattern: unresolved NonTerminal({}) — use compile",
+            "compile_pattern: unresolved NonTerminal({}) — use Grammar::compile",
             name
         );
     }
@@ -202,13 +202,18 @@ pub fn compile_pattern(pat: &Pattern) -> Program {
     }
 }
 
-/// Compile a full grammar with named rules.
+/// Compile a full grammar with named rules. Crate-internal; callers
+/// reach this via [`Grammar::compile`](super::Grammar::compile) or
+/// the one-step [`super::compile`].
 ///
 /// Code layout:
 ///   0: Call(<start address>)
 ///   1: End
 ///   2..: rule bodies, each ending with Return
-pub fn compile(rules: &HashMap<String, Pattern>, start: &str) -> Result<Program, CompileError> {
+pub(crate) fn compile_rules(
+    rules: &HashMap<String, Pattern>,
+    start: &str,
+) -> Result<Program, CompileError> {
     if !rules.contains_key(start) {
         return Err(CompileError::UnknownStartRule(start.to_string()));
     }
