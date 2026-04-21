@@ -27,6 +27,11 @@ to JSON.
 Malformed or incomplete inputs render the longest valid prefix styled and
 the rest plain (see `src/pegvm/vm.rs` for the farthest-failure tracking).
 
+`Highlighter` owns its input and reuses the memo table across edits:
+append-only streaming and arbitrary-position edits reparse only the
+regions whose memo entries cross the edit point, not the whole buffer
+(see `src/pegvm/incremental.rs` for the invalidation protocol).
+
 ## Why this approach
 
 The aim is a small, efficient runtime with compact grammars and
@@ -112,17 +117,6 @@ These need no new VM or compiler machinery.
 
 Each item is a self-contained feature that unlocks further work.
 
-- **Incremental parsing.** O(Δ) per input change instead of O(n), by
-  invalidating only the memo entries whose spans cross the edit point
-  (Yedidia's thesis, Ch. 4). Covers both append-only streaming (an LLM
-  response arriving character-by-character in a TUI) and arbitrary-
-  position edits (a cursor insertion or deletion anywhere in the input).
-  Builds on the memoization layer — the memo table is the substrate;
-  this task adds the public edit/diff API and the invalidation protocol.
-  The memo-threshold filter (`VM::DEFAULT_MEMO_THRESHOLD`) is what
-  makes this memory-feasible: without it, every rule call at every
-  position would accumulate an entry in a table that must survive
-  across edits.
 - **Left recursion support.** Not needed for JSON, but natural for some
   grammar idioms (especially arithmetic-expression grammars). The
   intended reference is Medeiros, Mascarenhas & Ierusalimschy 2014 —
