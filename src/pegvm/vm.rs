@@ -174,6 +174,23 @@ impl<'p, 'i> VM<'p, 'i> {
         self
     }
 
+    /// Construct a VM whose memo table is pre-populated with `cache`.
+    /// Entries the seeded cache agrees with the program on (same rule +
+    /// position) will be served as hits without re-executing the rule
+    /// body — that is the entire point of incremental parsing. The
+    /// caller is responsible for ensuring the cache was built against
+    /// either this same input or a prior input plus a correctly applied
+    /// [`MemoCache::apply_edit`](super::incremental::MemoCache::apply_edit).
+    pub fn new_with_cache(
+        program: &'p [Instruction],
+        input: &'i [u8],
+        mut cache: super::incremental::MemoCache,
+    ) -> Self {
+        let mut vm = Self::new(program, input);
+        vm.memo = cache.take();
+        vm
+    }
+
     pub fn run(self) -> MatchResult {
         self.run_with_memo_stats().0
     }
@@ -183,11 +200,24 @@ impl<'p, 'i> VM<'p, 'i> {
         (result, stats)
     }
 
+    /// Run the VM to completion and return the populated memo as a
+    /// [`MemoCache`](super::incremental::MemoCache) so the caller can
+    /// carry it across an edit. Equivalent to `run_with_memo_stats`
+    /// plus a rewrap; the cache retains every entry recorded during
+    /// this run, including entries seeded in via [`new_with_cache`]
+    /// that survived the parse.
+    pub fn run_with_cache(self) -> (MatchResult, MemoStats, super::incremental::MemoCache) {
+        let (result, stats, memo) = self.run_core();
+        let mut cache = super::incremental::MemoCache::new();
+        cache.install(memo);
+        (result, stats, cache)
+    }
+
     /// Core execution loop. Returns the result, stats, and the final memo
     /// table. Package-internal wrapper for tests that need to inspect
-    /// per-entry details (notably `examined_max`) and the eventual
-    /// incremental-parsing hook that harvests the memo for later reuse
-    /// across edits.
+    /// per-entry details (notably `examined_max`) and for the public
+    /// `run_with_cache` variant that rewraps the table into a
+    /// [`MemoCache`](super::incremental::MemoCache).
     fn run_core(mut self) -> (MatchResult, MemoStats, HashMap<(MemoId, usize), MemoEntry>) {
         loop {
             let instr = match self.program.get(self.ip) {
