@@ -43,11 +43,14 @@ statement  <- select_stmt
 
 select_stmt    <- with_clause? select_core compound_tail* order_clause? limit_clause?
 
-with_clause    <- kw_with ws cte_defn (ws @punctuation{','} ws cte_defn)* ws
-cte_defn       <- @type{bare_ident} ws kw_as ws @punctuation{'('} ws select_stmt ws @punctuation{')'}
+with_clause    <- kw_with (ws kw_recursive)? ws cte_defn (ws @punctuation{','} ws cte_defn)* ws
+cte_defn       <- @type{bare_ident}
+                  (ws @punctuation{'('} ws ident_list ws @punctuation{')'})?
+                  ws kw_as ws @punctuation{'('} ws select_stmt ws @punctuation{')'}
 
 select_core    <- kw_select (ws (kw_distinct / kw_all))? ws result_list
                   (ws from_clause)? (ws where_clause)? (ws group_clause)? (ws having_clause)?
+                  (ws window_clause)?
 
 result_list    <- result_column (ws @punctuation{','} ws result_column)*
 result_column  <- table_star / @operator{'*'} / aliased_expr
@@ -87,6 +90,43 @@ order_item     <- expr (ws (kw_asc / kw_desc))?
 
 limit_clause   <- ws kw_limit ws expr (ws kw_offset ws expr
                                      / ws @punctuation{','} ws expr)?
+
+# --- Window functions & WINDOW clause --------------------------------
+# Not counted as reserved keywords in SQLite aside from WINDOW and
+# OVER — PARTITION, FILTER, RANGE, ROWS, GROUPS, PRECEDING, FOLLOWING,
+# UNBOUNDED, CURRENT, EXCLUDE, TIES, OTHERS, NO, ROW and RECURSIVE
+# are matched positionally here, so existing SELECTs that use any of
+# those as identifiers keep working.
+
+window_clause  <- kw_window ws named_window (ws @punctuation{','} ws named_window)*
+named_window   <- @variable{bare_ident_nonkw} ws kw_as ws window_defn
+
+filter_clause  <- kw_filter ws @punctuation{'('} ws kw_where ws expr ws @punctuation{')'}
+
+window_defn    <- @punctuation{'('} ws
+                      (!window_section_keyword @variable{bare_ident_nonkw} ws)?
+                      (kw_partition ws kw_by ws expr (ws @punctuation{','} ws expr)* ws)?
+                      (window_order_body ws)?
+                      (frame_spec ws)? @punctuation{')'}
+# Guard the optional base-window-name slot against consuming a keyword
+# that actually starts the next positional section (PARTITION / ORDER /
+# RANGE / ROWS / GROUPS). Without the lookahead, PEG would eat
+# `PARTITION` as a bare identifier and then fail on the partition clause.
+window_section_keyword <- kw_partition / kw_order / kw_range / kw_rows / kw_groups
+window_order_body <- kw_order ws kw_by ws order_item (ws @punctuation{','} ws order_item)*
+window_ref     <- window_defn / @variable{bare_ident_nonkw}
+
+frame_spec     <- (kw_range / kw_rows / kw_groups) ws
+                  (kw_between ws frame_bound ws kw_and ws frame_bound
+                   / frame_bound)
+                  (ws kw_exclude ws frame_exclude)?
+frame_bound    <- kw_unbounded ws (kw_preceding / kw_following)
+                / kw_current ws kw_row
+                / expr ws (kw_preceding / kw_following)
+frame_exclude  <- kw_no ws kw_others
+                / kw_current ws kw_row
+                / kw_group
+                / kw_ties
 
 # --- Expressions (low → high precedence) -------------------------------
 # Classic precedence-climbing without left recursion. Each level either
@@ -136,6 +176,8 @@ primary     <- literal
 paren_primary <- @punctuation{'('} ws (select_stmt / expr) ws @punctuation{')'}
 
 function_call <- @function{bare_ident_nonkw} ws @punctuation{'('} ws func_args? ws @punctuation{')'}
+                 (ws filter_clause)?
+                 (ws kw_over ws window_ref)?
 func_args   <- @operator{'*'}
              / (kw_distinct ws)? expr (ws @punctuation{','} ws expr)*
 
@@ -254,6 +296,27 @@ kw_cast      <- @keyword{cast_body !ident_char}
 kw_exists    <- @keyword{exists_body !ident_char}
 kw_collate   <- @keyword{collate_body !ident_char}
 
+# Window-function vocabulary. Only WINDOW and OVER are reserved; the
+# rest are matched positionally inside window_defn / frame_spec and
+# remain usable as identifiers outside those positions.
+kw_recursive <- @keyword{recursive_body !ident_char}
+kw_window    <- @keyword{window_body !ident_char}
+kw_over      <- @keyword{over_body !ident_char}
+kw_filter    <- @keyword{filter_body !ident_char}
+kw_partition <- @keyword{partition_body !ident_char}
+kw_range     <- @keyword{range_body !ident_char}
+kw_rows      <- @keyword{rows_body !ident_char}
+kw_groups    <- @keyword{groups_body !ident_char}
+kw_unbounded <- @keyword{unbounded_body !ident_char}
+kw_preceding <- @keyword{preceding_body !ident_char}
+kw_following <- @keyword{following_body !ident_char}
+kw_current   <- @keyword{current_body !ident_char}
+kw_row       <- @keyword{row_body !ident_char}
+kw_exclude   <- @keyword{exclude_body !ident_char}
+kw_ties      <- @keyword{ties_body !ident_char}
+kw_others    <- @keyword{others_body !ident_char}
+kw_no        <- @keyword{no_body !ident_char}
+
 # Keyword bodies — raw letter matchers, no boundary check.
 
 sel_body       <- [sS][eE][lL][eE][cC][tT]
@@ -303,6 +366,23 @@ end_body       <- [eE][nN][dD]
 cast_body      <- [cC][aA][sS][tT]
 exists_body    <- [eE][xX][iI][sS][tT][sS]
 collate_body   <- [cC][oO][lL][lL][aA][tT][eE]
+recursive_body <- [rR][eE][cC][uU][rR][sS][iI][vV][eE]
+window_body    <- [wW][iI][nN][dD][oO][wW]
+over_body      <- [oO][vV][eE][rR]
+filter_body    <- [fF][iI][lL][tT][eE][rR]
+partition_body <- [pP][aA][rR][tT][iI][tT][iI][oO][nN]
+range_body     <- [rR][aA][nN][gG][eE]
+rows_body      <- [rR][oO][wW][sS]
+groups_body    <- [gG][rR][oO][uU][pP][sS]
+unbounded_body <- [uU][nN][bB][oO][uU][nN][dD][eE][dD]
+preceding_body <- [pP][rR][eE][cC][eE][dD][iI][nN][gG]
+following_body <- [fF][oO][lL][lL][oO][wW][iI][nN][gG]
+current_body   <- [cC][uU][rR][rR][eE][nN][tT]
+row_body       <- [rR][oO][wW]
+exclude_body   <- [eE][xX][cC][lL][uU][dD][eE]
+ties_body      <- [tT][iI][eE][sS]
+others_body    <- [oO][tT][hH][eE][rR][sS]
+no_body        <- [nN][oO]
 
 # Keyword negative-lookahead for the identifier rule.
 #
@@ -334,6 +414,7 @@ keyword_word <-
     / offset_body          # 6
     / regexp_body          # 6
     / sel_body             # 6 (SELECT)
+    / window_body          # 6
     / bool_body            # 5 (FALSE) / 4 (TRUE); alternation handles both
     / cross_body           # 5
     / group_body           # 5
@@ -357,6 +438,7 @@ keyword_word <-
     / left_body            # 4
     / like_body            # 4
     / null_body            # 4
+    / over_body            # 4
     / then_body            # 4
     / when_body            # 4
     / with_body            # 4

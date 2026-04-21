@@ -425,7 +425,7 @@ fn non_reserved_words_parse_as_identifiers() {
     // still parse as bare identifiers in column/table position.
     assert_complete_full("SELECT integer FROM t");
     assert_complete_full("SELECT recursive FROM t");
-    assert_complete_full("SELECT window FROM t WHERE fail = 1");
+    assert_complete_full("SELECT partition FROM t WHERE following = 1");
     assert_complete_full("SELECT x FROM natural_joins");
 }
 
@@ -435,4 +435,100 @@ fn rejects_blatantly_invalid_input() {
     // separator or expression between them are never valid.
     assert_rejects("SELECT SELECT");
     assert_rejects("SELECT FROM");
+}
+
+#[test]
+fn with_recursive_accepted() {
+    assert_complete_full(
+        "WITH RECURSIVE counter(n) AS (SELECT 1 UNION ALL SELECT n FROM counter) \
+         SELECT n FROM counter",
+    );
+}
+
+#[test]
+fn with_non_recursive_still_works() {
+    // The RECURSIVE token is optional — classic CTE shape must stay valid.
+    assert_complete_full("WITH t AS (SELECT 1) SELECT * FROM t");
+}
+
+#[test]
+fn window_function_empty_over() {
+    assert_complete_full("SELECT COUNT(*) OVER () FROM t");
+}
+
+#[test]
+fn window_function_partition_by() {
+    assert_complete_full("SELECT SUM(x) OVER (PARTITION BY y) FROM t");
+}
+
+#[test]
+fn window_function_order_by() {
+    assert_complete_full("SELECT SUM(x) OVER (ORDER BY y) FROM t");
+}
+
+#[test]
+fn window_function_partition_and_order() {
+    assert_complete_full("SELECT SUM(x) OVER (PARTITION BY a ORDER BY b DESC) FROM t");
+}
+
+#[test]
+fn window_frame_rows_between() {
+    assert_complete_full(
+        "SELECT SUM(x) OVER (ORDER BY y ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM t",
+    );
+}
+
+#[test]
+fn window_frame_range_exclude_ties() {
+    assert_complete_full(
+        "SELECT AVG(x) OVER (ORDER BY y RANGE BETWEEN 5 PRECEDING AND 5 FOLLOWING EXCLUDE TIES) \
+         FROM t",
+    );
+}
+
+#[test]
+fn window_frame_groups() {
+    assert_complete_full(
+        "SELECT MAX(x) OVER (ORDER BY y GROUPS 3 PRECEDING EXCLUDE CURRENT ROW) FROM t",
+    );
+}
+
+#[test]
+fn window_frame_exclude_no_others() {
+    assert_complete_full(
+        "SELECT SUM(x) OVER (ORDER BY y ROWS UNBOUNDED PRECEDING EXCLUDE NO OTHERS) FROM t",
+    );
+}
+
+#[test]
+fn filter_clause() {
+    assert_complete_full("SELECT SUM(x) FILTER (WHERE y > 0) FROM t");
+}
+
+#[test]
+fn filter_with_over() {
+    assert_complete_full("SELECT SUM(x) FILTER (WHERE y > 0) OVER (PARTITION BY z) FROM t");
+}
+
+#[test]
+fn over_named_window() {
+    assert_complete_full("SELECT SUM(x) OVER w FROM t WINDOW w AS (PARTITION BY y)");
+}
+
+#[test]
+fn top_level_window_clause() {
+    assert_complete_full("SELECT x FROM t WINDOW w1 AS (PARTITION BY a), w2 AS (ORDER BY b)");
+}
+
+#[test]
+fn window_captures_include_over_and_partition() {
+    let input = "SELECT SUM(x) OVER (PARTITION BY y ORDER BY z) FROM t";
+    let (caps, kinds) = assert_complete_full(input);
+    let ks = kinds_for(&caps, &kinds);
+    let kw_count = ks.iter().filter(|k| **k == "keyword").count();
+    // SELECT OVER PARTITION BY ORDER BY FROM = 7 keywords at minimum.
+    assert!(
+        kw_count >= 7,
+        "expected >=7 keywords, got {kw_count}: {ks:?}"
+    );
 }
