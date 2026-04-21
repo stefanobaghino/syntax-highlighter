@@ -17,6 +17,11 @@ use std::time::Instant;
 
 use syntax_highlighter::pegvm::{compile_grammar, parse_grammar, Program, VM};
 
+#[path = "common.rs"]
+mod common;
+
+use common::{json_f64, json_num, json_str, median, open_jsonl, write_jsonl_row};
+
 const JSON_GRAMMAR: &str = include_str!("../grammars/json.peg");
 const TOML_GRAMMAR: &str = include_str!("../grammars/toml.peg");
 const SQL_GRAMMAR: &str = include_str!("../grammars/sqlite.peg");
@@ -48,11 +53,6 @@ fn compile(name: &str, src: &str) -> Program {
         .unwrap_or_else(|e| panic!("compile {name}: {e:?}"))
 }
 
-fn median(mut xs: Vec<u128>) -> u128 {
-    xs.sort_unstable();
-    xs[xs.len() / 2]
-}
-
 /// Run one cell: `runs` executions of the VM at a fixed threshold. Returns
 /// the median wall time (nanoseconds), plus a single `(matched, complete,
 /// stats)` tuple — all runs are deterministic, so one sample suffices.
@@ -80,7 +80,7 @@ fn sweep_cell(
     (median(times), matched, complete, stats)
 }
 
-fn print_grammar_table(case: &GrammarCase) {
+fn print_grammar_table(case: &GrammarCase, jsonl: &mut Option<std::io::BufWriter<std::fs::File>>) {
     println!("=== {} ===", case.name);
     println!(
         "{:<8} {:>6} {:>10} {:>8} {:>8} {:>8} {:>9}",
@@ -129,6 +129,21 @@ fn print_grammar_table(case: &GrammarCase) {
                 misses,
                 hit_rate * 100.0
             );
+            if let Some(w) = jsonl.as_mut() {
+                let row = &[
+                    ("bench", json_str("memo")),
+                    ("grammar", json_str(case.name)),
+                    ("fixture", json_str(label)),
+                    ("threshold", json_num(thr)),
+                    ("time_us", json_f64(median_ns as f64 / 1000.0)),
+                    ("entries", json_num(entries)),
+                    ("hits", json_num(hits)),
+                    ("misses", json_num(misses)),
+                    ("hit_rate", json_f64(hit_rate)),
+                    ("runs", json_num(RUNS_PER_CELL)),
+                ];
+                let _ = write_jsonl_row(w, row);
+            }
         }
         println!();
     }
@@ -171,7 +186,8 @@ fn main() {
     );
     println!();
 
+    let mut jsonl = open_jsonl("memo");
     for case in &cases {
-        print_grammar_table(case);
+        print_grammar_table(case, &mut jsonl);
     }
 }

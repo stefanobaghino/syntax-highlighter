@@ -109,5 +109,14 @@ need their live captures preserved — see the comment on the gate in
   interval. The threshold knee is an order-of-magnitude decision; if
   two adjacent thresholds look within a few percent of each other,
   treat them as tied.
-- **Regression across commits.** The harness prints absolute numbers,
-  not diffs. To compare two branches, run on both and diff by eye.
+
+## Comparing two commits
+
+The harness also writes a JSONL stream to
+`target/bench-results/memo.jsonl` (one row per cell, same fields as
+the human table). Use the sibling `./compare.sh <ref-a> <ref-b> memo`
+to spin up git worktrees for each ref, run the bench in each, and
+print a join-by-cell delta table (the script does `cd $(git
+rev-parse --show-toplevel)` internally, so cwd doesn't matter).
+Requires `jq` on PATH. The same script also handles the companion
+`incremental` bench — drop the argument to run both.
