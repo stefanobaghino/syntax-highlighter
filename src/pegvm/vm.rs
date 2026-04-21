@@ -94,6 +94,17 @@ pub struct VM<'p, 'i> {
     /// GPeg (default 512) and Yedidia §5.2.4 (knee near 4096). Failure
     /// entries in `fail()` are not filtered; their value is short-circuiting.
     memo_threshold: usize,
+    /// Per-rule-invocation watermark of the farthest input position examined
+    /// since the enclosing `StackEntry::Memo` frame was pushed. One entry
+    /// per live `Memo` frame, pushed/popped in lockstep with them. The
+    /// topmost value is bumped by every read site via `track_read`; at
+    /// `MemoClose` or the `Memo` arm of `fail()` the popped value becomes
+    /// the outgoing entry's `examined_max` and is then merged into the new
+    /// top (the parent rule's watermark). Needed for incremental parsing:
+    /// an edit at position `p` invalidates a cached entry iff
+    /// `p < entry.examined_max`, so the bound must reflect lookahead reads
+    /// past `end_sp` as well as the consumed span.
+    memo_examined: Vec<usize>,
 }
 
 /// A memo-table entry for a rule invocation at a specific input position.
@@ -103,10 +114,22 @@ pub struct VM<'p, 'i> {
 /// `end_sp.is_none()` encodes a cached failure — future hits at the same
 /// `(memo_id, start_sp)` enter `fail()` directly without re-running the
 /// rule body.
+///
+/// `examined_max` is the farthest input position the rule's execution ever
+/// looked at, including lookahead past `end_sp` (`&expr` / `!expr`) and
+/// failed reads. It is always `>= start_sp` (the key's second component),
+/// and for successful entries `>= end_sp`. Incremental parsing uses it as
+/// the invalidation bound: an edit touching any byte before
+/// `examined_max` may change the rule's outcome, so the entry is stale.
+///
+/// Fields are `pub(crate)` so the `incremental` module (which holds the
+/// `MemoCache` that reuses entries across edits) can read and shift them.
+/// Outside the crate the type is opaque.
 #[derive(Debug, Clone)]
-struct MemoEntry {
-    end_sp: Option<usize>,
-    captures: Vec<Capture>,
+pub(crate) struct MemoEntry {
+    pub(crate) end_sp: Option<usize>,
+    pub(crate) examined_max: usize,
+    pub(crate) captures: Vec<Capture>,
 }
 
 #[derive(Debug, Clone)]
@@ -138,6 +161,7 @@ impl<'p, 'i> VM<'p, 'i> {
             memo_hits: 0,
             memo_misses: 0,
             memo_threshold: Self::DEFAULT_MEMO_THRESHOLD,
+            memo_examined: Vec::new(),
         }
     }
 
@@ -150,11 +174,51 @@ impl<'p, 'i> VM<'p, 'i> {
         self
     }
 
+    /// Construct a VM whose memo table is pre-populated with `cache`.
+    /// Entries the seeded cache agrees with the program on (same rule +
+    /// position) will be served as hits without re-executing the rule
+    /// body — that is the entire point of incremental parsing. The
+    /// caller is responsible for ensuring the cache was built against
+    /// either this same input or a prior input plus a correctly applied
+    /// [`MemoCache::apply_edit`](super::incremental::MemoCache::apply_edit).
+    pub fn new_with_cache(
+        program: &'p [Instruction],
+        input: &'i [u8],
+        mut cache: super::incremental::MemoCache,
+    ) -> Self {
+        let mut vm = Self::new(program, input);
+        vm.memo = cache.take();
+        vm
+    }
+
     pub fn run(self) -> MatchResult {
         self.run_with_memo_stats().0
     }
 
-    pub fn run_with_memo_stats(mut self) -> (MatchResult, MemoStats) {
+    pub fn run_with_memo_stats(self) -> (MatchResult, MemoStats) {
+        let (result, stats, _memo) = self.run_core();
+        (result, stats)
+    }
+
+    /// Run the VM to completion and return the populated memo as a
+    /// [`MemoCache`](super::incremental::MemoCache) so the caller can
+    /// carry it across an edit. Equivalent to `run_with_memo_stats`
+    /// plus a rewrap; the cache retains every entry recorded during
+    /// this run, including entries seeded in via [`new_with_cache`]
+    /// that survived the parse.
+    pub fn run_with_cache(self) -> (MatchResult, MemoStats, super::incremental::MemoCache) {
+        let (result, stats, memo) = self.run_core();
+        let mut cache = super::incremental::MemoCache::new();
+        cache.install(memo);
+        (result, stats, cache)
+    }
+
+    /// Core execution loop. Returns the result, stats, and the final memo
+    /// table. Package-internal wrapper for tests that need to inspect
+    /// per-entry details (notably `examined_max`) and for the public
+    /// `run_with_cache` variant that rewraps the table into a
+    /// [`MemoCache`](super::incremental::MemoCache).
+    fn run_core(mut self) -> (MatchResult, MemoStats, HashMap<(MemoId, usize), MemoEntry>) {
         loop {
             let instr = match self.program.get(self.ip) {
                 Some(i) => i,
@@ -162,6 +226,7 @@ impl<'p, 'i> VM<'p, 'i> {
             };
             match instr {
                 Instruction::Char(b) => {
+                    self.track_read(1);
                     if self.input.get(self.sp) == Some(b) {
                         self.sp += 1;
                         self.ip += 1;
@@ -169,19 +234,23 @@ impl<'p, 'i> VM<'p, 'i> {
                         return self.finalize_partial();
                     }
                 }
-                Instruction::Set(set) => match self.input.get(self.sp) {
-                    Some(b) if set.contains(*b) => {
-                        self.sp += 1;
-                        self.ip += 1;
-                    }
-                    _ => {
-                        if !self.fail() {
-                            return self.finalize_partial();
+                Instruction::Set(set) => {
+                    self.track_read(1);
+                    match self.input.get(self.sp) {
+                        Some(b) if set.contains(*b) => {
+                            self.sp += 1;
+                            self.ip += 1;
+                        }
+                        _ => {
+                            if !self.fail() {
+                                return self.finalize_partial();
+                            }
                         }
                     }
-                },
+                }
                 Instruction::Any(n) => {
                     let n = *n as usize;
+                    self.track_read(n);
                     if self.sp + n <= self.input.len() {
                         self.sp += n;
                         self.ip += 1;
@@ -190,6 +259,7 @@ impl<'p, 'i> VM<'p, 'i> {
                     }
                 }
                 Instruction::TestChar(b, label) => {
+                    self.track_read(1);
                     if self.input.get(self.sp) == Some(b) {
                         self.sp += 1;
                         self.ip += 1;
@@ -197,15 +267,18 @@ impl<'p, 'i> VM<'p, 'i> {
                         self.ip = label.0;
                     }
                 }
-                Instruction::TestSet(set, label) => match self.input.get(self.sp) {
-                    Some(b) if set.contains(*b) => {
-                        self.sp += 1;
-                        self.ip += 1;
+                Instruction::TestSet(set, label) => {
+                    self.track_read(1);
+                    match self.input.get(self.sp) {
+                        Some(b) if set.contains(*b) => {
+                            self.sp += 1;
+                            self.ip += 1;
+                        }
+                        _ => {
+                            self.ip = label.0;
+                        }
                     }
-                    _ => {
-                        self.ip = label.0;
-                    }
-                },
+                }
                 Instruction::Jump(label) => {
                     self.ip = label.0;
                 }
@@ -274,6 +347,14 @@ impl<'p, 'i> VM<'p, 'i> {
                 Instruction::MemoOpen(memo_id, return_label) => {
                     if let Some(entry) = self.memo.get(&(*memo_id, self.sp)) {
                         self.memo_hits += 1;
+                        // Cache hit substitutes for executing the rule body;
+                        // propagate its examined watermark to the enclosing
+                        // rule (if any) so an outer rule's `examined_max`
+                        // subsumes everything this call would have looked at.
+                        // The bump is deferred past the `entry` borrow
+                        // below (`self.bump_top_memo_examined` is `&mut
+                        // self` and would conflict with it).
+                        let hit_examined = entry.examined_max;
                         match entry.end_sp {
                             Some(end_sp) => {
                                 // Success hit: replay captures into the live
@@ -291,6 +372,11 @@ impl<'p, 'i> VM<'p, 'i> {
                                         end: Some(c.end),
                                     });
                                 }
+                                // `entry` is no longer used past this point;
+                                // the immutable borrow of `self.memo` ends
+                                // by NLL, releasing `&mut self` for the
+                                // bump and maybe_snapshot below.
+                                self.bump_top_memo_examined(hit_examined);
                                 self.sp = end_sp;
                                 self.ip = return_label.0;
                                 // Applying a hit advances `sp` past code that
@@ -302,6 +388,7 @@ impl<'p, 'i> VM<'p, 'i> {
                                 // Cached failure: enter fail() immediately
                                 // without re-executing the rule body. Do not
                                 // push a Memo frame.
+                                self.bump_top_memo_examined(hit_examined);
                                 if !self.fail() {
                                     return self.finalize_partial();
                                 }
@@ -314,6 +401,11 @@ impl<'p, 'i> VM<'p, 'i> {
                             start_sp: self.sp,
                             capture_start_len: self.captures.len(),
                         });
+                        // Parallel watermark for this frame. Starts at the
+                        // rule's entry sp; read sites bump it as the body
+                        // executes. Popped together with the `Memo` frame
+                        // at `MemoClose` or in `fail()`'s `Memo` arm.
+                        self.memo_examined.push(self.sp);
                         self.ip += 1;
                     }
                 }
@@ -345,6 +437,23 @@ impl<'p, 'i> VM<'p, 'i> {
                         capture_start_len,
                         self.captures.len(),
                     );
+                    // Pop this frame's examined watermark. Every `Memo`
+                    // frame push (in `MemoOpen` miss) is paired with a
+                    // `memo_examined` push, and this is the only
+                    // non-failure pop site, so the stacks must align.
+                    let examined_max = self
+                        .memo_examined
+                        .pop()
+                        .expect("MemoClose: memo_examined underflow");
+                    debug_assert!(
+                        examined_max >= self.sp,
+                        "MemoClose: examined_max ({}) fell behind end_sp ({})",
+                        examined_max,
+                        self.sp,
+                    );
+                    // Propagate up so the parent rule's watermark covers
+                    // everything this one examined.
+                    self.bump_top_memo_examined(examined_max);
                     // Threshold filter: skip caching if the matched span is
                     // smaller than `memo_threshold`. Tiny leaf rules pay the
                     // lookup cost without a meaningful storage win — see
@@ -377,6 +486,7 @@ impl<'p, 'i> VM<'p, 'i> {
                             (*memo_id, start_sp),
                             MemoEntry {
                                 end_sp: Some(self.sp),
+                                examined_max,
                                 captures: rule_captures,
                             },
                         );
@@ -413,6 +523,7 @@ impl<'p, 'i> VM<'p, 'i> {
                             complete: true,
                         },
                         stats,
+                        self.memo,
                     );
                 }
             }
@@ -448,6 +559,13 @@ impl<'p, 'i> VM<'p, 'i> {
                     start_sp,
                     capture_start_len: _,
                 } => {
+                    // Pop the paired examined watermark. See `MemoOpen`
+                    // miss path — every `StackEntry::Memo` push is twinned
+                    // with a `memo_examined` push.
+                    let examined_max = self
+                        .memo_examined
+                        .pop()
+                        .expect("fail(): memo_examined underflow on Memo frame");
                     // Cache the failure so a future call at the same sp
                     // short-circuits into `fail()` without re-executing the
                     // body. Captures produced inside the rule will be
@@ -458,9 +576,15 @@ impl<'p, 'i> VM<'p, 'i> {
                         (memo_id, start_sp),
                         MemoEntry {
                             end_sp: None,
+                            examined_max,
                             captures: Vec::new(),
                         },
                     );
+                    // Propagate to the parent rule: a failure here depended
+                    // on input through `examined_max`, and any caller that
+                    // ultimately retries a different path still saw those
+                    // bytes.
+                    self.bump_top_memo_examined(examined_max);
                 }
                 StackEntry::Return { .. } => {
                     // Rule-call frame unwinding past its caller. The caller's
@@ -470,6 +594,29 @@ impl<'p, 'i> VM<'p, 'i> {
             }
         }
         false
+    }
+
+    /// Bump the in-flight rule's examined watermark to at least `pos`.
+    /// Invoked from every read site (Char/Set/Any/TestChar/TestSet) and
+    /// from memo-hit propagation, so a rule's `MemoEntry.examined_max`
+    /// reflects lookahead and failed reads past `end_sp`. A no-op when no
+    /// `Memo` frame is live (top-level program reads don't feed any
+    /// cached entry).
+    fn bump_top_memo_examined(&mut self, pos: usize) {
+        if let Some(top) = self.memo_examined.last_mut() {
+            if pos > *top {
+                *top = pos;
+            }
+        }
+    }
+
+    /// Record that the current instruction examines `n` bytes starting at
+    /// `self.sp`. The probe happens at the current `sp` whether the read
+    /// succeeds (consume) or fails (EOF or mismatch) — in both cases the
+    /// outcome depends on bytes up to `sp + n`, so the watermark must
+    /// advance there. `n = 1` for Char/Set/TestChar/TestSet; `n` for Any.
+    fn track_read(&mut self, n: usize) {
+        self.bump_top_memo_examined(self.sp + n);
     }
 
     /// Update the farthest-failure snapshot if `sp` has advanced past the
@@ -484,7 +631,7 @@ impl<'p, 'i> VM<'p, 'i> {
         }
     }
 
-    fn finalize_partial(mut self) -> (MatchResult, MemoStats) {
+    fn finalize_partial(mut self) -> (MatchResult, MemoStats, HashMap<(MemoId, usize), MemoEntry>) {
         self.maybe_snapshot();
         let stats = MemoStats {
             entries: self.memo.len(),
@@ -496,7 +643,7 @@ impl<'p, 'i> VM<'p, 'i> {
             captures: close_captures(self.max_captures, self.max_sp),
             complete: false,
         };
-        (result, stats)
+        (result, stats, self.memo)
     }
 }
 
@@ -508,4 +655,160 @@ fn close_captures(open: Vec<OpenCapture>, close_at: usize) -> Vec<Capture> {
             end: c.end.unwrap_or(close_at),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod examined_max_tests {
+    //! Verify that every memo entry records the farthest input position
+    //! its rule invocation ever examined, including lookahead past
+    //! `end_sp` and failed reads. Incremental parsing's invalidation
+    //! predicate (`edit.start <= entry.examined_max`) depends on this
+    //! bound being tight-enough to be useful and safe-at-minimum to be
+    //! correct.
+    //!
+    //! Tests access `VM::run_core` directly to inspect the private
+    //! memo map — post-run the public `run_with_memo_stats` has already
+    //! discarded it.
+    use super::*;
+    use crate::pegvm::{compile_grammar, Pattern};
+    use std::collections::HashMap;
+
+    fn rule(rules: &mut HashMap<String, Pattern>, name: &str, pat: Pattern) {
+        rules.insert(name.into(), pat);
+    }
+
+    #[test]
+    fn and_predicate_success_records_examined_past_end_sp() {
+        // start <- "x" &"y"   against "xy"
+        // Consumed span is "x" (end_sp = 1) but the &"y" lookahead
+        // read position 1, so examined_max must be 2.
+        let mut rules = HashMap::new();
+        rule(
+            &mut rules,
+            "start",
+            Pattern::seq(vec![
+                Pattern::literal("x"),
+                Pattern::AndPredicate(Box::new(Pattern::literal("y"))),
+            ]),
+        );
+        let prog = compile_grammar(&rules, "start").unwrap();
+        let (result, _stats, memo) = VM::new(&prog.code, b"xy").with_memo_threshold(0).run_core();
+        assert!(result.complete);
+        assert_eq!(result.matched, 1, "only 'x' is consumed");
+        let entry = memo
+            .get(&(MemoId(0), 0))
+            .expect("start's memo entry missing");
+        assert_eq!(entry.end_sp, Some(1));
+        assert_eq!(
+            entry.examined_max, 2,
+            "&\"y\" read past end_sp; examined_max must reflect it"
+        );
+    }
+
+    #[test]
+    fn and_predicate_failure_records_examined_up_to_failed_read() {
+        // start <- "x" &"z"   against "xy"
+        // "x" succeeds (sp=1), then &"z" reads 'y' at sp=1 and fails.
+        // The failure entry for start at sp=0 must remember that
+        // position 1 was examined, so an edit there can invalidate it.
+        let mut rules = HashMap::new();
+        rule(
+            &mut rules,
+            "start",
+            Pattern::seq(vec![
+                Pattern::literal("x"),
+                Pattern::AndPredicate(Box::new(Pattern::literal("z"))),
+            ]),
+        );
+        let prog = compile_grammar(&rules, "start").unwrap();
+        let (result, _stats, memo) = VM::new(&prog.code, b"xy").with_memo_threshold(0).run_core();
+        assert!(!result.complete, "overall parse must fail");
+        let entry = memo
+            .get(&(MemoId(0), 0))
+            .expect("start's failure entry missing");
+        assert_eq!(entry.end_sp, None);
+        assert_eq!(
+            entry.examined_max, 2,
+            "failed read of 'z' at position 1 examined position 1+1"
+        );
+    }
+
+    #[test]
+    fn nested_rule_examined_max_propagates_to_caller() {
+        // outer <- inner "y"
+        // inner <- "x"
+        // against "xy".  inner's entry: end_sp=1, examined_max=1.
+        // outer's entry: end_sp=2, examined_max=2 (reads 'y' at sp=1).
+        // The propagation test: inner's examined_max (1) must flow into
+        // outer's watermark when inner's MemoClose pops.
+        let mut rules = HashMap::new();
+        rule(
+            &mut rules,
+            "outer",
+            Pattern::seq(vec![
+                Pattern::NonTerminal("inner".into()),
+                Pattern::literal("y"),
+            ]),
+        );
+        rule(&mut rules, "inner", Pattern::literal("x"));
+        let prog = compile_grammar(&rules, "outer").unwrap();
+        let (result, _stats, memo) = VM::new(&prog.code, b"xy").with_memo_threshold(0).run_core();
+        assert!(result.complete);
+        assert_eq!(result.matched, 2);
+        // outer is start → MemoId(0); inner is the other → MemoId(1).
+        let outer = memo.get(&(MemoId(0), 0)).expect("outer entry missing");
+        assert_eq!(outer.end_sp, Some(2));
+        assert_eq!(outer.examined_max, 2);
+        let inner = memo.get(&(MemoId(1), 0)).expect("inner entry missing");
+        assert_eq!(inner.end_sp, Some(1));
+        assert_eq!(inner.examined_max, 1);
+    }
+
+    #[test]
+    fn memo_hit_propagates_examined_max_to_caller() {
+        // Two alternatives both start with the memoized rule X.
+        // The first alternative's success call to X populates the
+        // cache with examined_max = 1; the second alternative's call
+        // is a hit. The hit must still contribute X's examined_max to
+        // whichever rule encloses the call.
+        //
+        // Grammar:
+        //   start <- (X "aa") / (X "bb")
+        //   X <- "a"
+        // Input: "abb" — first alt fails after X matches "a" and "aa"
+        // fails on "bb"; backtrack to second alt, which hits X's cache
+        // and then matches "bb".
+        let mut rules = HashMap::new();
+        rule(
+            &mut rules,
+            "start",
+            Pattern::choice(vec![
+                Pattern::seq(vec![
+                    Pattern::NonTerminal("X".into()),
+                    Pattern::literal("aa"),
+                ]),
+                Pattern::seq(vec![
+                    Pattern::NonTerminal("X".into()),
+                    Pattern::literal("bb"),
+                ]),
+            ]),
+        );
+        rule(&mut rules, "X", Pattern::literal("a"));
+        let prog = compile_grammar(&rules, "start").unwrap();
+        let (result, stats, memo) = VM::new(&prog.code, b"abb")
+            .with_memo_threshold(0)
+            .run_core();
+        assert!(result.complete);
+        assert_eq!(result.matched, 3);
+        assert!(stats.hits >= 1, "second alternative must hit X's cache");
+        // start's examined_max must include every byte start's execution
+        // ever looked at: position 2 was examined when the first
+        // alternative tried "aa" at sp=1 and "bb" at sp=1 needed byte 2.
+        let start = memo.get(&(MemoId(0), 0)).expect("start entry missing");
+        assert_eq!(start.end_sp, Some(3));
+        assert_eq!(
+            start.examined_max, 3,
+            "start's execution examined up to position 3"
+        );
+    }
 }

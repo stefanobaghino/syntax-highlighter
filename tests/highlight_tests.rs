@@ -6,14 +6,16 @@ use common::strip_ansi;
 
 const JSON_GRAMMAR: &str = include_str!("../grammars/json.peg");
 
-fn hl() -> Highlighter {
-    Highlighter::new(JSON_GRAMMAR).expect("JSON grammar should compile")
+fn hl(input: &str) -> Highlighter {
+    let mut h = Highlighter::new(JSON_GRAMMAR).expect("JSON grammar should compile");
+    h.set_input(input.to_string());
+    h
 }
 
 #[test]
 fn parses_minimal_object() {
-    let h = hl();
-    let (matched, caps) = h.captures("{}");
+    let h = hl("{}");
+    let (matched, caps) = h.captures();
     assert_eq!(matched, 2);
     assert!(
         !caps.is_empty(),
@@ -23,57 +25,54 @@ fn parses_minimal_object() {
 
 #[test]
 fn parses_minimal_array() {
-    let h = hl();
-    let (matched, _) = h.captures("[]");
+    let h = hl("[]");
+    let (matched, _) = h.captures();
     assert_eq!(matched, 2);
 }
 
 #[test]
 fn parses_string_value() {
-    let h = hl();
-    let (matched, _) = h.captures(r#""hello""#);
+    let h = hl(r#""hello""#);
+    let (matched, _) = h.captures();
     assert_eq!(matched, 7);
 }
 
 #[test]
 fn parses_number_value() {
-    let h = hl();
-    assert_eq!(h.captures("42").0, 2);
-    assert_eq!(h.captures("-3.14").0, 5);
-    assert_eq!(h.captures("1e10").0, 4);
-    assert_eq!(h.captures("-0.5e-3").0, 7);
+    assert_eq!(hl("42").captures().0, 2);
+    assert_eq!(hl("-3.14").captures().0, 5);
+    assert_eq!(hl("1e10").captures().0, 4);
+    assert_eq!(hl("-0.5e-3").captures().0, 7);
 }
 
 #[test]
 fn parses_constants() {
-    let h = hl();
-    assert_eq!(h.captures("true").0, 4);
-    assert_eq!(h.captures("false").0, 5);
-    assert_eq!(h.captures("null").0, 4);
+    assert_eq!(hl("true").captures().0, 4);
+    assert_eq!(hl("false").captures().0, 5);
+    assert_eq!(hl("null").captures().0, 4);
 }
 
 #[test]
 fn parses_nested_object() {
-    let h = hl();
     let input = r#"{"a": {"b": [1, 2, true]}}"#;
-    let (matched, caps) = h.captures(input);
+    let h = hl(input);
+    let (matched, caps) = h.captures();
     assert_eq!(matched, input.len());
     assert!(caps.len() > 5);
 }
 
 #[test]
 fn parses_string_with_escapes() {
-    let h = hl();
     let input = r#""he said \"hi\"""#;
-    let (matched, _) = h.captures(input);
+    let h = hl(input);
+    let (matched, _) = h.captures();
     assert_eq!(matched, input.len());
 }
 
 #[test]
 fn parses_string_with_unicode_escape() {
-    let h = hl();
     let input = r#""\u00e9""#;
-    assert_eq!(h.captures(input).0, input.len());
+    assert_eq!(hl(input).captures().0, input.len());
 }
 
 #[test]
@@ -81,9 +80,9 @@ fn partial_unterminated_string_advances_past_quote() {
     // On malformed input the VM no longer gives up at sp=0; it surfaces the
     // farthest position reached. The quote itself is consumed before the
     // string body starts failing.
-    let h = hl();
     let input = r#""oops"#;
-    let (matched, _) = h.captures(input);
+    let h = hl(input);
+    let (matched, _) = h.captures();
     assert!(matched > 0, "expected some progress, got {}", matched);
     assert!(matched <= input.len());
 }
@@ -93,17 +92,16 @@ fn partial_trailing_garbage_reports_max_sp() {
     // The json rule ends with `!.`; trailing garbage fails the top-level
     // parse. The VM now reports the farthest position reached (the end of
     // the valid JSON prefix) rather than zero.
-    let h = hl();
     let input = r#"{"a": 1} extra"#;
-    let (matched, _) = h.captures(input);
+    let h = hl(input);
+    let (matched, _) = h.captures();
     assert!(matched > 0, "expected progress past the valid prefix");
     assert!(matched <= input.len());
 }
 
 #[test]
 fn highlight_string_uses_green() {
-    let h = hl();
-    let out = h.highlight(r#""hi""#);
+    let out = hl(r#""hi""#).highlight();
     assert!(
         out.contains(theme::color_for("string")),
         "expected string color in {:?}",
@@ -115,16 +113,14 @@ fn highlight_string_uses_green() {
 
 #[test]
 fn highlight_number_uses_yellow() {
-    let h = hl();
-    let out = h.highlight("42");
+    let out = hl("42").highlight();
     assert!(out.contains(theme::color_for("number")), "got {:?}", out);
     assert!(out.contains("42"));
 }
 
 #[test]
 fn highlight_constant_uses_magenta() {
-    let h = hl();
-    let out = h.highlight("true");
+    let out = hl("true").highlight();
     assert!(out.contains(theme::color_for("constant")), "got {:?}", out);
     assert!(out.contains("true"));
 }
@@ -133,8 +129,7 @@ fn highlight_constant_uses_magenta() {
 fn highlight_property_uses_cyan_not_string_green() {
     // In `pair`, the key is wrapped in @property{string} — it should render as a
     // property (cyan), not as a string (green).
-    let h = hl();
-    let out = h.highlight(r#"{"name": "value"}"#);
+    let out = hl(r#"{"name": "value"}"#).highlight();
     let prop = theme::color_for("property");
     let str_color = theme::color_for("string");
     // The key "name" should appear under property color
@@ -158,9 +153,8 @@ fn highlight_property_uses_cyan_not_string_green() {
 #[test]
 fn highlighting_preserves_input_text() {
     // Stripping ANSI codes should yield the original input.
-    let h = hl();
     let input = r#"{"key": [1, true, "hello"], "nested": {"a": null}}"#;
-    let out = h.highlight(input);
+    let out = hl(input).highlight();
     let stripped = strip_ansi(&out);
     assert_eq!(stripped, input);
 }
@@ -170,9 +164,8 @@ fn partial_match_renders_prefix_styled_and_tail_plain() {
     // The valid JSON prefix must be styled; the trailing garbage must appear
     // verbatim in the output (no ANSI codes wrapping it). The round-trip
     // invariant must hold for the whole output.
-    let h = hl();
     let input = r#"{"a": 1} extra"#;
-    let out = h.highlight(input);
+    let out = hl(input).highlight();
     assert_eq!(strip_ansi(&out), input, "round-trip must be preserved");
     assert!(
         out.contains(theme::color_for("number")) || out.contains(theme::color_for("string")),
@@ -193,8 +186,7 @@ fn unterminated_string_still_round_trips() {
     // The load-bearing strip_ansi invariant must hold even when the input
     // is malformed — partial-match rendering must not reorder, drop, or
     // substitute input bytes.
-    let h = hl();
     let input = r#"{"a": "oops"#;
-    let out = h.highlight(input);
+    let out = hl(input).highlight();
     assert_eq!(strip_ansi(&out), input);
 }

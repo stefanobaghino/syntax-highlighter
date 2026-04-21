@@ -25,3 +25,8 @@ path = "src/main.rs"
 name = "memo"
 path = "benches/memo.rs"
 harness = false
+
+[[bench]]
+name = "incremental"
+path = "benches/incremental.rs"
+harness = false

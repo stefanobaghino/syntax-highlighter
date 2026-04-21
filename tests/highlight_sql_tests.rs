@@ -6,23 +6,24 @@ use common::strip_ansi;
 
 const SQLITE_GRAMMAR: &str = include_str!("../grammars/sqlite.peg");
 
-fn hl() -> Highlighter {
-    Highlighter::new(SQLITE_GRAMMAR).expect("SQLite grammar should compile")
+fn hl(input: &str) -> Highlighter {
+    let mut h = Highlighter::new(SQLITE_GRAMMAR).expect("SQLite grammar should compile");
+    h.set_input(input.to_string());
+    h
 }
 
 #[test]
 fn parses_minimal_select() {
-    let h = hl();
     let input = "SELECT 1;";
-    let (matched, caps) = h.captures(input);
+    let h = hl(input);
+    let (matched, caps) = h.captures();
     assert_eq!(matched, input.len());
     assert!(!caps.is_empty());
 }
 
 #[test]
 fn highlight_keyword_uses_keyword_color() {
-    let h = hl();
-    let out = h.highlight("SELECT 1");
+    let out = hl("SELECT 1").highlight();
     let kw = theme::color_for("keyword");
     let idx = out.find("SELECT").expect("SELECT must appear");
     let preceding = &out[..idx];
@@ -35,8 +36,7 @@ fn highlight_keyword_uses_keyword_color() {
 
 #[test]
 fn highlight_string_uses_string_color() {
-    let h = hl();
-    let out = h.highlight("SELECT 'hi' FROM t");
+    let out = hl("SELECT 'hi' FROM t").highlight();
     assert!(
         out.contains(theme::color_for("string")),
         "expected string color, got {:?}",
@@ -46,8 +46,7 @@ fn highlight_string_uses_string_color() {
 
 #[test]
 fn highlight_number_uses_number_color() {
-    let h = hl();
-    let out = h.highlight("SELECT 42 FROM t");
+    let out = hl("SELECT 42 FROM t").highlight();
     assert!(
         out.contains(theme::color_for("number")),
         "expected number color, got {:?}",
@@ -57,8 +56,7 @@ fn highlight_number_uses_number_color() {
 
 #[test]
 fn highlight_null_uses_constant_color() {
-    let h = hl();
-    let out = h.highlight("SELECT NULL");
+    let out = hl("SELECT NULL").highlight();
     let c = theme::color_for("constant");
     let idx = out.find("NULL").expect("NULL must appear");
     let preceding = &out[..idx];
@@ -71,8 +69,7 @@ fn highlight_null_uses_constant_color() {
 
 #[test]
 fn highlight_comment_uses_comment_color() {
-    let h = hl();
-    let out = h.highlight("-- note\nSELECT 1");
+    let out = hl("-- note\nSELECT 1").highlight();
     assert!(
         out.contains(theme::color_for("comment")),
         "expected comment color, got {:?}",
@@ -82,8 +79,7 @@ fn highlight_comment_uses_comment_color() {
 
 #[test]
 fn highlight_function_uses_function_color() {
-    let h = hl();
-    let out = h.highlight("SELECT COUNT(*) FROM t");
+    let out = hl("SELECT COUNT(*) FROM t").highlight();
     let f = theme::color_for("function");
     let idx = out.find("COUNT").expect("COUNT must appear");
     let preceding = &out[..idx];
@@ -96,8 +92,7 @@ fn highlight_function_uses_function_color() {
 
 #[test]
 fn highlight_table_in_from_uses_type_color() {
-    let h = hl();
-    let out = h.highlight("SELECT c FROM users");
+    let out = hl("SELECT c FROM users").highlight();
     let t = theme::color_for("type");
     let idx = out.find("users").expect("table name must appear");
     let preceding = &out[..idx];
@@ -110,8 +105,7 @@ fn highlight_table_in_from_uses_type_color() {
 
 #[test]
 fn highlight_cast_target_uses_type_color() {
-    let h = hl();
-    let out = h.highlight("SELECT CAST(x AS INTEGER) FROM t");
+    let out = hl("SELECT CAST(x AS INTEGER) FROM t").highlight();
     let t = theme::color_for("type");
     let idx = out.find("INTEGER").expect("INTEGER must appear");
     let preceding = &out[..idx];
@@ -124,8 +118,7 @@ fn highlight_cast_target_uses_type_color() {
 
 #[test]
 fn highlight_operator_uses_operator_color() {
-    let h = hl();
-    let out = h.highlight("SELECT a FROM t WHERE a = 1");
+    let out = hl("SELECT a FROM t WHERE a = 1").highlight();
     assert!(
         out.contains(theme::color_for("operator")),
         "expected operator color, got {:?}",
@@ -135,8 +128,7 @@ fn highlight_operator_uses_operator_color() {
 
 #[test]
 fn highlight_bind_param_uses_variable_color() {
-    let h = hl();
-    let out = h.highlight("SELECT :name FROM t");
+    let out = hl("SELECT :name FROM t").highlight();
     let v = theme::color_for("variable");
     let idx = out.find(":name").expect(":name must appear");
     let preceding = &out[..idx];
@@ -150,7 +142,6 @@ fn highlight_bind_param_uses_variable_color() {
 #[test]
 fn highlighting_preserves_input_text() {
     // Stripping ANSI codes must yield the original input byte-for-byte.
-    let h = hl();
     let input = "\
 -- A representative query.
 WITH recent AS (SELECT id FROM orders)
@@ -165,24 +156,22 @@ LIMIT 10;
 
 SELECT 1 UNION ALL SELECT 2;
 ";
-    let out = h.highlight(input);
+    let out = hl(input).highlight();
     let stripped = strip_ansi(&out);
     assert_eq!(stripped, input);
 }
 
 #[test]
 fn partial_match_unterminated_string_still_round_trips() {
-    let h = hl();
     let input = "SELECT 'oops\nFROM t";
-    let out = h.highlight(input);
+    let out = hl(input).highlight();
     assert_eq!(strip_ansi(&out), input);
 }
 
 #[test]
 fn partial_match_unclosed_paren_still_round_trips() {
-    let h = hl();
     let input = "SELECT COUNT( FROM t";
-    let out = h.highlight(input);
+    let out = hl(input).highlight();
     assert_eq!(strip_ansi(&out), input);
 }
 
@@ -190,9 +179,8 @@ fn partial_match_unclosed_paren_still_round_trips() {
 fn partial_match_renders_prefix_styled_and_tail_plain() {
     // The valid SELECT prefix should carry styling; trailing garbage renders
     // verbatim. This mirrors the TOML partial-match test.
-    let h = hl();
     let input = "SELECT 1; !!garbage";
-    let out = h.highlight(input);
+    let out = hl(input).highlight();
     assert_eq!(strip_ansi(&out), input, "round-trip must hold");
     assert!(
         out.contains(theme::color_for("number")),

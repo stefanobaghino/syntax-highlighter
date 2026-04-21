@@ -1,8 +1,31 @@
 //! ANSI-colored syntax highlighting on top of [`crate::pegvm`].
 //!
-//! [`Highlighter`] compiles a PEG grammar once, then renders highlighted
-//! output for any input by running the VM and translating its captures
-//! into ANSI escape codes.
+//! [`Highlighter`] compiles a PEG grammar once, owns the current input,
+//! and carries a [`MemoCache`](crate::pegvm::MemoCache) across edits so
+//! re-highlighting after a small change touches only the memo entries
+//! whose spans cross the edit point (see
+//! [`crate::pegvm::incremental`] for the invalidation protocol). The
+//! first [`set_input`](Highlighter::set_input) is a cold full parse;
+//! each [`edit`](Highlighter::edit) / [`append`](Highlighter::append)
+//! is a warm incremental reparse.
+//!
+//! # Usage
+//!
+//! ```no_run
+//! # use syntax_highlighter::highlight::Highlighter;
+//! let mut h = Highlighter::new(include_str!("../../grammars/json.peg")).unwrap();
+//! h.set_input(r#"{"a":1}"#.into());
+//! h.edit(4, 5, "42");          // replace `1` with `42`
+//! h.append(", \"b\": true");   // streaming append
+//! println!("{}", h.highlight());
+//! ```
+//!
+//! Equivalence guarantee: for any input `I` and any sequence of edits
+//! transforming it into `I'`, calling [`highlight`](Highlighter::highlight)
+//! after the edits must produce the same bytes as constructing a fresh
+//! [`Highlighter`] and calling `set_input(I')` then `highlight()`. The
+//! integration tests in `tests/incremental_tests.rs` cover this across
+//! shipped grammars and edit sequences.
 //!
 //! # Rendering strategy
 //!
@@ -23,17 +46,19 @@
 //!
 //! # Load-bearing invariant
 //!
-//! Stripping the ANSI escape codes from `highlight(input)` must yield the
-//! original `input` unchanged, *including* for inputs the VM only
-//! partially matches. The renderer never reorders, drops, or substitutes
-//! input bytes — it only inserts color codes around them. The integration
-//! tests assert this directly with a `strip_ansi` helper; any change to
-//! the renderer must preserve the property.
+//! Stripping the ANSI escape codes from [`highlight`](Highlighter::highlight)
+//! must yield the current [`input`](Highlighter::input) unchanged,
+//! *including* for inputs the VM only partially matches. The renderer
+//! never reorders, drops, or substitutes input bytes — it only inserts
+//! color codes around them. The integration tests assert this directly
+//! with a `strip_ansi` helper; any change to the renderer must preserve
+//! the property.
 
 pub mod theme;
 
 use crate::pegvm::{
-    compile_grammar, parse_grammar, Capture, CompileError, ParseError, Program, VM,
+    compile_grammar, incremental::Edit, parse_grammar, Capture, CompileError, MemoCache, MemoStats,
+    ParseError, Program, VM,
 };
 
 #[derive(Debug)]
@@ -65,36 +90,112 @@ impl From<CompileError> for HighlightError {
     }
 }
 
+/// Stateful, always-incremental highlighter. Holds the compiled program,
+/// the current input, the carry-across memo cache, and the most recent
+/// parse result. Every mutating method (`set_input`, `edit`, `append`)
+/// re-parses synchronously and refreshes the cached captures; read
+/// methods (`highlight`, `captures`, `input`) never parse.
 pub struct Highlighter {
     program: Program,
+    input: String,
+    cache: MemoCache,
+    matched: usize,
+    captures: Vec<Capture>,
+    last_stats: MemoStats,
 }
 
 impl Highlighter {
     pub fn new(grammar_source: &str) -> Result<Self, HighlightError> {
         let g = parse_grammar(grammar_source)?;
         let program = compile_grammar(&g.rules, &g.start)?;
-        Ok(Highlighter { program })
+        Ok(Self {
+            program,
+            input: String::new(),
+            cache: MemoCache::new(),
+            matched: 0,
+            captures: Vec::new(),
+            last_stats: MemoStats::default(),
+        })
     }
 
-    /// Run the VM and return raw captures alongside how many bytes matched.
-    /// Useful for tests and debugging.
+    /// Replace the entire input and perform a cold parse. Discards any
+    /// prior cache — use this when the new input is unrelated to the
+    /// old one (e.g. loading a different file). For small edits to the
+    /// current input, prefer [`edit`](Self::edit) or
+    /// [`append`](Self::append) instead.
+    pub fn set_input(&mut self, input: String) {
+        self.input = input;
+        self.cache = MemoCache::new();
+        self.reparse();
+    }
+
+    /// Replace `input[start..old_end]` with `replacement` and re-parse
+    /// incrementally. Entries in the carry-across cache whose examined
+    /// span crosses `start` are dropped; the rest are shifted to
+    /// reflect the new byte offsets and served as hits on the warm
+    /// parse.
     ///
-    /// On partial match (VM failed to reach `End`), the returned `matched`
-    /// is the farthest input position reached and `captures` are the spans
+    /// Panics if `start > old_end` or `old_end > self.input.len()`.
+    pub fn edit(&mut self, start: usize, old_end: usize, replacement: &str) {
+        assert!(start <= old_end, "edit: start must be <= old_end");
+        assert!(
+            old_end <= self.input.len(),
+            "edit: old_end ({}) past input.len() ({})",
+            old_end,
+            self.input.len()
+        );
+        let edit = Edit::replacement(start, old_end, replacement.len());
+        self.input.replace_range(start..old_end, replacement);
+        self.cache.apply_edit(edit);
+        self.reparse();
+    }
+
+    /// Streaming append: convenience for edits at `self.input.len()`.
+    /// Optimized for the char-by-char case an LLM-streaming UI hits.
+    pub fn append(&mut self, text: &str) {
+        let at = self.input.len();
+        self.edit(at, at, text);
+    }
+
+    pub fn input(&self) -> &str {
+        &self.input
+    }
+
+    /// Raw captures from the most recent parse, alongside how many
+    /// bytes matched. Useful for tests and debugging.
+    ///
+    /// On partial match (VM failed to reach `End`), `matched` is the
+    /// farthest input position reached and the captures are the spans
     /// valid at that point — so the renderer naturally styles the valid
     /// prefix and emits the unparseable tail plain.
-    pub fn captures(&self, input: &str) -> (usize, Vec<Capture>) {
-        let r = VM::new(&self.program.code, input.as_bytes()).run();
-        (r.matched, r.captures)
+    pub fn captures(&self) -> (usize, &[Capture]) {
+        (self.matched, &self.captures)
     }
 
     pub fn capture_kinds(&self) -> &[String] {
         &self.program.capture_kinds
     }
 
-    pub fn highlight(&self, input: &str) -> String {
-        let (_, captures) = self.captures(input);
-        render(input, &captures, &self.program.capture_kinds)
+    pub fn highlight(&self) -> String {
+        render(&self.input, &self.captures, &self.program.capture_kinds)
+    }
+
+    /// Memo cache diagnostics from the most recent parse. `hits` /
+    /// `misses` reflect the warm re-parse's consumption of the seeded
+    /// cache; `entries` is the post-parse cache size. Primarily useful
+    /// for benchmarks measuring incremental speedup.
+    pub fn last_stats(&self) -> MemoStats {
+        self.last_stats
+    }
+
+    fn reparse(&mut self) {
+        let seeded = std::mem::take(&mut self.cache);
+        let (result, stats, cache_after) =
+            VM::new_with_cache(&self.program.code, self.input.as_bytes(), seeded).run_with_cache();
+        self.cache = cache_after;
+        self.matched = result.matched;
+        self.captures = result.captures;
+        self.last_stats = stats;
     }
 }
 

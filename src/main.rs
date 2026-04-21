@@ -126,7 +126,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let highlighter = match Highlighter::new(lang.grammar()) {
+    let mut highlighter = match Highlighter::new(lang.grammar()) {
         Ok(h) => h,
         Err(e) => {
             eprintln!("syntax-highlighter: grammar error: {}", e);
@@ -134,8 +134,8 @@ fn main() -> ExitCode {
         }
     };
 
-    let out = highlighter.highlight(&input);
-    if let Err(e) = io::stdout().write_all(out.as_bytes()) {
+    highlighter.set_input(input);
+    if let Err(e) = io::stdout().write_all(highlighter.highlight().as_bytes()) {
         eprintln!("syntax-highlighter: writing output: {}", e);
         return ExitCode::from(2);
     }
