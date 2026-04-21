@@ -84,6 +84,21 @@ fn grammar_parses_and_compiles() {
 }
 
 #[test]
+fn bytecode_size_within_expected_range() {
+    // Soft guard: the full dialect currently compiles to ~5.6k
+    // instructions. A drift outside this bracket probably means
+    // something either shrank surprisingly (a regression) or grew
+    // surprisingly (review warranted). Recompute if the change is
+    // intentional.
+    let n_instr = compile_sql().code.len();
+    assert!(
+        (4500..=7500).contains(&n_instr),
+        "bytecode size {n_instr} outside expected range [4500, 7500]; \
+         recompute the bracket if this is an intentional change"
+    );
+}
+
+#[test]
 fn capture_kinds_are_only_theme_kinds() {
     let prog = compile_sql();
     let expected: HashSet<&str> = [

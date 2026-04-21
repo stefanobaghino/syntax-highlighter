@@ -1,37 +1,41 @@
-# SQLite SELECT grammar with highlight annotations.
+# Full SQLite grammar with highlight annotations.
 # The first rule is the start rule.
 #
-# Scope: SQLite SELECT statements sufficient to highlight realistic
-# read-only queries. Covers expressions, JOINs, simple (non-recursive)
-# CTEs, compound SELECT (UNION / INTERSECT / EXCEPT), CASE, CAST, EXISTS,
-# scalar subqueries, function calls, bind parameters, string / BLOB /
-# numeric / NULL / boolean literals, and line / block comments.
-#
-# Deferred: INSERT / UPDATE / DELETE / DDL / triggers / PRAGMA /
-# transactions; WITH RECURSIVE; window functions (`OVER(...)`).
-# Expanding to the full SQLite dialect is intended future work with two
-# specific payoffs (see README.md roadmap):
-#   - a large-grammar bytecode-size datapoint (vs. JSON and TOML)
-#   - a multi-statement error-recovery use case, which single-SELECT
-#     does not exercise
+# Scope: the SQLite dialect. SELECT (with WITH RECURSIVE, compound
+# SELECT, CTEs, window functions), DML (INSERT with UPSERT and
+# RETURNING, UPDATE with FROM, DELETE), DDL (CREATE / DROP / ALTER
+# TABLE with the full constraint vocabulary, generated columns,
+# WITHOUT ROWID / STRICT, foreign-key actions, INDEX, VIEW, TRIGGER,
+# VIRTUAL TABLE), transactions and savepoints, PRAGMA, EXPLAIN
+# [QUERY PLAN], and the administrative statements (VACUUM, ATTACH /
+# DETACH, REINDEX, ANALYZE).
 #
 # Capture kinds (all present in src/highlight/theme.rs):
 #   keyword, string, number, comment, operator, punctuation,
 #   type, function, constant, variable.
 #
 # Capture-kind notes:
-#   - Table names in FROM / JOIN / CTE heads are @type; column
-#     references are @variable. The same lexeme gets a different kind
-#     depending on syntactic position — a genuine win of grammar-driven
-#     highlighting over scope-based matchers.
-#   - BLOB literals X'...' are @string (byte strings; no @bytes kind).
-#   - Bind parameters (?, ?N, :name, @name, $name) are @variable.
-#   - Quoted identifiers ("...", `...`, [...]) are @variable.
+#   - Table names in FROM / JOIN / CTE heads and schema-object names
+#     (indexes, views, triggers, schemas in ATTACH / PRAGMA) are
+#     `@type`; column references are `@variable`. The same lexeme
+#     gets a different kind depending on syntactic position — a
+#     genuine win of grammar-driven highlighting over scope-based
+#     matchers.
+#   - Type names in column definitions (including multi-word forms
+#     like `DOUBLE PRECISION`) are `@type`, matching CAST targets.
+#   - BLOB literals `X'...'` are `@string` (byte strings; no `@bytes`
+#     kind).
+#   - Bind parameters (`?`, `?N`, `:name`, `@name`, `$name`) are
+#     `@variable`.
+#   - Quoted identifiers (`"..."`, backtick, `[...]`) are `@variable`.
+#   - CREATE VIRTUAL TABLE module name after USING is `@function` —
+#     the module is invoked, not merely referenced.
 #
 # This grammar deliberately exercises shared-prefix backtracking in the
 # expression rules (function_call vs qualified_column_ref vs bare
-# column_ref; paren_expr vs scalar subquery). These patterns motivate
-# the memoization work in the README roadmap.
+# column_ref; paren_expr vs scalar subquery) and in the CREATE-family
+# top-level alternatives (CREATE [TEMP] [VIRTUAL] TABLE / INDEX / VIEW
+# / TRIGGER). These patterns motivate the memoization layer.
 
 # --- Top level --------------------------------------------------------
 
