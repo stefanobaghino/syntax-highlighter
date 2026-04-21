@@ -41,6 +41,9 @@ statement  <- select_stmt
             / insert_stmt
             / update_stmt
             / delete_stmt
+            / create_table_stmt
+            / drop_table_stmt
+            / alter_table_stmt
 
 # --- SELECT statement -------------------------------------------------
 
@@ -192,6 +195,82 @@ delete_stmt <- with_clause? kw_delete ws kw_from ws qualified_table_name (ws tab
                order_clause?
                limit_clause?
                (ws returning_clause)?
+
+# --- DDL: CREATE / DROP / ALTER TABLE --------------------------------
+# Interleaves column_def with table_constraint because SQLite does
+# accept constraints in any order, not just trailing. Column vs table
+# constraint disambiguation falls out of PEG first-match: column_def
+# requires a non-keyword leading identifier, while table_constraint
+# starts with CONSTRAINT, PRIMARY, UNIQUE, CHECK, or FOREIGN.
+
+create_table_stmt <- kw_create (ws (kw_temporary / kw_temp))? ws kw_table
+                     (ws kw_if ws kw_not ws kw_exists)?
+                     ws qualified_table_name
+                     ws (@punctuation{'('} ws
+                             (column_def / table_constraint)
+                             (ws @punctuation{','} ws (column_def / table_constraint))*
+                         ws @punctuation{')'}
+                         (ws table_option (ws @punctuation{','} ws table_option)*)?
+                       / kw_as ws select_stmt)
+
+column_def     <- @variable{bare_ident_nonkw}
+                  (ws type_name)?
+                  (ws column_constraint)*
+
+# SQLite accepts multi-word type names like `DOUBLE PRECISION` and
+# `UNSIGNED BIG INT`. Consume consecutive non-keyword identifiers.
+type_name      <- @type{bare_ident_nonkw} (ws @type{bare_ident_nonkw})*
+                  (ws @punctuation{'('} ws signed_number
+                       (ws @punctuation{','} ws signed_number)? ws @punctuation{')'})?
+
+signed_number  <- (@operator{'-'} / @operator{'+'})? ws @number{number_body}
+
+column_constraint      <- (kw_constraint ws @variable{bare_ident_nonkw} ws)? column_constraint_body
+column_constraint_body <-
+      kw_primary ws kw_key (ws (kw_asc / kw_desc))? (ws conflict_clause)? (ws kw_autoincrement)?
+    / (kw_not ws)? kw_null (ws conflict_clause)?
+    / kw_unique (ws conflict_clause)?
+    / kw_check ws @punctuation{'('} ws expr ws @punctuation{')'}
+    / kw_default ws (signed_number / literal / @punctuation{'('} ws expr ws @punctuation{')'})
+    / kw_collate ws @type{bare_ident}
+    / foreign_key_clause
+    / (kw_generated ws kw_always ws)? kw_as ws @punctuation{'('} ws expr ws @punctuation{')'}
+      (ws (kw_stored / kw_virtual))?
+
+table_constraint      <- (kw_constraint ws @variable{bare_ident_nonkw} ws)? table_constraint_body
+table_constraint_body <-
+      (kw_primary ws kw_key / kw_unique)
+          ws @punctuation{'('} ws indexed_col_list ws @punctuation{')'}
+          (ws conflict_clause)?
+    / kw_check ws @punctuation{'('} ws expr ws @punctuation{')'}
+    / kw_foreign ws kw_key ws @punctuation{'('} ws ident_list ws @punctuation{')'}
+          ws foreign_key_clause
+
+foreign_key_clause <- kw_references ws @type{bare_ident_nonkw}
+                      (ws @punctuation{'('} ws ident_list ws @punctuation{')'})?
+                      (ws fk_action)*
+                      (ws fk_deferrable)?
+fk_action      <- kw_on ws (kw_delete / kw_update) ws fk_action_body
+                / kw_match ws @variable{bare_ident_nonkw}
+fk_action_body <- kw_set ws (kw_null / kw_default)
+                / kw_cascade
+                / kw_restrict
+                / kw_no ws kw_action
+fk_deferrable  <- (kw_not ws)? kw_deferrable (ws kw_initially ws (kw_immediate / kw_deferred))?
+
+conflict_clause <- kw_on ws kw_conflict ws conflict_action
+
+table_option   <- kw_without ws kw_rowid / kw_strict
+
+drop_table_stmt <- kw_drop ws kw_table (ws kw_if ws kw_exists)? ws qualified_table_name
+
+alter_table_stmt <- kw_alter ws kw_table ws qualified_table_name ws (
+      kw_rename ws kw_to ws @type{bare_ident_nonkw}
+    / kw_rename (ws kw_column)? ws @variable{bare_ident_nonkw}
+        ws kw_to ws @variable{bare_ident_nonkw}
+    / kw_add (ws kw_column)? ws column_def
+    / kw_drop (ws kw_column)? ws @variable{bare_ident_nonkw}
+  )
 
 # --- Expressions (low → high precedence) -------------------------------
 # Classic precedence-climbing without left recursion. Each level either
@@ -401,6 +480,42 @@ kw_returning <- @keyword{returning_body !ident_char}
 kw_update    <- @keyword{update_body !ident_char}
 kw_delete    <- @keyword{delete_body !ident_char}
 
+# DDL (CREATE / ALTER / DROP TABLE, constraints, foreign-key actions).
+kw_create    <- @keyword{create_body !ident_char}
+kw_table     <- @keyword{table_body !ident_char}
+kw_alter     <- @keyword{alter_body !ident_char}
+kw_drop      <- @keyword{drop_body !ident_char}
+kw_rename    <- @keyword{rename_body !ident_char}
+kw_add       <- @keyword{add_body !ident_char}
+kw_column    <- @keyword{column_body !ident_char}
+kw_if        <- @keyword{if_body !ident_char}
+kw_temp      <- @keyword{temp_body !ident_char}
+kw_temporary <- @keyword{temporary_body !ident_char}
+kw_primary   <- @keyword{primary_body !ident_char}
+kw_key       <- @keyword{key_body !ident_char}
+kw_unique    <- @keyword{unique_body !ident_char}
+kw_check     <- @keyword{check_body !ident_char}
+kw_null      <- @keyword{null_body !ident_char}
+kw_references <- @keyword{references_body !ident_char}
+kw_generated <- @keyword{generated_body !ident_char}
+kw_always    <- @keyword{always_body !ident_char}
+kw_stored    <- @keyword{stored_body !ident_char}
+kw_virtual   <- @keyword{virtual_body !ident_char}
+kw_constraint<- @keyword{constraint_body !ident_char}
+kw_foreign   <- @keyword{foreign_body !ident_char}
+kw_action    <- @keyword{action_body !ident_char}
+kw_cascade   <- @keyword{cascade_body !ident_char}
+kw_restrict  <- @keyword{restrict_body !ident_char}
+kw_deferrable<- @keyword{deferrable_body !ident_char}
+kw_initially <- @keyword{initially_body !ident_char}
+kw_immediate <- @keyword{immediate_body !ident_char}
+kw_deferred  <- @keyword{deferred_body !ident_char}
+kw_autoincrement <- @keyword{autoincrement_body !ident_char}
+kw_rowid     <- @keyword{rowid_body !ident_char}
+kw_strict    <- @keyword{strict_body !ident_char}
+kw_without   <- @keyword{without_body !ident_char}
+kw_to        <- @keyword{to_body !ident_char}
+
 # Keyword bodies — raw letter matchers, no boundary check.
 
 sel_body       <- [sS][eE][lL][eE][cC][tT]
@@ -483,6 +598,39 @@ set_body       <- [sS][eE][tT]
 returning_body <- [rR][eE][tT][uU][rR][nN][iI][nN][gG]
 update_body    <- [uU][pP][dD][aA][tT][eE]
 delete_body    <- [dD][eE][lL][eE][tT][eE]
+create_body    <- [cC][rR][eE][aA][tT][eE]
+table_body     <- [tT][aA][bB][lL][eE]
+alter_body     <- [aA][lL][tT][eE][rR]
+drop_body      <- [dD][rR][oO][pP]
+rename_body    <- [rR][eE][nN][aA][mM][eE]
+add_body       <- [aA][dD][dD]
+column_body    <- [cC][oO][lL][uU][mM][nN]
+if_body        <- [iI][fF]
+temp_body      <- [tT][eE][mM][pP]
+temporary_body <- [tT][eE][mM][pP][oO][rR][aA][rR][yY]
+primary_body   <- [pP][rR][iI][mM][aA][rR][yY]
+key_body       <- [kK][eE][yY]
+unique_body    <- [uU][nN][iI][qQ][uU][eE]
+check_body     <- [cC][hH][eE][cC][kK]
+references_body <- [rR][eE][fF][eE][rR][eE][nN][cC][eE][sS]
+generated_body <- [gG][eE][nN][eE][rR][aA][tT][eE][dD]
+always_body    <- [aA][lL][wW][aA][yY][sS]
+stored_body    <- [sS][tT][oO][rR][eE][dD]
+virtual_body   <- [vV][iI][rR][tT][uU][aA][lL]
+constraint_body<- [cC][oO][nN][sS][tT][rR][aA][iI][nN][tT]
+foreign_body   <- [fF][oO][rR][eE][iI][gG][nN]
+action_body    <- [aA][cC][tT][iI][oO][nN]
+cascade_body   <- [cC][aA][sS][cC][aA][dD][eE]
+restrict_body  <- [rR][eE][sS][tT][rR][iI][cC][tT]
+deferrable_body<- [dD][eE][fF][eE][rR][rR][aA][bB][lL][eE]
+initially_body <- [iI][nN][iI][tT][iI][aA][lL][lL][yY]
+immediate_body <- [iI][mM][mM][eE][dD][iI][aA][tT][eE]
+deferred_body  <- [dD][eE][fF][eE][rR][rR][eE][dD]
+autoincrement_body <- [aA][uU][tT][oO][iI][nN][cC][rR][eE][mM][eE][nN][tT]
+rowid_body     <- [rR][oO][wW][iI][dD]
+strict_body    <- [sS][tT][rR][iI][cC][tT]
+without_body   <- [wW][iI][tT][hH][oO][uU][tT]
+to_body        <- [tT][oO]
 
 # Keyword negative-lookahead for the identifier rule.
 #
@@ -502,17 +650,36 @@ delete_body    <- [dD][eE][lL][eE][tT][eE]
 # `!ident_char` is applied once on the outside so each body stays
 # boundary-free.
 keyword_word <-
-    ( intersect_body       # 9
+    ( autoincrement_body   # 13
+    / constraint_body      # 10
+    / deferrable_body      # 10
+    / references_body      # 10
+    / generated_body       # 9
+    / immediate_body       # 9
+    / initially_body       # 9
+    / intersect_body       # 9
     / returning_body       # 9
+    / temporary_body       # 9
     / conflict_body        # 8
+    / deferred_body        # 8
     / distinct_body        # 8
+    / restrict_body        # 8
     / rollback_body        # 8
     / between_body         # 7
+    / cascade_body         # 7
     / collate_body         # 7
     / default_body         # 7
+    / foreign_body         # 7
     / natural_body         # 7
     / nothing_body         # 7
+    / primary_body         # 7
     / replace_body         # 7
+    / virtual_body         # 7
+    / without_body         # 7
+    / action_body          # 6
+    / always_body          # 6
+    / column_body          # 6
+    / create_body          # 6
     / delete_body          # 6
     / escape_body          # 6
     / except_body          # 6
@@ -522,12 +689,18 @@ keyword_word <-
     / insert_body          # 6
     / offset_body          # 6
     / regexp_body          # 6
+    / rename_body          # 6
     / sel_body             # 6 (SELECT)
+    / stored_body          # 6
+    / strict_body          # 6
+    / unique_body          # 6
     / update_body          # 6
     / values_body          # 6
     / window_body          # 6
     / abort_body           # 5
+    / alter_body           # 5
     / bool_body            # 5 (FALSE) / 4 (TRUE); alternation handles both
+    / check_body           # 5
     / cross_body           # 5
     / group_body           # 5
     / inner_body           # 5
@@ -536,12 +709,15 @@ keyword_word <-
     / order_body           # 5
     / outer_body           # 5
     / right_body           # 5
+    / rowid_body           # 5
+    / table_body           # 5
     / union_body           # 5
     / using_body           # 5
     / where_body           # 5
     / case_body            # 4
     / cast_body            # 4
     / desc_body            # 4
+    / drop_body            # 4
     / else_body            # 4
     / fail_body            # 4
     / from_body            # 4
@@ -553,22 +729,28 @@ keyword_word <-
     / like_body            # 4
     / null_body            # 4
     / over_body            # 4
+    / temp_body            # 4
     / then_body            # 4
     / when_body            # 4
     / with_body            # 4
+    / add_body             # 3
     / all_body             # 3
     / and_body             # 3
     / asc_body             # 3
     / end_body             # 3
+    / key_body             # 3
     / not_body             # 3
     / set_body             # 3
     / as_body              # 2
     / by_body              # 2
     / do_body              # 2
+    / if_body              # 2
     / in_body              # 2
     / is_body              # 2
+    / no_body              # 2
     / on_body              # 2
     / or_body              # 2
+    / to_body              # 2
     ) !ident_char
 
 # --- Whitespace & comments -------------------------------------------

@@ -683,6 +683,163 @@ fn delete_with_cte() {
 }
 
 #[test]
+fn create_table_basic() {
+    assert_complete_full("CREATE TABLE t (a INTEGER)");
+}
+
+#[test]
+fn create_table_typeless_columns() {
+    assert_complete_full("CREATE TABLE t (a, b)");
+}
+
+#[test]
+fn create_table_mixed_constraints() {
+    assert_complete_full(
+        "CREATE TABLE t (a INTEGER PRIMARY KEY, b TEXT NOT NULL UNIQUE, c INT NULL)",
+    );
+}
+
+#[test]
+fn create_table_check_constraint() {
+    assert_complete_full("CREATE TABLE t (a INT CHECK (a > 0))");
+}
+
+#[test]
+fn create_table_defaults() {
+    assert_complete_full(
+        "CREATE TABLE t (a INT DEFAULT 0, b TEXT DEFAULT 'x', c DATETIME DEFAULT (CURRENT_TIMESTAMP))",
+    );
+}
+
+#[test]
+fn create_table_column_collate() {
+    assert_complete_full("CREATE TABLE t (a TEXT COLLATE NOCASE)");
+}
+
+#[test]
+fn create_table_generated_column_shorthand() {
+    assert_complete_full("CREATE TABLE t (a INT, b INT AS (a + 1) STORED)");
+}
+
+#[test]
+fn create_table_generated_column_always() {
+    assert_complete_full("CREATE TABLE t (a INT, b INT GENERATED ALWAYS AS (a + 1) VIRTUAL)");
+}
+
+#[test]
+fn create_table_table_primary_key() {
+    assert_complete_full("CREATE TABLE t (a INT, b INT, PRIMARY KEY (a, b))");
+}
+
+#[test]
+fn create_table_named_constraint() {
+    assert_complete_full("CREATE TABLE t (a INT, CONSTRAINT pk PRIMARY KEY (a))");
+}
+
+#[test]
+fn create_table_foreign_key() {
+    assert_complete_full(
+        "CREATE TABLE t (a INT, b INT, FOREIGN KEY (a) REFERENCES u(x) ON DELETE CASCADE)",
+    );
+}
+
+#[test]
+fn create_table_foreign_key_deferrable() {
+    assert_complete_full("CREATE TABLE t (a INT REFERENCES u(x) DEFERRABLE INITIALLY DEFERRED)");
+}
+
+#[test]
+fn create_table_without_rowid_strict() {
+    assert_complete_full("CREATE TABLE t (a INT PRIMARY KEY) WITHOUT ROWID, STRICT");
+}
+
+#[test]
+fn create_table_if_not_exists() {
+    assert_complete_full("CREATE TABLE IF NOT EXISTS t (a INT)");
+}
+
+#[test]
+fn create_temp_table() {
+    assert_complete_full("CREATE TEMP TABLE t (a INT)");
+    assert_complete_full("CREATE TEMPORARY TABLE t (a INT)");
+}
+
+#[test]
+fn create_table_as_select() {
+    assert_complete_full("CREATE TABLE t AS SELECT * FROM s");
+}
+
+#[test]
+fn create_table_multi_word_types() {
+    assert_complete_full(
+        "CREATE TABLE t (a DOUBLE PRECISION, b UNSIGNED BIG INT, c VARCHAR(255), d NUMERIC(10, 2))",
+    );
+}
+
+#[test]
+fn drop_table_basic() {
+    assert_complete_full("DROP TABLE t");
+}
+
+#[test]
+fn drop_table_if_exists() {
+    assert_complete_full("DROP TABLE IF EXISTS t");
+}
+
+#[test]
+fn alter_table_rename_to() {
+    assert_complete_full("ALTER TABLE t RENAME TO t2");
+}
+
+#[test]
+fn alter_table_rename_column() {
+    assert_complete_full("ALTER TABLE t RENAME COLUMN a TO b");
+    assert_complete_full("ALTER TABLE t RENAME a TO b");
+}
+
+#[test]
+fn alter_table_add_column() {
+    assert_complete_full("ALTER TABLE t ADD COLUMN c INT DEFAULT 0");
+    assert_complete_full("ALTER TABLE t ADD c INT");
+}
+
+#[test]
+fn alter_table_drop_column() {
+    assert_complete_full("ALTER TABLE t DROP COLUMN c");
+    assert_complete_full("ALTER TABLE t DROP c");
+}
+
+#[test]
+fn create_table_column_kinds() {
+    let input = "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)";
+    let (caps, kinds) = assert_complete_full(input);
+    // Table name and type names are @type.
+    let types = spans_for(&caps, &kinds, "type", input);
+    assert!(
+        types.contains(&"users"),
+        "expected users as @type, got {types:?}"
+    );
+    assert!(
+        types.contains(&"INTEGER"),
+        "expected INTEGER as @type, got {types:?}"
+    );
+    assert!(
+        types.contains(&"TEXT"),
+        "expected TEXT as @type, got {types:?}"
+    );
+    // Column names are @variable.
+    let vars = spans_for(&caps, &kinds, "variable", input);
+    assert!(
+        vars.contains(&"id"),
+        "expected id as @variable, got {vars:?}"
+    );
+    assert!(
+        vars.contains(&"name"),
+        "expected name as @variable, got {vars:?}"
+    );
+}
+
+#[test]
 fn window_captures_include_over_and_partition() {
     let input = "SELECT SUM(x) OVER (PARTITION BY y ORDER BY z) FROM t";
     let (caps, kinds) = assert_complete_full(input);
