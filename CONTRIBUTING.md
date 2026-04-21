@@ -8,6 +8,17 @@ This is a standard Cargo crate — `cargo build`, `test`, `run`, `fmt`, and `cli
 
 Requires Rust 1.78 or newer (the MSRV declared in `Cargo.toml`).
 
+## Benchmarks
+
+`cargo bench --bench memo` sweeps the memoization threshold across the
+shipped grammars. Re-run it after adding a new grammar, or after any
+change to `MemoOpen` / `MemoClose` / memo-replay semantics — a new
+grammar's shape can push the knee past the shipping
+`VM::DEFAULT_MEMO_THRESHOLD`, and VM changes that alter memo-table
+access patterns can invalidate the current tuning. The `memo-bench`
+skill (`.claude/skills/memo-bench/SKILL.md`) documents how to read the
+output and when to raise the default.
+
 ## Project-level rules
 
 - **Warnings fail CI.** `RUSTFLAGS: -D warnings` is set globally in the workflow. Don't introduce code that produces rustc or clippy warnings.

@@ -67,9 +67,28 @@ Typical healthy shape for one grammar/input pair:
    `hit_rate` past some threshold means you've started filtering out
    useful cached spans; that's the far side of the knee.
 4. **Pick the threshold at the knee of the time curve** that still
-   preserves `hit_rate`. For the shipped fixtures, the knee is low
-   (~32 bytes). GPeg ships 512; Yedidia's thesis §5.2.4 finds ≈4096.
-   Hardware and workload dependent.
+   preserves `hit_rate`. The shipped default
+   (`VM::DEFAULT_MEMO_THRESHOLD`, 128 bytes) was chosen from this
+   harness to sit in the flat region of the time curve while matching
+   GPeg's benchmark reference point. Reference values: GPeg ships 512;
+   Yedidia's thesis §5.2.4 finds ≈4096. Hardware- and workload-dependent,
+   which is why this harness exists — rerun it rather than trusting the
+   literature numbers directly.
+
+## When to re-run
+
+- **After adding a new grammar.** A larger or differently-shaped grammar
+  can push the knee upward; if the flat region no longer includes the
+  shipping `DEFAULT_MEMO_THRESHOLD`, raise it. This is the main
+  maintenance trigger — the roadmap entry for "More language grammars"
+  (`README.md`) calls it out.
+- **After significant VM changes** that alter memo-table access patterns
+  (new instructions, changes to `MemoOpen`/`MemoClose`, memo replay
+  semantics). The correctness guard catches breakage; the sweep shape
+  tells you whether the tuning is still right.
+- **Not after plain VM changes** that don't touch memoization — the
+  bench is opinionated about what it measures, not a general
+  regression check.
 
 ## Correctness guard
 
