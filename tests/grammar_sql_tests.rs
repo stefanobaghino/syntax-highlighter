@@ -929,6 +929,38 @@ fn drop_trigger_variants() {
 }
 
 #[test]
+fn begin_variants() {
+    assert_complete_full("BEGIN");
+    assert_complete_full("BEGIN TRANSACTION");
+    assert_complete_full("BEGIN DEFERRED");
+    assert_complete_full("BEGIN IMMEDIATE TRANSACTION");
+    assert_complete_full("BEGIN EXCLUSIVE");
+}
+
+#[test]
+fn commit_and_end_aliases() {
+    assert_complete_full("COMMIT");
+    assert_complete_full("END");
+    assert_complete_full("COMMIT TRANSACTION");
+    assert_complete_full("END TRANSACTION");
+}
+
+#[test]
+fn rollback_variants() {
+    assert_complete_full("ROLLBACK");
+    assert_complete_full("ROLLBACK TRANSACTION");
+    assert_complete_full("ROLLBACK TO sp");
+    assert_complete_full("ROLLBACK TRANSACTION TO SAVEPOINT sp");
+}
+
+#[test]
+fn savepoint_and_release() {
+    assert_complete_full("SAVEPOINT sp");
+    assert_complete_full("RELEASE sp");
+    assert_complete_full("RELEASE SAVEPOINT sp");
+}
+
+#[test]
 fn trigger_then_select_multi_statement() {
     // Two top-level statements separated by `;`: a trigger (whose body
     // has its own inner `;`-terminated statements) and a SELECT.

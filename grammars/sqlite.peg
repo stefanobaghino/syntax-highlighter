@@ -50,6 +50,11 @@ statement  <- select_stmt
             / drop_view_stmt
             / drop_trigger_stmt
             / alter_table_stmt
+            / begin_stmt
+            / commit_stmt
+            / rollback_stmt
+            / savepoint_stmt
+            / release_stmt
 
 # --- SELECT statement -------------------------------------------------
 
@@ -320,6 +325,16 @@ trigger_body_stmt <- insert_stmt / update_stmt / delete_stmt / select_stmt
 
 drop_trigger_stmt <- kw_drop ws kw_trigger (ws kw_if ws kw_exists)? ws qualified_table_name
 
+# --- Transactions & savepoints ---------------------------------------
+
+begin_stmt     <- kw_begin (ws (kw_deferred / kw_immediate / kw_exclusive))?
+                  (ws kw_transaction)?
+commit_stmt    <- (kw_commit / kw_end) (ws kw_transaction)?
+rollback_stmt  <- kw_rollback (ws kw_transaction)?
+                  (ws kw_to (ws kw_savepoint)? ws @variable{bare_ident_nonkw})?
+savepoint_stmt <- kw_savepoint ws @variable{bare_ident_nonkw}
+release_stmt   <- kw_release (ws kw_savepoint)? ws @variable{bare_ident_nonkw}
+
 # --- Expressions (low → high precedence) -------------------------------
 # Classic precedence-climbing without left recursion. Each level either
 # matches the next-higher level or chains several of them with an
@@ -573,6 +588,11 @@ kw_of        <- @keyword{of_body !ident_char}
 kw_for       <- @keyword{for_body !ident_char}
 kw_each      <- @keyword{each_body !ident_char}
 kw_begin     <- @keyword{begin_body !ident_char}
+kw_commit    <- @keyword{commit_body !ident_char}
+kw_transaction <- @keyword{transaction_body !ident_char}
+kw_savepoint <- @keyword{savepoint_body !ident_char}
+kw_release   <- @keyword{release_body !ident_char}
+kw_exclusive <- @keyword{exclusive_body !ident_char}
 
 # Keyword bodies — raw letter matchers, no boundary check.
 
@@ -699,6 +719,11 @@ of_body        <- [oO][fF]
 for_body       <- [fF][oO][rR]
 each_body      <- [eE][aA][cC][hH]
 begin_body     <- [bB][eE][gG][iI][nN]
+commit_body    <- [cC][oO][mM][mM][iI][tT]
+transaction_body <- [tT][rR][aA][nN][sS][aA][cC][tT][iI][oO][nN]
+savepoint_body <- [sS][aA][vV][eE][pP][oO][iI][nN][tT]
+release_body   <- [rR][eE][lL][eE][aA][sS][eE]
+exclusive_body <- [eE][xX][cC][lL][uU][sS][iI][vV][eE]
 
 # Keyword negative-lookahead for the identifier rule.
 #
@@ -719,14 +744,17 @@ begin_body     <- [bB][eE][gG][iI][nN]
 # boundary-free.
 keyword_word <-
     ( autoincrement_body   # 13
+    / transaction_body     # 11
     / constraint_body      # 10
     / deferrable_body      # 10
     / references_body      # 10
+    / exclusive_body       # 9
     / generated_body       # 9
     / immediate_body       # 9
     / initially_body       # 9
     / intersect_body       # 9
     / returning_body       # 9
+    / savepoint_body       # 9
     / temporary_body       # 9
     / conflict_body        # 8
     / deferred_body        # 8
@@ -742,6 +770,7 @@ keyword_word <-
     / natural_body         # 7
     / nothing_body         # 7
     / primary_body         # 7
+    / release_body         # 7
     / replace_body         # 7
     / trigger_body         # 7
     / virtual_body         # 7
@@ -750,6 +779,7 @@ keyword_word <-
     / always_body          # 6
     / before_body          # 6
     / column_body          # 6
+    / commit_body          # 6
     / create_body          # 6
     / delete_body          # 6
     / escape_body          # 6
