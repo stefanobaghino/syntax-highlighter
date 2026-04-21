@@ -1,16 +1,16 @@
 use std::collections::HashSet;
 
-use syntax_highlighter::pegvm::{compile_grammar, parse_grammar, Capture, Program, VM};
+use syntax_highlighter::pegc;
+use syntax_highlighter::pegvm::{Capture, Program, VM};
 
 const TOML_GRAMMAR: &str = include_str!("../grammars/toml.peg");
 
-fn compile() -> Program {
-    let g = parse_grammar(TOML_GRAMMAR).expect("TOML grammar should parse");
-    compile_grammar(&g.rules, &g.start).expect("TOML grammar should compile")
+fn compile_toml() -> Program {
+    pegc::compile(TOML_GRAMMAR).expect("TOML grammar should compile")
 }
 
 fn run(input: &str) -> (usize, Vec<Capture>, Vec<String>, bool) {
-    let prog = compile();
+    let prog = compile_toml();
     let r = VM::new(&prog.code, input.as_bytes()).run();
     (
         r.matched,
@@ -48,14 +48,14 @@ fn assert_complete_full(input: &str) -> (Vec<Capture>, Vec<String>) {
 
 #[test]
 fn grammar_parses_and_compiles() {
-    let prog = compile();
+    let prog = compile_toml();
     assert!(!prog.code.is_empty());
     assert!(!prog.capture_kinds.is_empty());
 }
 
 #[test]
 fn capture_kinds_are_only_theme_kinds() {
-    let prog = compile();
+    let prog = compile_toml();
     let expected: HashSet<&str> = [
         "comment",
         "property",

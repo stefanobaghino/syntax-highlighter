@@ -24,7 +24,8 @@ impl std::fmt::Debug for Label {
 pub struct CaptureKind(pub u16);
 
 /// Opaque tag identifying a memoized rule. Assigned 1:1 with rule addresses
-/// by `compile_grammar`. The VM uses it as an index into its memo table.
+/// by [`crate::pegc::Grammar::compile`]. The VM uses it as an index into
+/// its memo table.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
 pub struct MemoId(pub u32);

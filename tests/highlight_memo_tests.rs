@@ -7,7 +7,8 @@
 //! realistic (sub-kilobyte) input to guard against regressions in the
 //! default itself.
 
-use syntax_highlighter::pegvm::{compile_grammar, parse_grammar, VM};
+use syntax_highlighter::pegc;
+use syntax_highlighter::pegvm::VM;
 
 const SQLITE_GRAMMAR: &str = include_str!("../grammars/sqlite.peg");
 const JSON_GRAMMAR: &str = include_str!("../grammars/json.peg");
@@ -17,8 +18,7 @@ fn sqlite_select_registers_memo_hits() {
     // The SQL grammar has a lot of ordered alternatives that share prefixes
     // (keywords, identifiers, expressions) — exactly the shape where
     // memoization earns its keep.
-    let g = parse_grammar(SQLITE_GRAMMAR).unwrap();
-    let prog = compile_grammar(&g.rules, &g.start).unwrap();
+    let prog = pegc::compile(SQLITE_GRAMMAR).unwrap();
 
     let input = "SELECT id, name FROM users WHERE active AND id > 10;";
     let (result, stats) = VM::new(&prog.code, input.as_bytes())
@@ -45,8 +45,7 @@ fn sqlite_select_registers_memo_hits() {
 #[test]
 fn default_threshold_still_fires_on_realistic_sql() {
     let input = include_str!("../benches/fixtures/medium.sql");
-    let g = parse_grammar(SQLITE_GRAMMAR).unwrap();
-    let prog = compile_grammar(&g.rules, &g.start).unwrap();
+    let prog = pegc::compile(SQLITE_GRAMMAR).unwrap();
 
     let (result, stats) = VM::new(&prog.code, input.as_bytes()).run_with_memo_stats();
 
@@ -66,8 +65,7 @@ fn json_run_records_memo_entries() {
     // on simple inputs — but every rule call still lands an entry in the
     // table. This test just confirms the cache is wired end-to-end on a
     // shipping grammar.
-    let g = parse_grammar(JSON_GRAMMAR).unwrap();
-    let prog = compile_grammar(&g.rules, &g.start).unwrap();
+    let prog = pegc::compile(JSON_GRAMMAR).unwrap();
 
     let input = br#"{"a": 1, "b": [true, null, "x"]}"#;
     let (result, stats) = VM::new(&prog.code, input)

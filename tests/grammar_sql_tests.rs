@@ -1,16 +1,16 @@
 use std::collections::HashSet;
 
-use syntax_highlighter::pegvm::{compile_grammar, parse_grammar, Capture, Program, VM};
+use syntax_highlighter::pegc;
+use syntax_highlighter::pegvm::{Capture, Program, VM};
 
 const SQLITE_GRAMMAR: &str = include_str!("../grammars/sqlite.peg");
 
-fn compile() -> Program {
-    let g = parse_grammar(SQLITE_GRAMMAR).expect("SQLite grammar should parse");
-    compile_grammar(&g.rules, &g.start).expect("SQLite grammar should compile")
+fn compile_sql() -> Program {
+    pegc::compile(SQLITE_GRAMMAR).expect("SQLite grammar should compile")
 }
 
 fn run(input: &str) -> (usize, Vec<Capture>, Vec<String>, bool) {
-    let prog = compile();
+    let prog = compile_sql();
     let r = VM::new(&prog.code, input.as_bytes()).run();
     (
         r.matched,
@@ -60,12 +60,12 @@ fn assert_complete_full(input: &str) -> (Vec<Capture>, Vec<String>) {
 
 #[test]
 fn grammar_parses_and_compiles() {
-    let prog = compile();
+    let prog = compile_sql();
     assert!(!prog.code.is_empty());
     assert!(!prog.capture_kinds.is_empty());
     eprintln!(
         "SQLite bytecode: {} rules, {} kinds, {} instr",
-        parse_grammar(SQLITE_GRAMMAR).unwrap().rules.len(),
+        pegc::parse(SQLITE_GRAMMAR).unwrap().rules.len(),
         prog.capture_kinds.len(),
         prog.code.len()
     );
@@ -73,7 +73,7 @@ fn grammar_parses_and_compiles() {
 
 #[test]
 fn capture_kinds_are_only_theme_kinds() {
-    let prog = compile();
+    let prog = compile_sql();
     let expected: HashSet<&str> = [
         "keyword",
         "string",

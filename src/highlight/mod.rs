@@ -1,13 +1,10 @@
-//! ANSI-colored syntax highlighting on top of [`crate::pegvm`].
+//! ANSI-colored syntax highlighting on top of [`crate::parser::Parser`].
 //!
-//! [`Highlighter`] compiles a PEG grammar once, owns the current input,
-//! and carries a [`MemoCache`](crate::pegvm::MemoCache) across edits so
-//! re-highlighting after a small change touches only the memo entries
-//! whose spans cross the edit point (see
-//! [`crate::pegvm::incremental`] for the invalidation protocol). The
-//! first [`set_input`](Highlighter::set_input) is a cold full parse;
-//! each [`edit`](Highlighter::edit) / [`append`](Highlighter::append)
-//! is a warm incremental reparse.
+//! [`Highlighter`] is a thin wrapper around [`Parser`]: every parsing
+//! concern (`set_input`, `edit`, `append`, `input`, `captures`,
+//! `capture_kinds`, `last_stats`) delegates to the embedded parser
+//! with `&str ↔ &[u8]` conversion at the boundary. The only
+//! non-trivial body is [`highlight`](Highlighter::highlight) itself.
 //!
 //! # Usage
 //!
@@ -44,6 +41,13 @@
 //! rather than the whole input going unstyled on the first character
 //! that fails to parse.
 //!
+//! # UTF-8 invariant
+//!
+//! `Parser` stores input as bytes. `Highlighter` accepts only
+//! `String` / `&str` at mutation entry points and treats
+//! `parser.input()` as valid UTF-8 on the read side. Any future
+//! non-UTF-8 caller should use [`Parser`] directly.
+//!
 //! # Load-bearing invariant
 //!
 //! Stripping the ANSI escape codes from [`highlight`](Highlighter::highlight)
@@ -56,146 +60,80 @@
 
 pub mod theme;
 
-use crate::pegvm::{
-    compile_grammar, incremental::Edit, parse_grammar, Capture, CompileError, MemoCache, MemoStats,
-    ParseError, Program, VM,
-};
+use crate::parser::{Parser, ParserError};
+use crate::pegvm::{Capture, MemoStats};
 
 #[derive(Debug)]
-pub enum HighlightError {
-    Parse(ParseError),
-    Compile(CompileError),
-}
+pub struct HighlightError(ParserError);
 
 impl std::fmt::Display for HighlightError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            HighlightError::Parse(e) => write!(f, "{}", e),
-            HighlightError::Compile(e) => write!(f, "{}", e),
-        }
+        self.0.fmt(f)
     }
 }
 
 impl std::error::Error for HighlightError {}
 
-impl From<ParseError> for HighlightError {
-    fn from(e: ParseError) -> Self {
-        HighlightError::Parse(e)
+impl From<ParserError> for HighlightError {
+    fn from(e: ParserError) -> Self {
+        HighlightError(e)
     }
 }
 
-impl From<CompileError> for HighlightError {
-    fn from(e: CompileError) -> Self {
-        HighlightError::Compile(e)
-    }
-}
-
-/// Stateful, always-incremental highlighter. Holds the compiled program,
-/// the current input, the carry-across memo cache, and the most recent
-/// parse result. Every mutating method (`set_input`, `edit`, `append`)
-/// re-parses synchronously and refreshes the cached captures; read
-/// methods (`highlight`, `captures`, `input`) never parse.
 pub struct Highlighter {
-    program: Program,
-    input: String,
-    cache: MemoCache,
-    matched: usize,
-    captures: Vec<Capture>,
-    last_stats: MemoStats,
+    parser: Parser,
 }
 
 impl Highlighter {
     pub fn new(grammar_source: &str) -> Result<Self, HighlightError> {
-        let g = parse_grammar(grammar_source)?;
-        let program = compile_grammar(&g.rules, &g.start)?;
         Ok(Self {
-            program,
-            input: String::new(),
-            cache: MemoCache::new(),
-            matched: 0,
-            captures: Vec::new(),
-            last_stats: MemoStats::default(),
+            parser: Parser::new(grammar_source)?,
         })
     }
 
     /// Replace the entire input and perform a cold parse. Discards any
     /// prior cache — use this when the new input is unrelated to the
-    /// old one (e.g. loading a different file). For small edits to the
-    /// current input, prefer [`edit`](Self::edit) or
-    /// [`append`](Self::append) instead.
+    /// old one. For small edits, prefer [`edit`](Self::edit) or
+    /// [`append`](Self::append).
     pub fn set_input(&mut self, input: String) {
-        self.input = input;
-        self.cache = MemoCache::new();
-        self.reparse();
+        self.parser.set_input(input.into_bytes());
     }
 
     /// Replace `input[start..old_end]` with `replacement` and re-parse
-    /// incrementally. Entries in the carry-across cache whose examined
-    /// span crosses `start` are dropped; the rest are shifted to
-    /// reflect the new byte offsets and served as hits on the warm
-    /// parse.
+    /// incrementally.
     ///
     /// Panics if `start > old_end` or `old_end > self.input.len()`.
     pub fn edit(&mut self, start: usize, old_end: usize, replacement: &str) {
-        assert!(start <= old_end, "edit: start must be <= old_end");
-        assert!(
-            old_end <= self.input.len(),
-            "edit: old_end ({}) past input.len() ({})",
-            old_end,
-            self.input.len()
-        );
-        let edit = Edit::replacement(start, old_end, replacement.len());
-        self.input.replace_range(start..old_end, replacement);
-        self.cache.apply_edit(edit);
-        self.reparse();
+        self.parser.edit(start, old_end, replacement.as_bytes());
     }
 
     /// Streaming append: convenience for edits at `self.input.len()`.
-    /// Optimized for the char-by-char case an LLM-streaming UI hits.
     pub fn append(&mut self, text: &str) {
-        let at = self.input.len();
-        self.edit(at, at, text);
+        self.parser.append(text.as_bytes());
     }
 
     pub fn input(&self) -> &str {
-        &self.input
+        // Every mutation enters via `String` or `&str`, so `parser.input()`
+        // is always valid UTF-8. Panicking here would signal a bug in the
+        // parser module, not user error.
+        std::str::from_utf8(self.parser.input()).expect("UTF-8 invariant violated")
     }
 
-    /// Raw captures from the most recent parse, alongside how many
-    /// bytes matched. Useful for tests and debugging.
-    ///
-    /// On partial match (VM failed to reach `End`), `matched` is the
-    /// farthest input position reached and the captures are the spans
-    /// valid at that point — so the renderer naturally styles the valid
-    /// prefix and emits the unparseable tail plain.
     pub fn captures(&self) -> (usize, &[Capture]) {
-        (self.matched, &self.captures)
+        self.parser.captures()
     }
 
     pub fn capture_kinds(&self) -> &[String] {
-        &self.program.capture_kinds
+        self.parser.capture_kinds()
     }
 
     pub fn highlight(&self) -> String {
-        render(&self.input, &self.captures, &self.program.capture_kinds)
+        let (_, captures) = self.parser.captures();
+        render(self.input(), captures, self.parser.capture_kinds())
     }
 
-    /// Memo cache diagnostics from the most recent parse. `hits` /
-    /// `misses` reflect the warm re-parse's consumption of the seeded
-    /// cache; `entries` is the post-parse cache size. Primarily useful
-    /// for benchmarks measuring incremental speedup.
     pub fn last_stats(&self) -> MemoStats {
-        self.last_stats
-    }
-
-    fn reparse(&mut self) {
-        let seeded = std::mem::take(&mut self.cache);
-        let (result, stats, cache_after) =
-            VM::new_with_cache(&self.program.code, self.input.as_bytes(), seeded).run_with_cache();
-        self.cache = cache_after;
-        self.matched = result.matched;
-        self.captures = result.captures;
-        self.last_stats = stats;
+        self.parser.last_stats()
     }
 }
 

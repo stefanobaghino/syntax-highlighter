@@ -1,7 +1,8 @@
-use syntax_highlighter::pegvm::{parse_grammar, CharSet, Pattern};
+use syntax_highlighter::pegc::{parse as parse_src, Pattern};
+use syntax_highlighter::pegvm::CharSet;
 
-fn parse(src: &str) -> syntax_highlighter::pegvm::Grammar {
-    parse_grammar(src).expect("parse failed")
+fn parse(src: &str) -> syntax_highlighter::pegc::Grammar {
+    parse_src(src).expect("parse failed")
 }
 
 #[test]
@@ -172,9 +173,9 @@ fn dash_in_class_at_end_is_literal() {
 
 #[test]
 fn end_to_end_grammar_compile_run() {
-    use syntax_highlighter::pegvm::{compile_grammar, VM};
+    use syntax_highlighter::pegvm::VM;
     let g = parse("number <- [0-9]+");
-    let prog = compile_grammar(&g.rules, &g.start).unwrap();
+    let prog = g.compile().unwrap();
     let r = VM::new(&prog.code, b"42abc").run();
     assert!(r.complete);
     assert_eq!(r.matched, 2);
@@ -182,6 +183,6 @@ fn end_to_end_grammar_compile_run() {
 
 #[test]
 fn duplicate_rule_errors() {
-    let err = parse_grammar("a <- 'x'\na <- 'y'").unwrap_err();
+    let err = parse_src("a <- 'x'\na <- 'y'").unwrap_err();
     assert!(err.message.contains("twice"), "got: {}", err.message);
 }
