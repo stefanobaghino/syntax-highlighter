@@ -121,11 +121,15 @@ pub struct VM<'p, 'i> {
 /// and for successful entries `>= end_sp`. Incremental parsing uses it as
 /// the invalidation bound: an edit touching any byte before
 /// `examined_max` may change the rule's outcome, so the entry is stale.
+///
+/// Fields are `pub(crate)` so the `incremental` module (which holds the
+/// `MemoCache` that reuses entries across edits) can read and shift them.
+/// Outside the crate the type is opaque.
 #[derive(Debug, Clone)]
-struct MemoEntry {
-    end_sp: Option<usize>,
-    examined_max: usize,
-    captures: Vec<Capture>,
+pub(crate) struct MemoEntry {
+    pub(crate) end_sp: Option<usize>,
+    pub(crate) examined_max: usize,
+    pub(crate) captures: Vec<Capture>,
 }
 
 #[derive(Debug, Clone)]
