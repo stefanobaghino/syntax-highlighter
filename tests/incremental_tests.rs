@@ -15,8 +15,9 @@
 
 use std::collections::HashMap;
 
+use syntax_highlighter::grammar::{compile, Pattern};
 use syntax_highlighter::highlight::Highlighter;
-use syntax_highlighter::pegvm::{compile_grammar, CharSet, MatchResult, MemoCache, Pattern, VM};
+use syntax_highlighter::pegvm::{CharSet, MatchResult, MemoCache, VM};
 
 fn two_rule_grammar() -> syntax_highlighter::pegvm::Program {
     // start <- word word
@@ -39,7 +40,7 @@ fn two_rule_grammar() -> syntax_highlighter::pegvm::Program {
             b'a', b'z',
         )])))),
     );
-    compile_grammar(&rules, "start").unwrap()
+    compile(&rules, "start").unwrap()
 }
 
 #[test]

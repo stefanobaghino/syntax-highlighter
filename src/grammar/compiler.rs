@@ -1,17 +1,7 @@
 use std::collections::HashMap;
 
-use super::instruction::{CaptureKind, Instruction, Label, MemoId};
 use super::pattern::Pattern;
-
-#[derive(Debug, Clone)]
-pub struct Program {
-    pub code: Vec<Instruction>,
-    pub capture_kinds: Vec<String>,
-    /// Number of memoized rules. Each rule gets a distinct `MemoId` in the
-    /// range `0..memo_count`, assigned in compilation order, so the VM can
-    /// size its memo table once up front.
-    pub memo_count: usize,
-}
+use crate::pegvm::{CaptureKind, Instruction, Label, MemoId, Program};
 
 #[derive(Debug)]
 pub enum CompileError {
@@ -201,7 +191,7 @@ pub fn compile_pattern(pat: &Pattern) -> Program {
     c.emit(Instruction::End);
     if let Some((_, name)) = c.pending_calls.first() {
         panic!(
-            "compile_pattern: unresolved NonTerminal({}) — use compile_grammar",
+            "compile_pattern: unresolved NonTerminal({}) — use compile",
             name
         );
     }
@@ -218,10 +208,7 @@ pub fn compile_pattern(pat: &Pattern) -> Program {
 ///   0: Call(<start address>)
 ///   1: End
 ///   2..: rule bodies, each ending with Return
-pub fn compile_grammar(
-    rules: &HashMap<String, Pattern>,
-    start: &str,
-) -> Result<Program, CompileError> {
+pub fn compile(rules: &HashMap<String, Pattern>, start: &str) -> Result<Program, CompileError> {
     if !rules.contains_key(start) {
         return Err(CompileError::UnknownStartRule(start.to_string()));
     }

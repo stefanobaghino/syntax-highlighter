@@ -1,4 +1,4 @@
-use super::instruction::CharSet;
+use crate::pegvm::CharSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pattern {

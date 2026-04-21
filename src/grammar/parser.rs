@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use super::instruction::CharSet;
 use super::pattern::Pattern;
+use crate::pegvm::CharSet;
 
 #[derive(Debug, Clone)]
 pub struct Grammar {

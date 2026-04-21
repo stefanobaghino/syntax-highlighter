@@ -56,10 +56,8 @@
 
 pub mod theme;
 
-use crate::pegvm::{
-    compile_grammar, incremental::Edit, parse_grammar, Capture, CompileError, MemoCache, MemoStats,
-    ParseError, Program, VM,
-};
+use crate::grammar::{compile, parse, CompileError, ParseError};
+use crate::pegvm::{incremental::Edit, Capture, MemoCache, MemoStats, Program, VM};
 
 #[derive(Debug)]
 pub enum HighlightError {
@@ -106,8 +104,8 @@ pub struct Highlighter {
 
 impl Highlighter {
     pub fn new(grammar_source: &str) -> Result<Self, HighlightError> {
-        let g = parse_grammar(grammar_source)?;
-        let program = compile_grammar(&g.rules, &g.start)?;
+        let g = parse(grammar_source)?;
+        let program = compile(&g.rules, &g.start)?;
         Ok(Self {
             program,
             input: String::new(),

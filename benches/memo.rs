@@ -15,7 +15,8 @@
 
 use std::time::Instant;
 
-use syntax_highlighter::pegvm::{compile_grammar, parse_grammar, Program, VM};
+use syntax_highlighter::grammar::{compile, parse};
+use syntax_highlighter::pegvm::{Program, VM};
 
 #[path = "common.rs"]
 mod common;
@@ -47,10 +48,9 @@ struct GrammarCase {
     inputs: Vec<(&'static str, &'static [u8])>,
 }
 
-fn compile(name: &str, src: &str) -> Program {
-    let grammar = parse_grammar(src).unwrap_or_else(|e| panic!("parse {name}: {e}"));
-    compile_grammar(&grammar.rules, &grammar.start)
-        .unwrap_or_else(|e| panic!("compile {name}: {e:?}"))
+fn compile_case(name: &str, src: &str) -> Program {
+    let grammar = parse(src).unwrap_or_else(|e| panic!("parse {name}: {e}"));
+    compile(&grammar.rules, &grammar.start).unwrap_or_else(|e| panic!("compile {name}: {e:?}"))
 }
 
 /// Run one cell: `runs` executions of the VM at a fixed threshold. Returns
@@ -153,7 +153,7 @@ fn main() {
     let cases = [
         GrammarCase {
             name: "json",
-            program: compile("json", JSON_GRAMMAR),
+            program: compile_case("json", JSON_GRAMMAR),
             inputs: vec![
                 ("small", JSON_SMALL.as_bytes()),
                 ("medium", JSON_MEDIUM.as_bytes()),
@@ -162,7 +162,7 @@ fn main() {
         },
         GrammarCase {
             name: "toml",
-            program: compile("toml", TOML_GRAMMAR),
+            program: compile_case("toml", TOML_GRAMMAR),
             inputs: vec![
                 ("small", TOML_SMALL.as_bytes()),
                 ("medium", TOML_MEDIUM.as_bytes()),
@@ -171,7 +171,7 @@ fn main() {
         },
         GrammarCase {
             name: "sql",
-            program: compile("sql", SQL_GRAMMAR),
+            program: compile_case("sql", SQL_GRAMMAR),
             inputs: vec![
                 ("small", SQL_SMALL.as_bytes()),
                 ("medium", SQL_MEDIUM.as_bytes()),
