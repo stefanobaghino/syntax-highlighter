@@ -42,7 +42,11 @@ statement  <- select_stmt
             / update_stmt
             / delete_stmt
             / create_table_stmt
+            / create_index_stmt
+            / create_view_stmt
             / drop_table_stmt
+            / drop_index_stmt
+            / drop_view_stmt
             / alter_table_stmt
 
 # --- SELECT statement -------------------------------------------------
@@ -271,6 +275,25 @@ alter_table_stmt <- kw_alter ws kw_table ws qualified_table_name ws (
     / kw_add (ws kw_column)? ws column_def
     / kw_drop (ws kw_column)? ws @variable{bare_ident_nonkw}
   )
+
+# --- DDL: CREATE / DROP INDEX and VIEW -------------------------------
+
+create_index_stmt <- kw_create (ws kw_unique)? ws kw_index
+                     (ws kw_if ws kw_not ws kw_exists)?
+                     ws qualified_table_name
+                     ws kw_on ws @type{bare_ident_nonkw}
+                     ws @punctuation{'('} ws indexed_col_list ws @punctuation{')'}
+                     (ws where_clause)?
+
+drop_index_stmt   <- kw_drop ws kw_index (ws kw_if ws kw_exists)? ws qualified_table_name
+
+create_view_stmt  <- kw_create (ws (kw_temporary / kw_temp))? ws kw_view
+                     (ws kw_if ws kw_not ws kw_exists)?
+                     ws qualified_table_name
+                     (ws @punctuation{'('} ws ident_list ws @punctuation{')'})?
+                     ws kw_as ws select_stmt
+
+drop_view_stmt    <- kw_drop ws kw_view (ws kw_if ws kw_exists)? ws qualified_table_name
 
 # --- Expressions (low → high precedence) -------------------------------
 # Classic precedence-climbing without left recursion. Each level either
@@ -515,6 +538,8 @@ kw_rowid     <- @keyword{rowid_body !ident_char}
 kw_strict    <- @keyword{strict_body !ident_char}
 kw_without   <- @keyword{without_body !ident_char}
 kw_to        <- @keyword{to_body !ident_char}
+kw_index     <- @keyword{index_body !ident_char}
+kw_view      <- @keyword{view_body !ident_char}
 
 # Keyword bodies — raw letter matchers, no boundary check.
 
@@ -631,6 +656,8 @@ rowid_body     <- [rR][oO][wW][iI][dD]
 strict_body    <- [sS][tT][rR][iI][cC][tT]
 without_body   <- [wW][iI][tT][hH][oO][uU][tT]
 to_body        <- [tT][oO]
+index_body     <- [iI][nN][dD][eE][xX]
+view_body      <- [vV][iI][eE][wW]
 
 # Keyword negative-lookahead for the identifier rule.
 #
@@ -703,6 +730,7 @@ keyword_word <-
     / check_body           # 5
     / cross_body           # 5
     / group_body           # 5
+    / index_body           # 5
     / inner_body           # 5
     / limit_body           # 5
     / match_body           # 5
@@ -731,6 +759,7 @@ keyword_word <-
     / over_body            # 4
     / temp_body            # 4
     / then_body            # 4
+    / view_body            # 4
     / when_body            # 4
     / with_body            # 4
     / add_body             # 3

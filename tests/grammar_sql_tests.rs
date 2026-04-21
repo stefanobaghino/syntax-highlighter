@@ -810,6 +810,59 @@ fn alter_table_drop_column() {
 }
 
 #[test]
+fn create_index_basic() {
+    assert_complete_full("CREATE INDEX i ON t (a)");
+}
+
+#[test]
+fn create_unique_index_multi_col() {
+    assert_complete_full("CREATE UNIQUE INDEX i ON t (a, b)");
+}
+
+#[test]
+fn create_partial_index() {
+    assert_complete_full("CREATE INDEX i ON t (a) WHERE a > 0");
+}
+
+#[test]
+fn create_expression_index() {
+    assert_complete_full("CREATE INDEX i ON t (LOWER(a))");
+}
+
+#[test]
+fn create_index_if_not_exists() {
+    assert_complete_full("CREATE INDEX IF NOT EXISTS i ON t (a)");
+}
+
+#[test]
+fn drop_index_variants() {
+    assert_complete_full("DROP INDEX i");
+    assert_complete_full("DROP INDEX IF EXISTS main.i");
+}
+
+#[test]
+fn create_view_basic() {
+    assert_complete_full("CREATE VIEW v AS SELECT * FROM t");
+}
+
+#[test]
+fn create_view_with_columns() {
+    assert_complete_full("CREATE VIEW v (a, b) AS SELECT x, y FROM t");
+}
+
+#[test]
+fn create_temp_view() {
+    assert_complete_full("CREATE TEMP VIEW v AS SELECT 1");
+    assert_complete_full("CREATE TEMPORARY VIEW v AS SELECT 1");
+}
+
+#[test]
+fn drop_view_variants() {
+    assert_complete_full("DROP VIEW v");
+    assert_complete_full("DROP VIEW IF EXISTS v");
+}
+
+#[test]
 fn create_table_column_kinds() {
     let input = "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)";
     let (caps, kinds) = assert_complete_full(input);
