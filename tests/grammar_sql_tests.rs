@@ -521,6 +521,97 @@ fn top_level_window_clause() {
 }
 
 #[test]
+fn insert_values_basic() {
+    assert_complete_full("INSERT INTO t VALUES (1, 2, 3)");
+}
+
+#[test]
+fn insert_with_column_list() {
+    assert_complete_full("INSERT INTO t (a, b) VALUES (1, 2)");
+}
+
+#[test]
+fn insert_multi_row_values() {
+    assert_complete_full("INSERT INTO t (a) VALUES (1), (2), (3)");
+}
+
+#[test]
+fn insert_default_values() {
+    assert_complete_full("INSERT INTO t DEFAULT VALUES");
+}
+
+#[test]
+fn insert_from_select() {
+    assert_complete_full("INSERT INTO t SELECT * FROM s");
+}
+
+#[test]
+fn insert_or_variants() {
+    for prefix in [
+        "INSERT OR REPLACE",
+        "INSERT OR ROLLBACK",
+        "INSERT OR ABORT",
+        "INSERT OR FAIL",
+        "INSERT OR IGNORE",
+    ] {
+        let input = format!("{prefix} INTO t VALUES (1)");
+        assert_complete_full(&input);
+    }
+}
+
+#[test]
+fn replace_shorthand() {
+    // Bare REPLACE INTO is equivalent to INSERT OR REPLACE.
+    assert_complete_full("REPLACE INTO t VALUES (1)");
+}
+
+#[test]
+fn insert_with_alias() {
+    assert_complete_full("INSERT INTO t AS x (a) VALUES (1)");
+}
+
+#[test]
+fn insert_on_conflict_do_nothing() {
+    assert_complete_full("INSERT INTO t (a) VALUES (1) ON CONFLICT (a) DO NOTHING");
+}
+
+#[test]
+fn insert_on_conflict_do_update() {
+    assert_complete_full(
+        "INSERT INTO t (a, b) VALUES (1, 2) \
+         ON CONFLICT (a) DO UPDATE SET b = excluded.b WHERE b > 0",
+    );
+}
+
+#[test]
+fn insert_on_conflict_without_target() {
+    assert_complete_full("INSERT INTO t VALUES (1) ON CONFLICT DO NOTHING");
+}
+
+#[test]
+fn insert_returning_star() {
+    assert_complete_full("INSERT INTO t VALUES (1) RETURNING *");
+}
+
+#[test]
+fn insert_returning_columns() {
+    assert_complete_full("INSERT INTO t (a, b) VALUES (1, 2) RETURNING a, b AS bb");
+}
+
+#[test]
+fn insert_with_cte() {
+    assert_complete_full("WITH src AS (SELECT 1 AS a) INSERT INTO t (a) SELECT a FROM src");
+}
+
+#[test]
+fn insert_into_emits_type_on_table() {
+    let input = "INSERT INTO t VALUES (1)";
+    let (caps, kinds) = assert_complete_full(input);
+    let types = spans_for(&caps, &kinds, "type", input);
+    assert_eq!(types, vec!["t"]);
+}
+
+#[test]
 fn window_captures_include_over_and_partition() {
     let input = "SELECT SUM(x) OVER (PARTITION BY y ORDER BY z) FROM t";
     let (caps, kinds) = assert_complete_full(input);

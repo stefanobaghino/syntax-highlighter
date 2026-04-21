@@ -38,6 +38,7 @@
 sql_file   <- ws (statement (stmt_sep statement)*)? stmt_sep? ws !.
 stmt_sep   <- ws @punctuation{';'} ws
 statement  <- select_stmt
+            / insert_stmt
 
 # --- SELECT statement -------------------------------------------------
 
@@ -127,6 +128,41 @@ frame_exclude  <- kw_no ws kw_others
                 / kw_current ws kw_row
                 / kw_group
                 / kw_ties
+
+# --- DML: INSERT ------------------------------------------------------
+# UPSERT's DO UPDATE path and UPDATE (added in a later commit) share
+# `update_set_list`, which is defined here.
+
+insert_stmt    <- with_clause? insert_prefix ws kw_into ws qualified_table_name
+                  (ws kw_as ws @variable{bare_ident_nonkw})?
+                  (ws @punctuation{'('} ws ident_list ws @punctuation{')'})?
+                  ws insert_source
+                  (ws upsert_clause)*
+                  (ws returning_clause)?
+
+insert_prefix  <- kw_insert (ws kw_or ws conflict_action)?
+                / kw_replace
+
+insert_source  <- kw_default ws kw_values
+                / kw_values ws values_row (ws @punctuation{','} ws values_row)*
+                / select_stmt
+values_row     <- @punctuation{'('} ws expr (ws @punctuation{','} ws expr)* ws @punctuation{')'}
+
+conflict_action <- kw_rollback / kw_abort / kw_fail / kw_ignore / kw_replace
+
+upsert_clause  <- kw_on ws kw_conflict
+                  (ws @punctuation{'('} ws indexed_col_list ws @punctuation{')'} (ws where_clause)?)?
+                  ws kw_do ws (kw_nothing
+                             / kw_update ws kw_set ws update_set_list (ws where_clause)?)
+
+indexed_col_list <- indexed_col (ws @punctuation{','} ws indexed_col)*
+indexed_col      <- expr (ws kw_collate ws @type{bare_ident})? (ws (kw_asc / kw_desc))?
+
+update_set_list <- update_set_item (ws @punctuation{','} ws update_set_item)*
+update_set_item <- @variable{bare_ident_nonkw} ws @operator{'='} ws expr
+                 / @punctuation{'('} ws ident_list ws @punctuation{')'} ws @operator{'='} ws expr
+
+returning_clause <- kw_returning ws result_list
 
 # --- Expressions (low → high precedence) -------------------------------
 # Classic precedence-climbing without left recursion. Each level either
@@ -317,6 +353,24 @@ kw_ties      <- @keyword{ties_body !ident_char}
 kw_others    <- @keyword{others_body !ident_char}
 kw_no        <- @keyword{no_body !ident_char}
 
+# DML (INSERT family). UPDATE lands in a later commit but its keyword
+# rule goes here so UPSERT's DO UPDATE path can use it now.
+kw_insert    <- @keyword{insert_body !ident_char}
+kw_replace   <- @keyword{replace_body !ident_char}
+kw_into      <- @keyword{into_body !ident_char}
+kw_values    <- @keyword{values_body !ident_char}
+kw_default   <- @keyword{default_body !ident_char}
+kw_conflict  <- @keyword{conflict_body !ident_char}
+kw_do        <- @keyword{do_body !ident_char}
+kw_nothing   <- @keyword{nothing_body !ident_char}
+kw_rollback  <- @keyword{rollback_body !ident_char}
+kw_abort     <- @keyword{abort_body !ident_char}
+kw_fail      <- @keyword{fail_body !ident_char}
+kw_ignore    <- @keyword{ignore_body !ident_char}
+kw_set       <- @keyword{set_body !ident_char}
+kw_returning <- @keyword{returning_body !ident_char}
+kw_update    <- @keyword{update_body !ident_char}
+
 # Keyword bodies — raw letter matchers, no boundary check.
 
 sel_body       <- [sS][eE][lL][eE][cC][tT]
@@ -383,6 +437,21 @@ exclude_body   <- [eE][xX][cC][lL][uU][dD][eE]
 ties_body      <- [tT][iI][eE][sS]
 others_body    <- [oO][tT][hH][eE][rR][sS]
 no_body        <- [nN][oO]
+insert_body    <- [iI][nN][sS][eE][rR][tT]
+replace_body   <- [rR][eE][pP][lL][aA][cC][eE]
+into_body      <- [iI][nN][tT][oO]
+values_body    <- [vV][aA][lL][uU][eE][sS]
+default_body   <- [dD][eE][fF][aA][uU][lL][tT]
+conflict_body  <- [cC][oO][nN][fF][lL][iI][cC][tT]
+do_body        <- [dD][oO]
+nothing_body   <- [nN][oO][tT][hH][iI][nN][gG]
+rollback_body  <- [rR][oO][lL][lL][bB][aA][cC][kK]
+abort_body     <- [aA][bB][oO][rR][tT]
+fail_body      <- [fF][aA][iI][lL]
+ignore_body    <- [iI][gG][nN][oO][rR][eE]
+set_body       <- [sS][eE][tT]
+returning_body <- [rR][eE][tT][uU][rR][nN][iI][nN][gG]
+update_body    <- [uU][pP][dD][aA][tT][eE]
 
 # Keyword negative-lookahead for the identifier rule.
 #
@@ -403,18 +472,29 @@ no_body        <- [nN][oO]
 # boundary-free.
 keyword_word <-
     ( intersect_body       # 9
+    / returning_body       # 9
+    / conflict_body        # 8
     / distinct_body        # 8
+    / rollback_body        # 8
     / between_body         # 7
     / collate_body         # 7
+    / default_body         # 7
     / natural_body         # 7
+    / nothing_body         # 7
+    / replace_body         # 7
     / escape_body          # 6
     / except_body          # 6
     / exists_body          # 6
     / having_body          # 6
+    / ignore_body          # 6
+    / insert_body          # 6
     / offset_body          # 6
     / regexp_body          # 6
     / sel_body             # 6 (SELECT)
+    / update_body          # 6
+    / values_body          # 6
     / window_body          # 6
+    / abort_body           # 5
     / bool_body            # 5 (FALSE) / 4 (TRUE); alternation handles both
     / cross_body           # 5
     / group_body           # 5
@@ -431,9 +511,11 @@ keyword_word <-
     / cast_body            # 4
     / desc_body            # 4
     / else_body            # 4
+    / fail_body            # 4
     / from_body            # 4
     / full_body            # 4
     / glob_body            # 4
+    / into_body            # 4
     / join_body            # 4
     / left_body            # 4
     / like_body            # 4
@@ -447,8 +529,10 @@ keyword_word <-
     / asc_body             # 3
     / end_body             # 3
     / not_body             # 3
+    / set_body             # 3
     / as_body              # 2
     / by_body              # 2
+    / do_body              # 2
     / in_body              # 2
     / is_body              # 2
     / on_body              # 2
