@@ -2,6 +2,11 @@
 //! and captures survive replay — even when the memoized rule is nested
 //! inside an outer capture (the capture-replay bug most likely to bite a
 //! naive first implementation).
+//!
+//! These tests pin `with_memo_threshold(0)` explicitly. They exercise the
+//! mechanism on tiny inputs (1–3 bytes) whose rule bodies fall below the
+//! production default; opting out makes the assertions independent of the
+//! default value.
 
 use std::collections::HashMap;
 
@@ -43,7 +48,9 @@ fn second_alternative_reuses_memoized_x() {
         Pattern::CharClass(CharSet::from_ranges(&[(b'a', b'z')])),
     );
     let prog = compile_grammar(&rules, "start").unwrap();
-    let (result, stats) = VM::new(&prog.code, b"abb").run_with_memo_stats();
+    let (result, stats) = VM::new(&prog.code, b"abb")
+        .with_memo_threshold(0)
+        .run_with_memo_stats();
     assert_eq!(
         result,
         MatchResult {
@@ -72,7 +79,9 @@ fn memo_table_populates_on_success() {
         Pattern::CharClass(CharSet::from_ranges(&[(b'a', b'z')])),
     );
     let prog = compile_grammar(&rules, "start").unwrap();
-    let (_, stats) = VM::new(&prog.code, b"ab").run_with_memo_stats();
+    let (_, stats) = VM::new(&prog.code, b"ab")
+        .with_memo_threshold(0)
+        .run_with_memo_stats();
     // start at sp=0, X at sp=0, X at sp=1 — three distinct entries.
     assert_eq!(stats.entries, 3);
     // No alternatives are tried twice at the same sp, so no hits.
@@ -143,7 +152,9 @@ fn memo_hit_inside_outer_capture_preserves_nesting() {
         .position(|n| n == "inner")
         .unwrap() as u16;
 
-    let (result, stats) = VM::new(&prog.code, b"ay").run_with_memo_stats();
+    let (result, stats) = VM::new(&prog.code, b"ay")
+        .with_memo_threshold(0)
+        .run_with_memo_stats();
     assert!(result.complete);
     assert_eq!(result.matched, 2);
     // Outer capture spans the full input [0,2); inner captures the 'a' at [0,1).
@@ -188,7 +199,9 @@ fn cached_failure_short_circuits_not_predicate() {
     );
     rules.insert("A".into(), Pattern::literal("a"));
     let prog = compile_grammar(&rules, "start").unwrap();
-    let (result, stats) = VM::new(&prog.code, b"c").run_with_memo_stats();
+    let (result, stats) = VM::new(&prog.code, b"c")
+        .with_memo_threshold(0)
+        .run_with_memo_stats();
     assert!(result.complete);
     assert_eq!(result.matched, 1);
     assert!(
@@ -225,7 +238,9 @@ fn nested_memoized_rule_failures_both_cached() {
         Pattern::CharClass(CharSet::from_ranges(&[(b'a', b'z')])),
     );
     let prog = compile_grammar(&rules, "start").unwrap();
-    let (result, stats) = VM::new(&prog.code, b"x").run_with_memo_stats();
+    let (result, stats) = VM::new(&prog.code, b"x")
+        .with_memo_threshold(0)
+        .run_with_memo_stats();
     assert!(result.complete);
     assert_eq!(result.matched, 1);
     // Entries expected: start(success at 0), outer(failure at 0),
@@ -262,7 +277,9 @@ fn and_predicate_with_memoized_rule() {
         Pattern::CharClass(CharSet::from_ranges(&[(b'a', b'z')])),
     );
     let prog = compile_grammar(&rules, "start").unwrap();
-    let (result, stats) = VM::new(&prog.code, b"y").run_with_memo_stats();
+    let (result, stats) = VM::new(&prog.code, b"y")
+        .with_memo_threshold(0)
+        .run_with_memo_stats();
     assert!(result.complete);
     assert_eq!(result.matched, 1);
     assert!(stats.hits >= 1, "expected a hit, got {}", stats.hits);

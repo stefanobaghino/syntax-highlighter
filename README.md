@@ -112,19 +112,6 @@ These need no new VM or compiler machinery.
 
 Each item is a self-contained feature that unlocks further work.
 
-- **Threshold-based memoization.** Runtime filter on `MemoClose`: skip
-  inserting an entry whose matched span is shorter than some byte
-  threshold. Tiny leaf rules pay the lookup cost without the storage
-  win, and empirically that is where most of the memo-table memory is
-  wasted (Yedidia thesis §5.2.4 — gains flatten around 4096 bytes;
-  GPeg defaults to 512 and benchmarks at 128). No grammar changes, one
-  configurable constant. The sweep harness at `benches/memo.rs`
-  (`cargo bench --bench memo`) produces the `(time, entries, hit_rate)`
-  data to pick the default from; the VM already exposes
-  `VM::with_memo_threshold`. The remaining work is choosing the default
-  and wiring it through the public API. Listed before incremental
-  parsing because it is what makes a persistent memo table
-  memory-feasible — GPeg's rationale for having this filter at all.
 - **Incremental parsing.** O(Δ) per input change instead of O(n), by
   invalidating only the memo entries whose spans cross the edit point
   (Yedidia's thesis, Ch. 4). Covers both append-only streaming (an LLM
@@ -132,16 +119,17 @@ Each item is a self-contained feature that unlocks further work.
   position edits (a cursor insertion or deletion anywhere in the input).
   Builds on the memoization layer — the memo table is the substrate;
   this task adds the public edit/diff API and the invalidation protocol.
-  Depends on threshold-based memoization above for memory feasibility:
-  without the threshold, every rule call at every position accumulates
-  an entry in a table that must survive across edits.
+  The memo-threshold filter (`VM::DEFAULT_MEMO_THRESHOLD`) is what
+  makes this memory-feasible: without it, every rule call at every
+  position would accumulate an entry in a table that must survive
+  across edits.
 - **Left recursion support.** Not needed for JSON, but natural for some
   grammar idioms (especially arithmetic-expression grammars). The
   intended reference is Medeiros, Mascarenhas & Ierusalimschy 2014 —
   §5 gives a parsing-machine extension matching ours, and its
   bounded-recursion L table is stack-structured and separate from the
-  packrat memo, so it composes cleanly with threshold-based memoization
-  above. Warth/Douglass/Millstein 2008 is the seminal paper and the
+  packrat memo, so it composes cleanly with the existing memo-threshold
+  filter. Warth/Douglass/Millstein 2008 is the seminal paper and the
   most widely cited approach, but it couples seed-and-grow to the memo
   table itself — which would fight the threshold filter — and inherits
   the nullable-LR bugs Medeiros 2014 §6 documents.
@@ -149,10 +137,10 @@ Each item is a self-contained feature that unlocks further work.
   annotation (e.g. `Rule <-! body` or `{{! expr }}`) disabling caching
   on named hot spots. Grammar authors should not have to reason about
   cache strategy — that is the library's job — so this is reserved as
-  an escape hatch, not a default. Add it only if, after threshold-based
-  memoization, profiling still points at specific rules where rematch
-  beats lookup. Inverts GPeg's `{{ p }}` opt-in at this level, which
-  maps cleanly if the need arises.
+  an escape hatch, not a default. Add it only if, on top of the
+  memo-threshold filter, profiling still points at specific rules
+  where rematch beats lookup. Inverts GPeg's `{{ p }}` opt-in at this
+  level, which maps cleanly if the need arises.
 - **Bytecode serialization.** Pre-compile grammars once and ship the
   `Vec<Instruction>` plus capture-name table as data. Useful for embedded
   distributions and startup-time-sensitive consumers.
