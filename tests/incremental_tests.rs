@@ -1,13 +1,21 @@
 //! Integration tests for the incremental-parsing public surface.
 //!
-//! Exercises the full loop: run a VM, reclaim the `MemoCache`, seed a
-//! fresh VM with it, and confirm the second run hits the cache and
-//! produces identical output. Parse-edit-reparse equivalence tests over
-//! real grammars arrive alongside the `IncrementalHighlighter` API in
-//! a follow-up commit.
+//! Two layers:
+//!
+//! 1. **VM ↔ `MemoCache` round-trip.** Runs a VM, reclaims the
+//!    `MemoCache`, seeds a fresh VM with it, confirms the second run
+//!    hits the cache and produces identical output.
+//! 2. **`Highlighter` equivalence under edits.** For each shipped
+//!    grammar, runs a fixed sequence of edits through one `Highlighter`
+//!    and compares the post-edit captures against a second `Highlighter`
+//!    driven only via `set_input(current_input)`. The equality
+//!    `inc.captures() == fresh.captures()` is the strongest
+//!    correctness property this crate has — if any edit invalidates
+//!    more or fewer entries than it should, this test catches it.
 
 use std::collections::HashMap;
 
+use syntax_highlighter::highlight::Highlighter;
 use syntax_highlighter::pegvm::{compile_grammar, CharSet, MatchResult, MemoCache, Pattern, VM};
 
 fn two_rule_grammar() -> syntax_highlighter::pegvm::Program {
@@ -91,4 +99,152 @@ fn empty_cache_behaves_like_fresh_vm() {
     let fresh: MatchResult = VM::new(&prog.code, input).run();
     let seeded: MatchResult = VM::new_with_cache(&prog.code, input, MemoCache::new()).run();
     assert_eq!(fresh, seeded);
+}
+
+const JSON_GRAMMAR: &str = include_str!("../grammars/json.peg");
+const TOML_GRAMMAR: &str = include_str!("../grammars/toml.peg");
+const SQL_GRAMMAR: &str = include_str!("../grammars/sqlite.peg");
+
+/// Compare the stateful `inc` against a fresh `Highlighter` driven via
+/// `set_input(inc.input())`. The only correctness contract exposed to
+/// users is that the two must agree bit-for-bit on captures and
+/// `matched` at every observable step.
+fn assert_equivalent(inc: &Highlighter, grammar: &str, tag: &str) {
+    let mut fresh = Highlighter::new(grammar).expect("grammar compiles");
+    fresh.set_input(inc.input().to_string());
+    assert_eq!(
+        inc.captures(),
+        fresh.captures(),
+        "captures diverged at {tag}"
+    );
+    assert_eq!(
+        inc.highlight(),
+        fresh.highlight(),
+        "rendered output diverged at {tag}"
+    );
+}
+
+#[test]
+fn json_incremental_matches_fresh_across_edit_sequence() {
+    let mut inc = Highlighter::new(JSON_GRAMMAR).unwrap();
+    inc.set_input(r#"{"a": 1, "b": [true, null, 3]}"#.to_string());
+    assert_equivalent(&inc, JSON_GRAMMAR, "json initial");
+
+    // Replace the number 1 with a longer number.
+    let pos = inc.input().find('1').unwrap();
+    inc.edit(pos, pos + 1, "12345");
+    assert_equivalent(&inc, JSON_GRAMMAR, "json replace number");
+
+    // Insert a new property before the closing brace.
+    let close = inc.input().rfind('}').unwrap();
+    inc.edit(close, close, r#", "c": "hi""#);
+    assert_equivalent(&inc, JSON_GRAMMAR, "json insert property");
+
+    // Delete the "b" array entirely.
+    let b_start = inc.input().find(r#", "b""#).unwrap();
+    let arr_end = inc.input()[b_start..].find(']').unwrap() + b_start + 1;
+    inc.edit(b_start, arr_end, "");
+    assert_equivalent(&inc, JSON_GRAMMAR, "json delete array");
+
+    // Replace everything — the set_input fast path.
+    inc.set_input("null".to_string());
+    assert_equivalent(&inc, JSON_GRAMMAR, "json set_input reset");
+}
+
+#[test]
+fn toml_incremental_matches_fresh_across_edit_sequence() {
+    let mut inc = Highlighter::new(TOML_GRAMMAR).unwrap();
+    inc.set_input("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n".to_string());
+    assert_equivalent(&inc, TOML_GRAMMAR, "toml initial");
+
+    // Append a new section — streaming pattern.
+    inc.append("\n[dependencies]\nserde = \"1.0\"\n");
+    assert_equivalent(&inc, TOML_GRAMMAR, "toml append section");
+
+    // Rename [package] to [pkg].
+    let start = inc.input().find("[package]").unwrap();
+    inc.edit(start, start + "[package]".len(), "[pkg]");
+    assert_equivalent(&inc, TOML_GRAMMAR, "toml rename section");
+
+    // Delete the version line.
+    let vstart = inc.input().find("version").unwrap();
+    let vend = inc.input()[vstart..].find('\n').unwrap() + vstart + 1;
+    inc.edit(vstart, vend, "");
+    assert_equivalent(&inc, TOML_GRAMMAR, "toml delete version");
+}
+
+#[test]
+fn sql_incremental_matches_fresh_across_edit_sequence() {
+    let mut inc = Highlighter::new(SQL_GRAMMAR).unwrap();
+    inc.set_input("SELECT id, name FROM users WHERE active = 1;".to_string());
+    assert_equivalent(&inc, SQL_GRAMMAR, "sql initial");
+
+    // Insert an ORDER BY clause.
+    let semi = inc.input().rfind(';').unwrap();
+    inc.edit(semi, semi, " ORDER BY id DESC");
+    assert_equivalent(&inc, SQL_GRAMMAR, "sql insert order by");
+
+    // Replace the table name.
+    let users = inc.input().find("users").unwrap();
+    inc.edit(users, users + "users".len(), "customers");
+    assert_equivalent(&inc, SQL_GRAMMAR, "sql rename table");
+
+    // Delete the WHERE clause.
+    let where_start = inc.input().find(" WHERE").unwrap();
+    let where_end = inc.input().find(" ORDER BY").unwrap();
+    inc.edit(where_start, where_end, "");
+    assert_equivalent(&inc, SQL_GRAMMAR, "sql delete where");
+}
+
+#[test]
+fn append_char_by_char_matches_fresh_on_every_step() {
+    // Streaming-LLM scenario: the classic case incremental parsing is
+    // designed to accelerate. Equivalence must hold at every single
+    // character boundary, not just at the end.
+    let target = r#"{"a": 1, "b": [true, null]}"#;
+    let mut inc = Highlighter::new(JSON_GRAMMAR).unwrap();
+    inc.set_input(String::new());
+    for (i, ch) in target.char_indices() {
+        inc.append(&target[i..i + ch.len_utf8()]);
+        assert_equivalent(&inc, JSON_GRAMMAR, &format!("json char-by-char step {i}"));
+    }
+}
+
+#[test]
+fn set_input_resets_cache_cleanly() {
+    // Consecutive set_input calls on unrelated inputs must not leak
+    // state between parses — every set_input rebuilds the cache from
+    // scratch, so the equivalence property holds trivially after each
+    // reset.
+    let mut inc = Highlighter::new(JSON_GRAMMAR).unwrap();
+    inc.set_input(r#"{"a": 1}"#.to_string());
+    assert_equivalent(&inc, JSON_GRAMMAR, "reset step 1");
+    inc.set_input(r#"[1, 2, 3]"#.to_string());
+    assert_equivalent(&inc, JSON_GRAMMAR, "reset step 2");
+    inc.set_input("null".to_string());
+    assert_equivalent(&inc, JSON_GRAMMAR, "reset step 3");
+}
+
+#[test]
+fn toml_section_rename_then_delete_preserves_max_sp_after_partial_parse() {
+    // Regression pin: renaming a section to something malformed leaves
+    // a top-level failure entry in the cache. A subsequent delete used
+    // to short-circuit `MemoOpen` to `fail()` without updating
+    // `max_sp` / `max_captures`, so the incremental parse reported
+    // `matched == 0` while a fresh parse on the same input reached the
+    // end of the valid prefix. Fix: failure entries are dropped
+    // unconditionally on every `apply_edit`.
+    let mut inc = Highlighter::new(TOML_GRAMMAR).unwrap();
+    inc.set_input("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n".to_string());
+
+    // Break the section header.
+    let pos = inc.input().find('[').unwrap();
+    inc.edit(pos, pos + 1, "!");
+    assert_equivalent(&inc, TOML_GRAMMAR, "after break");
+
+    // Now delete a byte inside the broken prefix. The cached top-level
+    // failure must not short-circuit the warm parse into reporting an
+    // empty captures vector.
+    inc.edit(pos, pos + 1, "");
+    assert_equivalent(&inc, TOML_GRAMMAR, "after second edit");
 }

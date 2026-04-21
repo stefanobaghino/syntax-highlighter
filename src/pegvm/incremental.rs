@@ -15,16 +15,26 @@
 //! bytes `[edit.start, edit.old_end)` with content that produces the new
 //! range `[edit.start, edit.new_end)`:
 //!
-//! - An entry at `(memo_id, start_sp)` is **invalidated** iff
+//! - A **success** entry at `(memo_id, start_sp)` is **invalidated** iff
 //!   `start_sp < edit.old_end && examined_max > edit.start`. This covers
 //!   both entries that started inside the edit region (their starting
 //!   byte has changed) and entries that started before but peeked into
 //!   it (their outcome might have depended on the changed bytes).
+//! - Any **failure** entry is dropped unconditionally on every edit.
+//!   Failure entries short-circuit `MemoOpen` to `fail()` on re-entry
+//!   without carrying the farthest-sp capture snapshot that a real
+//!   `fail()` along the slow path would write to `max_captures`; if a
+//!   warm parse hits such an entry and the overall parse then fails,
+//!   the rendered prefix would be empty regardless of how far the VM
+//!   actually progressed. Rather than teach the VM to reconstruct the
+//!   missing snapshot on a memo hit, we forfeit cross-edit failure
+//!   persistence. Intra-parse memoization still short-circuits within a
+//!   single run.
 //! - An entry with `start_sp >= edit.old_end` is **shifted** by
 //!   `delta = new_end - old_end` so its key, `end_sp`, `examined_max`,
 //!   and capture offsets land on the equivalent position in the new
 //!   input.
-//! - An entry with `start_sp < edit.old_end && examined_max <= edit.start`
+//! - A success entry with `start_sp < edit.old_end && examined_max <= edit.start`
 //!   lives entirely before the edit region — it is kept unshifted.
 //!
 //! Rebuilding the HashMap on every edit is `O(|cache|)`. Fine on the
@@ -172,6 +182,9 @@ impl MemoCache {
 }
 
 fn invalidates(edit: Edit, start_sp: usize, entry: &MemoEntry) -> bool {
+    if entry.end_sp.is_none() {
+        return true;
+    }
     start_sp < edit.old_end && entry.examined_max > edit.start
 }
 
@@ -315,28 +328,19 @@ mod tests {
     }
 
     #[test]
-    fn failure_entry_with_eof_read_is_invalidated_on_append() {
-        // Append scenario: old input had length 5. The failing rule
-        // probed position 5 (EOF), which bumped its watermark to 6 —
-        // `track_read` fires *before* the bounds check, so a read at
-        // `sp = 5` registers the intent to examine position 5 even
-        // when `input.get(5)` returns None. Appending bytes at
-        // position 5 changes what lives there, so the cached failure
-        // is stale. Predicate: `0 < 5 && 6 > 5` → drop.
-        let mut cache = populate(vec![((MemoId(0), 0), failure(6))]);
+    fn failure_entries_are_dropped_on_any_edit() {
+        // Failure entries carry no capture snapshot, so a warm `MemoOpen`
+        // hit that goes to `fail()` cannot update `max_sp`/`max_captures`
+        // the way a slow-path fail would. Rather than teach the VM to
+        // reconstruct that snapshot, we drop every failure entry on every
+        // edit — regardless of where its examined range sits relative to
+        // the edit point.
+        let mut cache = populate(vec![
+            ((MemoId(0), 0), failure(6)), // EOF-sensitive failure
+            ((MemoId(1), 0), failure(3)), // bounded failure, well before edit
+        ]);
         cache.apply_edit(Edit::insertion(5, 3));
-        assert_eq!(cache.len(), 0, "EOF-sensitive failure must be dropped");
-    }
-
-    #[test]
-    fn failure_entry_with_bounded_read_survives_append() {
-        // Failure entry examined only up to position 3 (< old_input_len).
-        // Appending bytes past the examined range doesn't affect it.
-        let mut cache = populate(vec![((MemoId(0), 0), failure(3))]);
-        cache.apply_edit(Edit::insertion(5, 3));
-        let e = cache.get(MemoId(0), 0).expect("failure must survive");
-        assert_eq!(e.end_sp, None);
-        assert_eq!(e.examined_max, 3);
+        assert_eq!(cache.len(), 0, "all failure entries must be dropped");
     }
 
     #[test]

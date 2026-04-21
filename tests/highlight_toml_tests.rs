@@ -6,23 +6,24 @@ use common::strip_ansi;
 
 const TOML_GRAMMAR: &str = include_str!("../grammars/toml.peg");
 
-fn hl() -> Highlighter {
-    Highlighter::new(TOML_GRAMMAR).expect("TOML grammar should compile")
+fn hl(input: &str) -> Highlighter {
+    let mut h = Highlighter::new(TOML_GRAMMAR).expect("TOML grammar should compile");
+    h.set_input(input.to_string());
+    h
 }
 
 #[test]
 fn parses_simple_pair() {
-    let h = hl();
     let input = "key = 1\n";
-    let (matched, caps) = h.captures(input);
+    let h = hl(input);
+    let (matched, caps) = h.captures();
     assert_eq!(matched, input.len());
     assert!(!caps.is_empty());
 }
 
 #[test]
 fn highlight_string_uses_green() {
-    let h = hl();
-    let out = h.highlight("s = \"hello\"\n");
+    let out = hl("s = \"hello\"\n").highlight();
     assert!(
         out.contains(theme::color_for("string")),
         "expected string color, got {:?}",
@@ -33,8 +34,7 @@ fn highlight_string_uses_green() {
 
 #[test]
 fn highlight_number_uses_yellow() {
-    let h = hl();
-    let out = h.highlight("n = 42\n");
+    let out = hl("n = 42\n").highlight();
     assert!(
         out.contains(theme::color_for("number")),
         "expected number color, got {:?}",
@@ -44,8 +44,7 @@ fn highlight_number_uses_yellow() {
 
 #[test]
 fn highlight_boolean_uses_constant() {
-    let h = hl();
-    let out = h.highlight("b = true\n");
+    let out = hl("b = true\n").highlight();
     assert!(
         out.contains(theme::color_for("constant")),
         "expected constant color, got {:?}",
@@ -57,8 +56,7 @@ fn highlight_boolean_uses_constant() {
 fn highlight_inf_uses_constant_not_number() {
     // inf / nan are @constant in this grammar, grouped with true/false
     // rather than with 42 / 3.14. Verify the color lands as constant.
-    let h = hl();
-    let out = h.highlight("f = inf\n");
+    let out = hl("f = inf\n").highlight();
     // Locate where "inf" appears and check the preceding ANSI escape.
     let idx = out.find("inf").expect("inf must appear in output");
     let preceding = &out[..idx];
@@ -71,8 +69,7 @@ fn highlight_inf_uses_constant_not_number() {
 
 #[test]
 fn highlight_comment_uses_comment_color() {
-    let h = hl();
-    let out = h.highlight("# a comment\n");
+    let out = hl("# a comment\n").highlight();
     assert!(
         out.contains(theme::color_for("comment")),
         "expected comment color, got {:?}",
@@ -85,8 +82,7 @@ fn highlight_key_uses_property_not_string() {
     // A bare key on the LHS of = should render as @property (cyan), not
     // as @string (green). This is the JSON-equivalent of the "property vs
     // string" distinction, adapted to TOML bare keys.
-    let h = hl();
-    let out = h.highlight("name = \"alice\"\n");
+    let out = hl("name = \"alice\"\n").highlight();
     let prop = theme::color_for("property");
     let str_color = theme::color_for("string");
 
@@ -109,8 +105,7 @@ fn highlight_key_uses_property_not_string() {
 
 #[test]
 fn highlight_section_header_uses_type_color() {
-    let h = hl();
-    let out = h.highlight("[package]\n");
+    let out = hl("[package]\n").highlight();
     let ty = theme::color_for("type");
     let idx = out.find("package").expect("section path must appear");
     let preceding = &out[..idx];
@@ -123,8 +118,7 @@ fn highlight_section_header_uses_type_color() {
 
 #[test]
 fn highlight_array_of_tables_header_uses_type_color() {
-    let h = hl();
-    let out = h.highlight("[[bin]]\n");
+    let out = hl("[[bin]]\n").highlight();
     let ty = theme::color_for("type");
     let idx = out.find("bin").expect("section path must appear");
     let preceding = &out[..idx];
@@ -138,7 +132,6 @@ fn highlight_array_of_tables_header_uses_type_color() {
 #[test]
 fn highlighting_preserves_input_text() {
     // Stripping ANSI codes must yield the original input byte-for-byte.
-    let h = hl();
     let input = r#"# A realistic snippet.
 [package]
 name = "demo"
@@ -154,7 +147,7 @@ serde = { version = "1.0", features = ["derive"] }
 name = "demo"
 path = "src/main.rs"
 "#;
-    let out = h.highlight(input);
+    let out = hl(input).highlight();
     let stripped = strip_ansi(&out);
     assert_eq!(stripped, input);
 }
@@ -163,26 +156,23 @@ path = "src/main.rs"
 fn blank_lines_and_trailing_comments_are_preserved() {
     // Blank lines between entries and trailing end-of-line comments must
     // survive the round trip verbatim.
-    let h = hl();
     let input = "\n\n# leading\n\nkey = 1 # trailing\n\n\n";
-    let out = h.highlight(input);
+    let out = hl(input).highlight();
     assert_eq!(strip_ansi(&out), input);
 }
 
 #[test]
 fn partial_match_unterminated_string_still_round_trips() {
     // The load-bearing strip_ansi invariant must hold on malformed input.
-    let h = hl();
     let input = "key = \"oops\n";
-    let out = h.highlight(input);
+    let out = hl(input).highlight();
     assert_eq!(strip_ansi(&out), input);
 }
 
 #[test]
 fn partial_match_unclosed_table_header_still_round_trips() {
-    let h = hl();
     let input = "[package\nname = \"x\"";
-    let out = h.highlight(input);
+    let out = hl(input).highlight();
     assert_eq!(strip_ansi(&out), input);
 }
 
@@ -190,9 +180,8 @@ fn partial_match_unclosed_table_header_still_round_trips() {
 fn partial_match_renders_prefix_styled_and_tail_plain() {
     // The valid prefix should carry some ANSI styling; the trailing
     // garbage should render verbatim in the output.
-    let h = hl();
     let input = "key = 1\n!!garbage";
-    let out = h.highlight(input);
+    let out = hl(input).highlight();
     assert_eq!(strip_ansi(&out), input, "round-trip must hold");
     assert!(
         out.contains(theme::color_for("number")),
