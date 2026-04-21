@@ -304,24 +304,73 @@ cast_body      <- [cC][aA][sS][tT]
 exists_body    <- [eE][xX][iI][sS][tT][sS]
 collate_body   <- [cC][oO][lL][lL][aA][tT][eE]
 
-# Keyword negative-lookahead for the identifier rule. Ordering: among
-# alternatives that share a prefix, put the longer body first so PEG
-# first-match doesn't accept a shorter keyword when a longer one would
-# match (e.g. INTERSECT before IN, NATURAL before NOT, DISTINCT before
-# DESC, OUTER before OR). `!ident_char` is applied once at the outside
-# so each body stays boundary-free.
+# Keyword negative-lookahead for the identifier rule.
+#
+# Invariant: among alternatives that share a prefix, the longer body
+# must come first so PEG first-match doesn't accept a shorter keyword
+# when a longer one also matches (e.g. INTERSECT before IN). We enforce
+# it by sorting the whole list strictly length-descending, then
+# alphabetically within each length tier. New keywords slot in by
+# length alone — no per-cluster reasoning needed. The known shared-
+# prefix clusters (all satisfied by length-descending ordering):
+#
+#   INTERSECT > IN / IS             (I-prefix)
+#   DISTINCT > DESC                 (D-prefix)
+#   NATURAL > NULL > NOT            (N-prefix)
+#   OFFSET > ORDER / OUTER > ON / OR (O-prefix)
+#
+# `!ident_char` is applied once on the outside so each body stays
+# boundary-free.
 keyword_word <-
-    ( intersect_body / between_body / distinct_body / collate_body
-    / natural_body / regexp_body / outer_body / offset_body
-    / having_body / except_body / exists_body / escape_body
-    / sel_body / union_body / inner_body / right_body
-    / group_body / order_body / where_body / match_body / cross_body
-    / limit_body / from_body / join_body / left_body
-    / full_body / glob_body / desc_body / with_body / cast_body
-    / case_body / when_body / then_body / else_body / like_body
-    / null_body / bool_body / using_body / asc_body / all_body
-    / end_body / and_body / not_body
-    / in_body / is_body / on_body / or_body / as_body / by_body
+    ( intersect_body       # 9
+    / distinct_body        # 8
+    / between_body         # 7
+    / collate_body         # 7
+    / natural_body         # 7
+    / escape_body          # 6
+    / except_body          # 6
+    / exists_body          # 6
+    / having_body          # 6
+    / offset_body          # 6
+    / regexp_body          # 6
+    / sel_body             # 6 (SELECT)
+    / bool_body            # 5 (FALSE) / 4 (TRUE); alternation handles both
+    / cross_body           # 5
+    / group_body           # 5
+    / inner_body           # 5
+    / limit_body           # 5
+    / match_body           # 5
+    / order_body           # 5
+    / outer_body           # 5
+    / right_body           # 5
+    / union_body           # 5
+    / using_body           # 5
+    / where_body           # 5
+    / case_body            # 4
+    / cast_body            # 4
+    / desc_body            # 4
+    / else_body            # 4
+    / from_body            # 4
+    / full_body            # 4
+    / glob_body            # 4
+    / join_body            # 4
+    / left_body            # 4
+    / like_body            # 4
+    / null_body            # 4
+    / then_body            # 4
+    / when_body            # 4
+    / with_body            # 4
+    / all_body             # 3
+    / and_body             # 3
+    / asc_body             # 3
+    / end_body             # 3
+    / not_body             # 3
+    / as_body              # 2
+    / by_body              # 2
+    / in_body              # 2
+    / is_body              # 2
+    / on_body              # 2
+    / or_body              # 2
     ) !ident_char
 
 # --- Whitespace & comments -------------------------------------------

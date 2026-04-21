@@ -1,12 +1,15 @@
 use std::collections::HashSet;
+use std::sync::OnceLock;
 
 use syntax_highlighter::pegc;
 use syntax_highlighter::pegvm::{Capture, Program, VM};
 
 const SQLITE_GRAMMAR: &str = include_str!("../grammars/sqlite.peg");
 
-fn compile_sql() -> Program {
-    pegc::compile(SQLITE_GRAMMAR).expect("SQLite grammar should compile")
+fn compile_sql() -> &'static Program {
+    static SQLITE_PROGRAM: OnceLock<Program> = OnceLock::new();
+    SQLITE_PROGRAM
+        .get_or_init(|| pegc::compile(SQLITE_GRAMMAR).expect("SQLite grammar should compile"))
 }
 
 fn run(input: &str) -> (usize, Vec<Capture>, Vec<String>, bool) {
@@ -56,6 +59,15 @@ fn assert_complete_full(input: &str) -> (Vec<Capture>, Vec<String>) {
         input
     );
     (caps, kinds)
+}
+
+fn assert_rejects(input: &str) {
+    let (matched, _caps, _kinds, complete) = run(input);
+    assert!(
+        !complete || matched < input.len(),
+        "expected rejection for {:?}, got complete full-input match",
+        input
+    );
 }
 
 #[test]
@@ -404,4 +416,23 @@ fn quoted_identifiers() {
     assert_complete_full("SELECT \"a\".\"b\" FROM \"a\"");
     assert_complete_full("SELECT `a`.`b` FROM `a`");
     assert_complete_full("SELECT [a].[b] FROM [a]");
+}
+
+#[test]
+fn non_reserved_words_parse_as_identifiers() {
+    // Guards the longest-first invariant in `keyword_word`: words that
+    // look like dialect vocabulary but are not reserved in SQLite must
+    // still parse as bare identifiers in column/table position.
+    assert_complete_full("SELECT integer FROM t");
+    assert_complete_full("SELECT recursive FROM t");
+    assert_complete_full("SELECT window FROM t WHERE fail = 1");
+    assert_complete_full("SELECT x FROM natural_joins");
+}
+
+#[test]
+fn rejects_blatantly_invalid_input() {
+    // Seeds `assert_rejects` usage. Two consecutive SELECTs without a
+    // separator or expression between them are never valid.
+    assert_rejects("SELECT SELECT");
+    assert_rejects("SELECT FROM");
 }
