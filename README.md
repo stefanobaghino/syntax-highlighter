@@ -143,7 +143,10 @@ Each item is a self-contained feature that unlocks further work.
   level, which maps cleanly if the need arises.
 - **Bytecode serialization.** Pre-compile grammars once and ship the
   `Vec<Instruction>` plus capture-name table as data. Useful for embedded
-  distributions and startup-time-sensitive consumers.
+  distributions and startup-time-sensitive consumers. Landing this should
+  also expose a `Parser::from_program(Program)` constructor so the deep
+  `parser` module accepts pre-compiled bytecode without callers falling
+  back to the `pegvm` primitives.
 - **Error recovery / parsing past syntax errors.** PEG is strict by
   default — a parse either succeeds or fails. For syntax highlighting,
   the input is frequently incomplete or malformed (mid-edit buffers,
@@ -158,7 +161,7 @@ Each item is a self-contained feature that unlocks further work.
 ### Self-hosting — parsing PEG grammars using pegvm itself
 
 The long-form project: replace the hand-written recursive-descent parser
-in `src/pegvm/grammar.rs` with a PEG grammar that describes PEG grammar
+in `src/pegc/parser.rs` with a PEG grammar that describes PEG grammar
 syntax itself, executed by the VM. Prerequisites, in order:
 
 1. **Semantic actions / typed captures.** Today's VM emits flat
@@ -177,7 +180,7 @@ syntax itself, executed by the VM. Prerequisites, in order:
    parse has something to run. From that point on, any change to the
    grammar language requires coordinated edits to both `peg.peg` and
    the baked-in bytecode.
-4. **Replace the recursive-descent parser.** `parse_grammar(src)` becomes
+4. **Replace the recursive-descent parser.** `pegc::parse(src)` becomes
    `VM::run(BOOTSTRAP_PROGRAM, src)` with semantic actions that build the
    `Pattern` AST.
 

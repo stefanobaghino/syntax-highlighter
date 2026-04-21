@@ -1,19 +1,19 @@
 # pegvm — a PEG bytecode virtual machine
 
-This module is a self-contained implementation of a parsing machine for parsing expression grammars (PEGs). Its role in the crate is to turn a textual grammar into a runnable program and to execute that program against an input, emitting a list of captured spans. Everything else — ANSI rendering, themes, the CLI — lives outside this module and treats captures as the abstract output. The module has no dependencies beyond `std`.
+This module is a self-contained implementation of a parsing machine for parsing expression grammars (PEGs). Its role in the crate is to execute a compiled program against an input and emit a list of captured spans. Everything else — ANSI rendering, themes, the CLI — lives outside this module and treats captures as the abstract output. The module has no dependencies beyond `std`.
 
-This document is a guided tour of the **types** that make up the module: what each one represents in the PEG model, and how values of one type are produced from or consumed by another. Implementation details (bit layouts, dispatch tables) are only mentioned when the semantics force them.
+This document is a guided tour of the **types** that make up the module, extended upstream to cover the full `&str → Grammar → Program → MatchResult` pipeline for continuity. Types that surface grammar-source parsing and compilation (`Pattern`, `Grammar`, `ParseError`, `CompileError`) now live in [`crate::pegc`](../pegc/) after the split — the sections below keep their names for clarity but the module path is `pegc`, not `pegvm`. Implementation details (bit layouts, dispatch tables) are only mentioned when the semantics force them.
 
 ## The pipeline in one picture
 
 Three transformations connect the key types:
 
 ```
-&str  ──parse_grammar──▶  Grammar  ──compile_grammar──▶  Program  ──VM::run──▶  MatchResult
+&str  ──pegc::parse──▶  Grammar  ──Grammar::compile──▶  Program  ──VM::run──▶  MatchResult
 ```
 
-- `parse_grammar` is text-level: it consumes a grammar source and produces a `Grammar` value.
-- `compile_grammar` is AST-level: it consumes a `Grammar` and produces a `Program` (bytecode plus metadata).
+- `pegc::parse` is text-level: it consumes a grammar source and produces a `Grammar` value. `pegc::compile` folds this and the next step into one call.
+- `Grammar::compile` is AST-level: it consumes a `Grammar` and produces a `Program` (bytecode plus metadata).
 - `VM::run` is runtime-level: it consumes a `Program` and an input and produces a `MatchResult` whose `complete` flag distinguishes full matches from partial ones.
 
 Every other type in the module exists to serve one of these three stages.
@@ -39,7 +39,7 @@ Every other type in the module exists to serve one of these three stages.
 | `NonTerminal(String)` | `rule_name` | References another `Pattern` in the enclosing `Grammar`. |
 | `Capture(String, Box<Pattern>)` | `@name{p}` | Matches `p`; additionally records the matched span under the tag `name`. |
 
-A `Pattern` is a plain value. It can be constructed programmatically (see the compiler tests) or produced by `parse_grammar` from text. A `Pattern` has no knowledge of its environment: a `NonTerminal("digit")` is a dangling reference until it's placed inside a `Grammar` that defines `digit`.
+A `Pattern` is a plain value. It can be constructed programmatically (see the compiler tests) or produced by `pegc::parse` from text. A `Pattern` has no knowledge of its environment: a `NonTerminal("digit")` is a dangling reference until it's placed inside a `Grammar` that defines `digit`.
 
 The `Capture` variant is the bridge between parsing (which produces `Pattern`) and highlighting (which consumes tag names). It carries a string that is later interned to an integer id during compilation, and resolved back to a name by the highlighter. See `CaptureKind`.
 
@@ -63,7 +63,7 @@ pub struct Grammar {
 }
 ```
 
-A `Grammar` is the value-level form of an entire PEG document. It lifts a collection of `Pattern`s into a coherent whole by giving each a name (the map keys) and designating one as the entry point (`start`, guaranteed to be a key in `rules` when produced by `parse_grammar`). It is the unit of compilation: `compile_grammar` takes a `Grammar` and produces a `Program`.
+A `Grammar` is the value-level form of an entire PEG document. It lifts a collection of `Pattern`s into a coherent whole by giving each a name (the map keys) and designating one as the entry point (`start`, guaranteed to be a key in `rules` when produced by `pegc::parse`). It is the unit of compilation: `Grammar::compile` takes a `Grammar` and produces a `Program`.
 
 The distinction between `Pattern` and `Grammar` is exactly the distinction between an *expression* and a *set of named definitions*: `Pattern::NonTerminal("digit")` inside a rule body is a free reference that only makes sense in an environment that binds `digit` to another `Pattern`. A `Grammar` *is* that environment.
 
@@ -185,8 +185,9 @@ This partial result is what lets the highlighter render a styled prefix and a pl
 
 The module has two error types, one per transformation in the pipeline that can fail ahead of time:
 
-- `ParseError` is returned by `parse_grammar` when the grammar source is malformed (unterminated string, missing `<-`, duplicate rule, etc.). It carries line and column information.
-- `CompileError` is returned by `compile_grammar` when the grammar is well-formed text but semantically invalid — a `NonTerminal("foo")` with no matching rule, or a start rule that doesn't exist.
+- `pegc::ParseError` is returned by `pegc::parse` when the grammar source is malformed (unterminated string, missing `<-`, duplicate rule, etc.). It carries line and column information.
+- `pegc::CompileError` is returned by `Grammar::compile` when the grammar is well-formed text but semantically invalid — a `NonTerminal("foo")` with no matching rule, or a start rule that doesn't exist.
+- `pegc::Error` is the unified wrapper exposed by `pegc::compile(source)` so one-step callers learn one error type rather than two.
 
 Runtime mismatch (the input doesn't match the grammar) is not an error type: `VM::run` returns a `MatchResult` whose `complete` flag is `false` when the input didn't conform. The distinction is deliberate — a grammar error is an author bug (the grammar needs fixing), a runtime non-match is a data bug (the input didn't conform).
 
