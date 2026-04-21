@@ -961,6 +961,78 @@ fn savepoint_and_release() {
 }
 
 #[test]
+fn pragma_variants() {
+    assert_complete_full("PRAGMA cache_size");
+    assert_complete_full("PRAGMA cache_size = 2000");
+    assert_complete_full("PRAGMA cache_size(2000)");
+    assert_complete_full("PRAGMA main.cache_size = 1000");
+    assert_complete_full("PRAGMA foreign_keys = ON");
+    assert_complete_full("PRAGMA journal_mode = 'wal'");
+}
+
+#[test]
+fn vacuum_variants() {
+    assert_complete_full("VACUUM");
+    assert_complete_full("VACUUM main");
+    assert_complete_full("VACUUM INTO 'backup.db'");
+}
+
+#[test]
+fn attach_detach() {
+    assert_complete_full("ATTACH DATABASE 'x.db' AS backup");
+    assert_complete_full("ATTACH 'x.db' AS backup");
+    assert_complete_full("DETACH DATABASE backup");
+    assert_complete_full("DETACH backup");
+}
+
+#[test]
+fn reindex_variants() {
+    assert_complete_full("REINDEX");
+    assert_complete_full("REINDEX t");
+    assert_complete_full("REINDEX main.t");
+}
+
+#[test]
+fn analyze_variants() {
+    assert_complete_full("ANALYZE");
+    assert_complete_full("ANALYZE main.t");
+}
+
+#[test]
+fn explain_variants() {
+    assert_complete_full("EXPLAIN SELECT 1");
+    assert_complete_full("EXPLAIN QUERY PLAN SELECT 1");
+    assert_complete_full("EXPLAIN INSERT INTO t VALUES (1)");
+}
+
+#[test]
+fn explain_explain_rejected() {
+    // `EXPLAIN EXPLAIN ...` is not valid — explain_stmt wraps
+    // statement_body, not statement.
+    assert_rejects("EXPLAIN EXPLAIN SELECT 1");
+}
+
+#[test]
+fn create_virtual_table_fts5() {
+    assert_complete_full("CREATE VIRTUAL TABLE fts USING fts5(a, b)");
+}
+
+#[test]
+fn create_virtual_table_if_not_exists() {
+    assert_complete_full("CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(a UNINDEXED, b)");
+}
+
+#[test]
+fn create_virtual_table_rtree() {
+    assert_complete_full("CREATE VIRTUAL TABLE boxes USING rtree(id, x0, x1, y0, y1)");
+}
+
+#[test]
+fn create_virtual_table_no_args() {
+    assert_complete_full("CREATE VIRTUAL TABLE t USING module_name");
+}
+
+#[test]
 fn trigger_then_select_multi_statement() {
     // Two top-level statements separated by `;`: a trigger (whose body
     // has its own inner `;`-terminated statements) and a SELECT.

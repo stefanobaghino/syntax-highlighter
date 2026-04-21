@@ -37,24 +37,32 @@
 
 sql_file   <- ws (statement (stmt_sep statement)*)? stmt_sep? ws !.
 stmt_sep   <- ws @punctuation{';'} ws
-statement  <- select_stmt
-            / insert_stmt
-            / update_stmt
-            / delete_stmt
-            / create_table_stmt
-            / create_index_stmt
-            / create_view_stmt
-            / create_trigger_stmt
-            / drop_table_stmt
-            / drop_index_stmt
-            / drop_view_stmt
-            / drop_trigger_stmt
-            / alter_table_stmt
-            / begin_stmt
-            / commit_stmt
-            / rollback_stmt
-            / savepoint_stmt
-            / release_stmt
+statement       <- explain_stmt / statement_body
+statement_body  <- select_stmt
+                 / insert_stmt
+                 / update_stmt
+                 / delete_stmt
+                 / create_virtual_table_stmt
+                 / create_table_stmt
+                 / create_index_stmt
+                 / create_view_stmt
+                 / create_trigger_stmt
+                 / drop_table_stmt
+                 / drop_index_stmt
+                 / drop_view_stmt
+                 / drop_trigger_stmt
+                 / alter_table_stmt
+                 / begin_stmt
+                 / commit_stmt
+                 / rollback_stmt
+                 / savepoint_stmt
+                 / release_stmt
+                 / pragma_stmt
+                 / vacuum_stmt
+                 / attach_stmt
+                 / detach_stmt
+                 / reindex_stmt
+                 / analyze_stmt
 
 # --- SELECT statement -------------------------------------------------
 
@@ -335,6 +343,40 @@ rollback_stmt  <- kw_rollback (ws kw_transaction)?
 savepoint_stmt <- kw_savepoint ws @variable{bare_ident_nonkw}
 release_stmt   <- kw_release (ws kw_savepoint)? ws @variable{bare_ident_nonkw}
 
+# --- PRAGMA, admin statements, EXPLAIN, CREATE VIRTUAL TABLE ---------
+# EXPLAIN wraps statement_body rather than statement, so
+# `EXPLAIN EXPLAIN …` is rejected. PRAGMA names and ATTACH schema
+# names reuse the `schema.name` shape as @type (namespace / handle).
+# CREATE VIRTUAL TABLE's module name after USING is @function —
+# the module is invoked, not merely referenced.
+
+pragma_stmt     <- kw_pragma ws qualified_table_name
+                   (ws @operator{'='} ws pragma_value
+                    / ws @punctuation{'('} ws pragma_value ws @punctuation{')'})?
+pragma_value    <- signed_number / string_lit / @variable{bare_ident}
+
+vacuum_stmt     <- kw_vacuum (ws @type{bare_ident_nonkw})? (ws kw_into ws string_lit)?
+
+attach_stmt     <- kw_attach (ws kw_database)? ws expr ws kw_as
+                   ws @type{bare_ident_nonkw}
+detach_stmt     <- kw_detach (ws kw_database)? ws @type{bare_ident_nonkw}
+
+reindex_stmt    <- kw_reindex (ws qualified_table_name)?
+analyze_stmt    <- kw_analyze (ws qualified_table_name)?
+
+explain_stmt    <- kw_explain (ws kw_query ws kw_plan)? ws statement_body
+
+create_virtual_table_stmt <-
+    kw_create ws kw_virtual ws kw_table
+    (ws kw_if ws kw_not ws kw_exists)?
+    ws qualified_table_name
+    ws kw_using ws @function{bare_ident_nonkw}
+    (ws @punctuation{'('} ws vtab_args? ws @punctuation{')'})?
+vtab_args       <- vtab_arg (ws @punctuation{','} ws vtab_arg)*
+# Module args are deliberately permissive — fts5/rtree/etc have
+# module-specific mini-grammars that are not worth modelling.
+vtab_arg        <- (!@punctuation{','} !@punctuation{')'} .)+
+
 # --- Expressions (low → high precedence) -------------------------------
 # Classic precedence-climbing without left recursion. Each level either
 # matches the next-higher level or chains several of them with an
@@ -593,6 +635,16 @@ kw_transaction <- @keyword{transaction_body !ident_char}
 kw_savepoint <- @keyword{savepoint_body !ident_char}
 kw_release   <- @keyword{release_body !ident_char}
 kw_exclusive <- @keyword{exclusive_body !ident_char}
+kw_pragma    <- @keyword{pragma_body !ident_char}
+kw_vacuum    <- @keyword{vacuum_body !ident_char}
+kw_attach    <- @keyword{attach_body !ident_char}
+kw_detach    <- @keyword{detach_body !ident_char}
+kw_database  <- @keyword{database_body !ident_char}
+kw_reindex   <- @keyword{reindex_body !ident_char}
+kw_analyze   <- @keyword{analyze_body !ident_char}
+kw_explain   <- @keyword{explain_body !ident_char}
+kw_query     <- @keyword{query_body !ident_char}
+kw_plan      <- @keyword{plan_body !ident_char}
 
 # Keyword bodies — raw letter matchers, no boundary check.
 
@@ -724,6 +776,16 @@ transaction_body <- [tT][rR][aA][nN][sS][aA][cC][tT][iI][oO][nN]
 savepoint_body <- [sS][aA][vV][eE][pP][oO][iI][nN][tT]
 release_body   <- [rR][eE][lL][eE][aA][sS][eE]
 exclusive_body <- [eE][xX][cC][lL][uU][sS][iI][vV][eE]
+pragma_body    <- [pP][rR][aA][gG][mM][aA]
+vacuum_body    <- [vV][aA][cC][uU][uU][mM]
+attach_body    <- [aA][tT][tT][aA][cC][hH]
+detach_body    <- [dD][eE][tT][aA][cC][hH]
+database_body  <- [dD][aA][tT][aA][bB][aA][sS][eE]
+reindex_body   <- [rR][eE][iI][nN][dD][eE][xX]
+analyze_body   <- [aA][nN][aA][lL][yY][zZ][eE]
+explain_body   <- [eE][xX][pP][lL][aA][iI][nN]
+query_body     <- [qQ][uU][eE][rR][yY]
+plan_body      <- [pP][lL][aA][nN]
 
 # Keyword negative-lookahead for the identifier rule.
 #
@@ -757,19 +819,23 @@ keyword_word <-
     / savepoint_body       # 9
     / temporary_body       # 9
     / conflict_body        # 8
+    / database_body        # 8
     / deferred_body        # 8
     / distinct_body        # 8
     / restrict_body        # 8
     / rollback_body        # 8
+    / analyze_body         # 7
     / between_body         # 7
     / cascade_body         # 7
     / collate_body         # 7
     / default_body         # 7
+    / explain_body         # 7
     / foreign_body         # 7
     / instead_body         # 7
     / natural_body         # 7
     / nothing_body         # 7
     / primary_body         # 7
+    / reindex_body         # 7
     / release_body         # 7
     / replace_body         # 7
     / trigger_body         # 7
@@ -777,11 +843,13 @@ keyword_word <-
     / without_body         # 7
     / action_body          # 6
     / always_body          # 6
+    / attach_body          # 6
     / before_body          # 6
     / column_body          # 6
     / commit_body          # 6
     / create_body          # 6
     / delete_body          # 6
+    / detach_body          # 6
     / escape_body          # 6
     / except_body          # 6
     / exists_body          # 6
@@ -789,6 +857,7 @@ keyword_word <-
     / ignore_body          # 6
     / insert_body          # 6
     / offset_body          # 6
+    / pragma_body          # 6
     / regexp_body          # 6
     / rename_body          # 6
     / sel_body             # 6 (SELECT)
@@ -796,6 +865,7 @@ keyword_word <-
     / strict_body          # 6
     / unique_body          # 6
     / update_body          # 6
+    / vacuum_body          # 6
     / values_body          # 6
     / window_body          # 6
     / abort_body           # 5
@@ -812,6 +882,7 @@ keyword_word <-
     / match_body           # 5
     / order_body           # 5
     / outer_body           # 5
+    / query_body           # 5
     / right_body           # 5
     / rowid_body           # 5
     / table_body           # 5
@@ -834,6 +905,7 @@ keyword_word <-
     / like_body            # 4
     / null_body            # 4
     / over_body            # 4
+    / plan_body            # 4
     / temp_body            # 4
     / then_body            # 4
     / view_body            # 4
