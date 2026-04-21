@@ -87,11 +87,12 @@ pub struct VM<'p, 'i> {
     /// Running count of `MemoOpen` cache misses, exposed via `MemoStats`.
     memo_misses: usize,
     /// Minimum successful-span length (in bytes) for which `MemoClose` will
-    /// write the outcome back to the cache. `0` = memoize everything (the
-    /// packrat default). Non-zero values skip tiny leaf-rule entries that
-    /// pay lookup cost without a meaningful storage win — see GPeg
-    /// (default 512) and Yedidia §5.2.4 (knee near 4096). Failure entries
-    /// in `fail()` are not filtered; their value is short-circuiting.
+    /// write the outcome back to the cache. Default is
+    /// [`Self::DEFAULT_MEMO_THRESHOLD`]; `0` disables the filter and
+    /// restores pure packrat behavior. Non-zero values skip tiny leaf-rule
+    /// entries that pay lookup cost without a meaningful storage win — see
+    /// GPeg (default 512) and Yedidia §5.2.4 (knee near 4096). Failure
+    /// entries in `fail()` are not filtered; their value is short-circuiting.
     memo_threshold: usize,
 }
 
@@ -116,6 +117,13 @@ struct OpenCapture {
 }
 
 impl<'p, 'i> VM<'p, 'i> {
+    /// Default memo-threshold applied by [`VM::new`]. Picked from the sweep
+    /// at `benches/memo.rs`: the time-vs-entries curve is flat from ~32
+    /// bytes upward on every shipped grammar, so any value in that range
+    /// is defensible. 128 matches GPeg's benchmark reference point and
+    /// stays conservative against hardware and corpus variation.
+    pub const DEFAULT_MEMO_THRESHOLD: usize = 128;
+
     pub fn new(program: &'p [Instruction], input: &'i [u8]) -> Self {
         VM {
             program,
@@ -129,13 +137,14 @@ impl<'p, 'i> VM<'p, 'i> {
             memo: HashMap::new(),
             memo_hits: 0,
             memo_misses: 0,
-            memo_threshold: 0,
+            memo_threshold: Self::DEFAULT_MEMO_THRESHOLD,
         }
     }
 
-    /// Filter out successful memo entries whose matched span is shorter
-    /// than `bytes`. The default is `0` (memoize every success). See
-    /// [`VM::memo_threshold`] on the struct for the rationale.
+    /// Override the default memo threshold. `bytes = 0` disables the
+    /// filter and restores pure packrat behavior (useful for tests that
+    /// exercise the caching mechanism on small inputs). See the
+    /// `memo_threshold` field doc for the rationale.
     pub fn with_memo_threshold(mut self, bytes: usize) -> Self {
         self.memo_threshold = bytes;
         self
