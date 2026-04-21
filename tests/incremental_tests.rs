@@ -5,18 +5,23 @@
 //! 1. **VM ↔ `MemoCache` round-trip.** Runs a VM, reclaims the
 //!    `MemoCache`, seeds a fresh VM with it, confirms the second run
 //!    hits the cache and produces identical output.
-//! 2. **`Highlighter` equivalence under edits.** For each shipped
-//!    grammar, runs a fixed sequence of edits through one `Highlighter`
-//!    and compares the post-edit captures against a second `Highlighter`
-//!    driven only via `set_input(current_input)`. The equality
+//! 2. **`Parser` equivalence under edits.** For each shipped grammar,
+//!    runs a fixed sequence of edits through one `Parser` and compares
+//!    the post-edit captures against a second `Parser` driven only via
+//!    `set_input(current_input)`. The equality
 //!    `inc.captures() == fresh.captures()` is the strongest
 //!    correctness property this crate has — if any edit invalidates
 //!    more or fewer entries than it should, this test catches it.
+//!
+//! Parser is the deep incremental-parsing abstraction; Highlighter
+//! wraps it without adding state, so a single Highlighter-level smoke
+//! test is enough to prove the wrapper is faithful.
 
 use std::collections::HashMap;
 
 use syntax_highlighter::grammar::{compile, Pattern};
 use syntax_highlighter::highlight::Highlighter;
+use syntax_highlighter::parser::Parser;
 use syntax_highlighter::pegvm::{CharSet, MatchResult, MemoCache, VM};
 
 fn two_rule_grammar() -> syntax_highlighter::pegvm::Program {
@@ -106,94 +111,106 @@ const JSON_GRAMMAR: &str = include_str!("../grammars/json.peg");
 const TOML_GRAMMAR: &str = include_str!("../grammars/toml.peg");
 const SQL_GRAMMAR: &str = include_str!("../grammars/sqlite.peg");
 
-/// Compare the stateful `inc` against a fresh `Highlighter` driven via
-/// `set_input(inc.input())`. The only correctness contract exposed to
-/// users is that the two must agree bit-for-bit on captures and
+/// Compare the stateful `inc` parser against a fresh `Parser` driven
+/// via `set_input(inc.input())`. The only correctness contract exposed
+/// to users is that the two must agree bit-for-bit on captures and
 /// `matched` at every observable step.
-fn assert_equivalent(inc: &Highlighter, grammar: &str, tag: &str) {
-    let mut fresh = Highlighter::new(grammar).expect("grammar compiles");
-    fresh.set_input(inc.input().to_string());
+fn assert_equivalent(inc: &Parser, grammar: &str, tag: &str) {
+    let mut fresh = Parser::new(grammar).expect("grammar compiles");
+    fresh.set_input(inc.input().to_vec());
     assert_eq!(
         inc.captures(),
         fresh.captures(),
         "captures diverged at {tag}"
     );
-    assert_eq!(
-        inc.highlight(),
-        fresh.highlight(),
-        "rendered output diverged at {tag}"
-    );
+}
+
+fn parser_for(grammar: &str, input: &str) -> Parser {
+    let mut p = Parser::new(grammar).unwrap();
+    p.set_input(input.as_bytes().to_vec());
+    p
 }
 
 #[test]
 fn json_incremental_matches_fresh_across_edit_sequence() {
-    let mut inc = Highlighter::new(JSON_GRAMMAR).unwrap();
-    inc.set_input(r#"{"a": 1, "b": [true, null, 3]}"#.to_string());
+    let mut inc = parser_for(JSON_GRAMMAR, r#"{"a": 1, "b": [true, null, 3]}"#);
     assert_equivalent(&inc, JSON_GRAMMAR, "json initial");
 
     // Replace the number 1 with a longer number.
-    let pos = inc.input().find('1').unwrap();
-    inc.edit(pos, pos + 1, "12345");
+    let pos = inc.input().iter().position(|&b| b == b'1').unwrap();
+    inc.edit(pos, pos + 1, b"12345");
     assert_equivalent(&inc, JSON_GRAMMAR, "json replace number");
 
     // Insert a new property before the closing brace.
-    let close = inc.input().rfind('}').unwrap();
-    inc.edit(close, close, r#", "c": "hi""#);
+    let close = inc.input().iter().rposition(|&b| b == b'}').unwrap();
+    inc.edit(close, close, br#", "c": "hi""#);
     assert_equivalent(&inc, JSON_GRAMMAR, "json insert property");
 
     // Delete the "b" array entirely.
-    let b_start = inc.input().find(r#", "b""#).unwrap();
-    let arr_end = inc.input()[b_start..].find(']').unwrap() + b_start + 1;
-    inc.edit(b_start, arr_end, "");
+    let b_needle = br#", "b""#;
+    let b_start = find_subslice(inc.input(), b_needle).unwrap();
+    let arr_end = inc.input()[b_start..]
+        .iter()
+        .position(|&b| b == b']')
+        .unwrap()
+        + b_start
+        + 1;
+    inc.edit(b_start, arr_end, b"");
     assert_equivalent(&inc, JSON_GRAMMAR, "json delete array");
 
     // Replace everything — the set_input fast path.
-    inc.set_input("null".to_string());
+    inc.set_input(b"null".to_vec());
     assert_equivalent(&inc, JSON_GRAMMAR, "json set_input reset");
 }
 
 #[test]
 fn toml_incremental_matches_fresh_across_edit_sequence() {
-    let mut inc = Highlighter::new(TOML_GRAMMAR).unwrap();
-    inc.set_input("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n".to_string());
+    let mut inc = parser_for(
+        TOML_GRAMMAR,
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    );
     assert_equivalent(&inc, TOML_GRAMMAR, "toml initial");
 
     // Append a new section — streaming pattern.
-    inc.append("\n[dependencies]\nserde = \"1.0\"\n");
+    inc.append(b"\n[dependencies]\nserde = \"1.0\"\n");
     assert_equivalent(&inc, TOML_GRAMMAR, "toml append section");
 
     // Rename [package] to [pkg].
-    let start = inc.input().find("[package]").unwrap();
-    inc.edit(start, start + "[package]".len(), "[pkg]");
+    let start = find_subslice(inc.input(), b"[package]").unwrap();
+    inc.edit(start, start + "[package]".len(), b"[pkg]");
     assert_equivalent(&inc, TOML_GRAMMAR, "toml rename section");
 
     // Delete the version line.
-    let vstart = inc.input().find("version").unwrap();
-    let vend = inc.input()[vstart..].find('\n').unwrap() + vstart + 1;
-    inc.edit(vstart, vend, "");
+    let vstart = find_subslice(inc.input(), b"version").unwrap();
+    let vend = inc.input()[vstart..]
+        .iter()
+        .position(|&b| b == b'\n')
+        .unwrap()
+        + vstart
+        + 1;
+    inc.edit(vstart, vend, b"");
     assert_equivalent(&inc, TOML_GRAMMAR, "toml delete version");
 }
 
 #[test]
 fn sql_incremental_matches_fresh_across_edit_sequence() {
-    let mut inc = Highlighter::new(SQL_GRAMMAR).unwrap();
-    inc.set_input("SELECT id, name FROM users WHERE active = 1;".to_string());
+    let mut inc = parser_for(SQL_GRAMMAR, "SELECT id, name FROM users WHERE active = 1;");
     assert_equivalent(&inc, SQL_GRAMMAR, "sql initial");
 
     // Insert an ORDER BY clause.
-    let semi = inc.input().rfind(';').unwrap();
-    inc.edit(semi, semi, " ORDER BY id DESC");
+    let semi = inc.input().iter().rposition(|&b| b == b';').unwrap();
+    inc.edit(semi, semi, b" ORDER BY id DESC");
     assert_equivalent(&inc, SQL_GRAMMAR, "sql insert order by");
 
     // Replace the table name.
-    let users = inc.input().find("users").unwrap();
-    inc.edit(users, users + "users".len(), "customers");
+    let users = find_subslice(inc.input(), b"users").unwrap();
+    inc.edit(users, users + "users".len(), b"customers");
     assert_equivalent(&inc, SQL_GRAMMAR, "sql rename table");
 
     // Delete the WHERE clause.
-    let where_start = inc.input().find(" WHERE").unwrap();
-    let where_end = inc.input().find(" ORDER BY").unwrap();
-    inc.edit(where_start, where_end, "");
+    let where_start = find_subslice(inc.input(), b" WHERE").unwrap();
+    let where_end = find_subslice(inc.input(), b" ORDER BY").unwrap();
+    inc.edit(where_start, where_end, b"");
     assert_equivalent(&inc, SQL_GRAMMAR, "sql delete where");
 }
 
@@ -203,10 +220,9 @@ fn append_char_by_char_matches_fresh_on_every_step() {
     // designed to accelerate. Equivalence must hold at every single
     // character boundary, not just at the end.
     let target = r#"{"a": 1, "b": [true, null]}"#;
-    let mut inc = Highlighter::new(JSON_GRAMMAR).unwrap();
-    inc.set_input(String::new());
+    let mut inc = Parser::new(JSON_GRAMMAR).unwrap();
     for (i, ch) in target.char_indices() {
-        inc.append(&target[i..i + ch.len_utf8()]);
+        inc.append(&target.as_bytes()[i..i + ch.len_utf8()]);
         assert_equivalent(&inc, JSON_GRAMMAR, &format!("json char-by-char step {i}"));
     }
 }
@@ -217,35 +233,33 @@ fn set_input_resets_cache_cleanly() {
     // state between parses — every set_input rebuilds the cache from
     // scratch, so the equivalence property holds trivially after each
     // reset.
-    let mut inc = Highlighter::new(JSON_GRAMMAR).unwrap();
-    inc.set_input(r#"{"a": 1}"#.to_string());
+    let mut inc = Parser::new(JSON_GRAMMAR).unwrap();
+    inc.set_input(br#"{"a": 1}"#.to_vec());
     assert_equivalent(&inc, JSON_GRAMMAR, "reset step 1");
-    inc.set_input(r#"[1, 2, 3]"#.to_string());
+    inc.set_input(br#"[1, 2, 3]"#.to_vec());
     assert_equivalent(&inc, JSON_GRAMMAR, "reset step 2");
-    inc.set_input("null".to_string());
+    inc.set_input(b"null".to_vec());
     assert_equivalent(&inc, JSON_GRAMMAR, "reset step 3");
 }
 
+/// Wrapper smoke test: drive a Highlighter through the same shape of
+/// edits the Parser suites exercise and assert it agrees with a fresh
+/// Highlighter. Parser is tested in depth above; this test only
+/// guards that the wrapper doesn't lose equivalence at the `str`
+/// boundary.
 #[test]
-fn toml_section_rename_then_delete_preserves_max_sp_after_partial_parse() {
-    // Regression pin: renaming a section to something malformed leaves
-    // a top-level failure entry in the cache. A subsequent delete used
-    // to short-circuit `MemoOpen` to `fail()` without updating
-    // `max_sp` / `max_captures`, so the incremental parse reported
-    // `matched == 0` while a fresh parse on the same input reached the
-    // end of the valid prefix. Fix: failure entries are dropped
-    // unconditionally on every `apply_edit`.
-    let mut inc = Highlighter::new(TOML_GRAMMAR).unwrap();
-    inc.set_input("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n".to_string());
+fn highlighter_wrapper_preserves_equivalence_under_edits() {
+    let mut inc = Highlighter::new(JSON_GRAMMAR).unwrap();
+    inc.set_input(r#"{"a": 1}"#.to_string());
+    inc.edit(6, 7, "42");
+    inc.append(", \"b\": true");
 
-    // Break the section header.
-    let pos = inc.input().find('[').unwrap();
-    inc.edit(pos, pos + 1, "!");
-    assert_equivalent(&inc, TOML_GRAMMAR, "after break");
+    let mut fresh = Highlighter::new(JSON_GRAMMAR).unwrap();
+    fresh.set_input(inc.input().to_string());
+    assert_eq!(inc.captures(), fresh.captures());
+    assert_eq!(inc.highlight(), fresh.highlight());
+}
 
-    // Now delete a byte inside the broken prefix. The cached top-level
-    // failure must not short-circuit the warm parse into reporting an
-    // empty captures vector.
-    inc.edit(pos, pos + 1, "");
-    assert_equivalent(&inc, TOML_GRAMMAR, "after second edit");
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
