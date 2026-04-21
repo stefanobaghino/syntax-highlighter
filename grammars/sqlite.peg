@@ -921,12 +921,10 @@ keyword_word <-
     / asc_body             # 3
     / end_body             # 3
     / for_body             # 3
-    / key_body             # 3
     / not_body             # 3
     / set_body             # 3
     / as_body              # 2
     / by_body              # 2
-    / do_body              # 2
     / if_body              # 2
     / in_body              # 2
     / is_body              # 2

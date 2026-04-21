@@ -442,6 +442,11 @@ fn non_reserved_words_parse_as_identifiers() {
     assert_complete_full("SELECT recursive FROM t");
     assert_complete_full("SELECT partition FROM t WHERE following = 1");
     assert_complete_full("SELECT x FROM natural_joins");
+    // `key` and `do` are syntactically keywords (PRIMARY KEY, DO
+    // UPDATE) but too common as column / alias names to reserve.
+    assert_complete_full("SELECT key FROM config WHERE key = 'x'");
+    assert_complete_full("INSERT INTO config (key, value) VALUES ('k', 'v')");
+    assert_complete_full("SELECT * FROM orders AS do");
 }
 
 #[test]
