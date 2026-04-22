@@ -1,0 +1,452 @@
+# Rust (pragmatic subset) grammar with highlight annotations.
+# The first rule is the start rule.
+#
+# Scope: highlighting, not compilation. The grammar parses most real-
+# world Rust code to completion at the item/expression/type level. It
+# is deliberately token-ish: precedence is not enforced, and semantic
+# constraints (name resolution, typing, trait coherence) are not
+# checked. The bench value lives in the shared-prefix backtracking
+# Rust induces: paths vs generics, turbofish, closures vs bitor,
+# attributes vs inner-attributes, references vs logical-and.
+#
+# Capture kinds used (all present in src/highlight/theme.rs):
+#   keyword, string, number, comment, operator, punctuation, type,
+#   function, constant, variable, recovery.
+#
+# Intentionally out of scope for the MVP:
+#   - Macro-transcribe rules (`macro_rules!` bodies). We treat every
+#     `ident!(...)` / `ident!{...}` / `ident![...]` as balanced-
+#     bracket skip-over and call the ident a @function.
+#   - Const generics (`Foo<const N: usize>`).
+#   - Full precedence grammar; expressions are a left-to-right
+#     sequence of primaries joined by operator tokens.
+#
+# Recovery: the top-level uses `*^` so malformed items don't
+# abort the whole file.
+
+rust_file     <- ws (item)*^ ws !.
+
+# --- Items -------------------------------------------------------------
+#
+# Order matters (PEG first-match). Attributes / inner-attributes must
+# precede regular items so `#[...]` and `#![...]` are not misparsed
+# as expression-statements starting with `#`.
+item          <- attr_outer
+               / attr_inner
+               / use_item
+               / fn_item
+               / struct_item
+               / enum_item
+               / impl_item
+               / trait_item
+               / mod_item
+               / extern_item
+               / const_item
+               / static_item
+               / type_alias_item
+               / macro_rules_item
+               / macro_invocation_stmt
+               / stmt
+
+# Attributes and doc-comments at item position.
+attr_outer    <- @punctuation{'#'} @punctuation{'['} attr_body @punctuation{']'} ws
+attr_inner    <- @punctuation{'#'} @punctuation{'!'} @punctuation{'['} attr_body @punctuation{']'} ws
+attr_body     <- (!']' .)*
+
+# `use foo::bar::{baz, qux as q};`
+use_item      <- @keyword{'use'} ws use_tree ws @punctuation{';'} ws
+use_tree      <- use_path use_tail?
+use_tail      <- ws @keyword{'as'} ws ident_any
+               / @punctuation{'::'} @punctuation{'*'}
+               / @punctuation{'::'} @punctuation{'{'} ws use_tree_list? ws @punctuation{'}'}
+use_tree_list <- use_tree (ws @punctuation{','} ws use_tree)* (ws @punctuation{','})?
+use_path      <- use_seg (@punctuation{'::'} use_seg)*
+use_seg       <- @keyword{'self'}
+               / @keyword{'super'}
+               / @keyword{'crate'}
+               / @type{upper_ident}
+               / @variable{lower_ident}
+
+# `fn name<T>(a: T) -> T where T: Bound { ... }`
+fn_item       <- vis? ws fn_qualifiers @keyword{'fn'} ws @function{ident} generic_params? ws
+                 fn_params ws fn_return? ws where_clause? ws (block / @punctuation{';'}) ws
+fn_qualifiers <- (fn_qualifier ws)*
+fn_qualifier  <- @keyword{'const'}
+               / @keyword{'async'}
+               / @keyword{'unsafe'}
+               / @keyword{'extern'} (ws string_lit)?
+fn_params     <- @punctuation{'('} ws fn_param_list? ws @punctuation{')'}
+fn_param_list <- fn_param (ws @punctuation{','} ws fn_param)* (ws @punctuation{','})?
+fn_param      <- attr_outer? self_param
+               / attr_outer? fn_param_named
+fn_param_named <- pattern ws @punctuation{':'} ws type_expr
+self_param    <- ref_marker? ws (@keyword{'mut'} ws)? @keyword{'self'}
+               / @keyword{'mut'} ws @keyword{'self'}
+               / @keyword{'self'} ws @punctuation{':'} ws type_expr
+ref_marker    <- @punctuation{'&'} lifetime?
+fn_return     <- @punctuation{'->'} ws type_expr
+
+# `struct Foo { a: T, b: U }` / `struct Foo(T, U);` / `struct Foo;`
+struct_item   <- vis? ws @keyword{'struct'} ws @type{ident} generic_params? ws
+                 (struct_body_named / struct_body_tuple / @punctuation{';'}) ws
+struct_body_named <- where_clause? ws @punctuation{'{'} ws struct_fields? ws @punctuation{'}'}
+struct_body_tuple <- @punctuation{'('} ws tuple_fields? ws @punctuation{')'} ws where_clause? ws @punctuation{';'}
+struct_fields <- struct_field (ws @punctuation{','} ws struct_field)* (ws @punctuation{','})?
+struct_field  <- (attr_outer ws)* vis? ws @property{ident} ws @punctuation{':'} ws type_expr
+tuple_fields  <- tuple_field (ws @punctuation{','} ws tuple_field)* (ws @punctuation{','})?
+tuple_field   <- (attr_outer ws)* vis? ws type_expr
+
+# `enum E { A, B(T), C { x: T } }`
+enum_item     <- vis? ws @keyword{'enum'} ws @type{ident} generic_params? ws where_clause? ws
+                 @punctuation{'{'} ws enum_variants? ws @punctuation{'}'} ws
+enum_variants <- enum_variant (ws @punctuation{','} ws enum_variant)* (ws @punctuation{','})?
+enum_variant  <- (attr_outer ws)* @type{ident} enum_variant_body?
+enum_variant_body <- ws @punctuation{'('} ws tuple_fields? ws @punctuation{')'}
+                   / ws @punctuation{'{'} ws struct_fields? ws @punctuation{'}'}
+                   / ws @punctuation{'='} ws expr
+
+# `impl<T> Trait<T> for Foo<T> where T: Bound { ... }`
+impl_item     <- @keyword{'impl'} generic_params? ws impl_head ws where_clause? ws
+                 @punctuation{'{'} ws impl_body ws @punctuation{'}'} ws
+impl_head     <- type_expr (ws @keyword{'for'} ws type_expr)?
+impl_body     <- (item)*
+
+# `trait T<U>: Bound { ... }`
+trait_item    <- vis? ws (@keyword{'unsafe'} ws)? @keyword{'trait'} ws @type{ident}
+                 generic_params? trait_bounds? ws where_clause? ws
+                 @punctuation{'{'} ws impl_body ws @punctuation{'}'} ws
+trait_bounds  <- ws @punctuation{':'} ws bound_list
+
+# `mod name;` / `mod name { ... }`
+mod_item      <- vis? ws @keyword{'mod'} ws @variable{ident} ws
+                 (@punctuation{';'} / @punctuation{'{'} ws (item)* ws @punctuation{'}'}) ws
+
+# `extern "C" { ... }` — extern as an *item* (not as an fn qualifier).
+extern_item   <- @keyword{'extern'} (ws string_lit)? ws @punctuation{'{'} ws (item)* ws @punctuation{'}'} ws
+
+const_item    <- vis? ws @keyword{'const'} ws @constant{ident} ws @punctuation{':'} ws type_expr ws
+                 @punctuation{'='} ws expr ws @punctuation{';'} ws
+static_item   <- vis? ws @keyword{'static'} (ws @keyword{'mut'})? ws @constant{ident} ws @punctuation{':'} ws type_expr ws
+                 @punctuation{'='} ws expr ws @punctuation{';'} ws
+type_alias_item <- vis? ws @keyword{'type'} ws @type{ident} generic_params? ws where_clause? ws
+                   @punctuation{'='} ws type_expr ws @punctuation{';'} ws
+
+# `macro_rules! name { (...) => {...}; ... }` — body is arbitrary token
+# soup; balance braces.
+macro_rules_item <- @function{'macro_rules'} @punctuation{'!'} ws @function{ident} ws brace_block ws
+
+# Item-position macro invocation: `foo!(...)` / `foo!{...}` / `foo![...]`.
+macro_invocation_stmt <- @function{ident} @punctuation{'!'} ws macro_args ws (@punctuation{';'})? ws
+macro_args    <- paren_group
+               / brace_block
+               / bracket_group
+
+# Visibility modifier.
+vis           <- @keyword{'pub'} (ws @punctuation{'('} ws vis_scope ws @punctuation{')'})?
+vis_scope     <- @keyword{'crate'} / @keyword{'self'} / @keyword{'super'}
+               / @keyword{'in'} ws use_path
+
+# --- Generic parameters and where-clauses ----------------------------
+
+generic_params <- @punctuation{'<'} ws generic_param_list? ws @punctuation{'>'}
+generic_param_list <- generic_param (ws @punctuation{','} ws generic_param)* (ws @punctuation{','})?
+generic_param <- lifetime_param
+               / type_param
+               / const_param
+lifetime_param <- lifetime (ws @punctuation{':'} ws lifetime_bounds)?
+lifetime_bounds <- lifetime (ws @punctuation{'+'} ws lifetime)*
+type_param    <- @type{ident} (ws @punctuation{':'} ws bound_list)? (ws @punctuation{'='} ws type_expr)?
+const_param   <- @keyword{'const'} ws @constant{ident} ws @punctuation{':'} ws type_expr
+
+where_clause  <- @keyword{'where'} ws where_pred (ws @punctuation{','} ws where_pred)* (ws @punctuation{','})?
+where_pred    <- lifetime ws @punctuation{':'} ws lifetime_bounds
+               / type_expr ws @punctuation{':'} ws bound_list
+
+bound_list    <- bound (ws @punctuation{'+'} ws bound)*
+bound         <- lifetime
+               / (@punctuation{'?'})? type_path
+
+# --- Types -------------------------------------------------------------
+#
+# `&'a mut T`, `[T; N]`, `(T, U)`, `Foo<T>`, `dyn Trait`, `impl Trait`,
+# `fn(T) -> U`, `!`, etc.
+
+type_expr     <- type_fn
+               / type_impl
+               / type_dyn
+               / type_ref
+               / type_ptr
+               / type_array_or_slice
+               / type_tuple_or_group
+               / type_never
+               / type_path
+
+type_fn       <- (type_fn_qualifier ws)* @keyword{'fn'} ws @punctuation{'('} ws type_list? ws @punctuation{')'}
+                 (ws @punctuation{'->'} ws type_expr)?
+type_fn_qualifier <- @keyword{'unsafe'}
+                   / @keyword{'extern'} (ws string_lit)?
+type_list     <- type_expr (ws @punctuation{','} ws type_expr)* (ws @punctuation{','})?
+
+type_impl     <- @keyword{'impl'} ws bound_list
+type_dyn      <- @keyword{'dyn'} ws bound_list
+
+type_ref      <- @punctuation{'&'} lifetime? ws (@keyword{'mut'} ws)? type_expr
+type_ptr      <- @punctuation{'*'} ws (@keyword{'mut'} / @keyword{'const'}) ws type_expr
+
+type_array_or_slice <- @punctuation{'['} ws type_expr (ws @punctuation{';'} ws expr)? ws @punctuation{']'}
+type_tuple_or_group <- @punctuation{'('} ws type_list? ws @punctuation{')'}
+
+type_never    <- @punctuation{'!'}
+
+type_path     <- type_path_seg (@punctuation{'::'} type_path_seg)*
+type_path_seg <- @type{upper_ident} generic_args?
+               / @variable{lower_ident} generic_args?
+               / @keyword{'self'}
+               / @keyword{'Self'}
+               / @keyword{'super'}
+               / @keyword{'crate'}
+
+generic_args  <- @punctuation{'::'} @punctuation{'<'} ws generic_arg_list? ws @punctuation{'>'}
+               / @punctuation{'<'} ws generic_arg_list? ws @punctuation{'>'}
+generic_arg_list <- generic_arg (ws @punctuation{','} ws generic_arg)* (ws @punctuation{','})?
+generic_arg   <- lifetime
+               / type_expr
+               / @constant{ident} ws @punctuation{'='} ws type_expr
+               / expr_block
+               / literal
+
+# --- Patterns ----------------------------------------------------------
+
+pattern       <- pattern_or
+pattern_or    <- pattern_atom (ws @punctuation{'|'} ws pattern_atom)*
+pattern_atom  <- pattern_ref
+               / pattern_box
+               / pattern_tuple
+               / pattern_struct_or_enum
+               / pattern_slice
+               / pattern_range
+               / pattern_literal
+               / pattern_wild
+               / pattern_rest
+               / pattern_binding
+pattern_ref   <- @punctuation{'&'} (ws @keyword{'mut'})? ws pattern_atom
+pattern_box   <- @keyword{'box'} ws pattern_atom
+pattern_tuple <- @punctuation{'('} ws pattern_list? ws @punctuation{')'}
+pattern_list  <- pattern (ws @punctuation{','} ws pattern)* (ws @punctuation{','})?
+pattern_struct_or_enum <- @type{upper_ident} (@punctuation{'::'} @type{upper_ident})*
+                          (ws pattern_struct_body / ws pattern_tuple)?
+pattern_struct_body <- @punctuation{'{'} ws pattern_struct_fields? ws @punctuation{'}'}
+pattern_struct_fields <- pattern_struct_field (ws @punctuation{','} ws pattern_struct_field)* (ws @punctuation{','})?
+pattern_struct_field  <- @property{ident} ws @punctuation{':'} ws pattern
+                       / @property{ident}
+                       / @punctuation{'..'}
+pattern_slice <- @punctuation{'['} ws pattern_list? ws @punctuation{']'}
+pattern_range <- pattern_literal ws (@punctuation{'..='} / @punctuation{'..'}) ws pattern_literal
+pattern_literal <- string_lit / char_lit / number_lit / @constant{bool_lit}
+pattern_wild  <- @punctuation{'_'}
+pattern_rest  <- @punctuation{'..'}
+pattern_binding <- (@keyword{'ref'} ws)? (@keyword{'mut'} ws)? @variable{ident}
+                   (ws @punctuation{'@'} ws pattern_atom)?
+
+# --- Expressions -------------------------------------------------------
+#
+# Not precedence-correct. The sweep only cares about shared-prefix
+# backtracking at token level, so we accept `a + b * c` as "primary op
+# primary op primary" without tree-shape enforcement.
+
+expr          <- expr_op
+
+expr_op       <- expr_range (ws bin_op ws expr_range)*
+
+# Range: `a..b`, `a..=b`, `..b`, `a..`, `..`.
+expr_range    <- expr_unary (ws (@punctuation{'..='} / @punctuation{'..'}) ws expr_unary?)?
+               / (@punctuation{'..='} / @punctuation{'..'}) ws expr_unary?
+
+bin_op        <- @operator{'<<='} / @operator{'>>='}
+               / @operator{'&&'}  / @operator{'||'}
+               / @operator{'=='}  / @operator{'!='}
+               / @operator{'<='}  / @operator{'>='}
+               / @operator{'<<'}  / @operator{'>>'}
+               / @operator{'+='}  / @operator{'-='}
+               / @operator{'*='}  / @operator{'/='}
+               / @operator{'%='}  / @operator{'&='}
+               / @operator{'|='}  / @operator{'^='}
+               / @operator{'='}
+               / @operator{'<'}   / @operator{'>'}
+               / @operator{'+'}   / @operator{'-'}
+               / @operator{'*'}   / @operator{'/'}
+               / @operator{'%'}
+               / @operator{'&'}   / @operator{'|'}
+               / @operator{'^'}
+               / @keyword{'as'} ws type_expr_suffix_marker
+
+# A marker rule: when `as` matches, consume the following type. Split
+# from `bin_op` so the type_expr stays attached.
+type_expr_suffix_marker <- type_expr
+
+expr_unary    <- (unary_op ws)* expr_postfix
+unary_op      <- @operator{'&'} lifetime? (ws @keyword{'mut'})?
+               / @operator{'*'}
+               / @operator{'-'}
+               / @operator{'!'}
+
+# Postfix chain: calls, indexing, field access, try `?`.
+expr_postfix  <- expr_primary (ws postfix_op)*
+postfix_op    <- @punctuation{'?'}
+               / @punctuation{'.'} @keyword{'await'}
+               / @punctuation{'.'} postfix_member
+               / @punctuation{'('} ws expr_list? ws @punctuation{')'}
+               / @punctuation{'['} ws expr ws @punctuation{']'}
+postfix_member <- turbofish_method
+                / @function{ident} (ws @punctuation{'('} ws expr_list? ws @punctuation{')'})?
+                / @number{digit_seq}
+turbofish_method <- @function{ident} @punctuation{'::'} @punctuation{'<'} ws generic_arg_list? ws @punctuation{'>'} (ws @punctuation{'('} ws expr_list? ws @punctuation{')'})?
+
+expr_primary  <- literal
+               / expr_if
+               / expr_match
+               / expr_while
+               / expr_loop
+               / expr_for
+               / expr_return
+               / expr_break
+               / expr_continue
+               / expr_unsafe
+               / expr_closure
+               / expr_block
+               / expr_async_block
+               / expr_tuple_or_paren
+               / expr_array
+               / expr_macro_or_path
+               / expr_keyword
+
+expr_if       <- @keyword{'if'} ws (@keyword{'let'} ws pattern ws @operator{'='} ws)? expr ws block
+                 (ws @keyword{'else'} ws (expr_if / block))?
+expr_match    <- @keyword{'match'} ws expr ws @punctuation{'{'} ws match_arms? ws @punctuation{'}'}
+match_arms    <- match_arm (ws @punctuation{','} ws match_arm)* (ws @punctuation{','})?
+match_arm     <- (attr_outer ws)* pattern (ws @keyword{'if'} ws expr)? ws @punctuation{'=>'} ws expr
+expr_while    <- @keyword{'while'} ws (@keyword{'let'} ws pattern ws @operator{'='} ws)? expr ws block
+expr_loop     <- (loop_label ws)? @keyword{'loop'} ws block
+expr_for      <- @keyword{'for'} ws pattern ws @keyword{'in'} ws expr ws block
+expr_return   <- @keyword{'return'} (ws expr)?
+expr_break    <- @keyword{'break'} (ws loop_label)? (ws expr)?
+expr_continue <- @keyword{'continue'} (ws loop_label)?
+expr_unsafe   <- @keyword{'unsafe'} ws block
+expr_closure  <- (@keyword{'move'} ws)? @punctuation{'|'} ws closure_params? ws @punctuation{'|'}
+                 (ws @punctuation{'->'} ws type_expr)? ws expr
+closure_params <- closure_param (ws @punctuation{','} ws closure_param)* (ws @punctuation{','})?
+closure_param <- pattern (ws @punctuation{':'} ws type_expr)?
+expr_block    <- block
+expr_async_block <- @keyword{'async'} (ws @keyword{'move'})? ws block
+expr_tuple_or_paren <- @punctuation{'('} ws expr_list? ws @punctuation{')'}
+expr_array    <- @punctuation{'['} ws expr_array_body? ws @punctuation{']'}
+expr_array_body <- expr ws @punctuation{';'} ws expr
+                 / expr (ws @punctuation{','} ws expr)* (ws @punctuation{','})?
+expr_list     <- expr (ws @punctuation{','} ws expr)* (ws @punctuation{','})?
+expr_keyword  <- @keyword{'self'} / @keyword{'Self'} / @keyword{'super'} / @keyword{'crate'}
+
+loop_label    <- @punctuation{'\''} @variable{ident} @punctuation{':'}
+
+# `path::to::thing`, `path::to::thing::<T>(...)`, `Struct { ... }`,
+# or `macro!(...)` / `macro!{...}` / `macro![...]`.
+expr_macro_or_path <- path_expr (ws struct_init / @punctuation{'!'} ws macro_args)?
+path_expr     <- path_seg (@punctuation{'::'} path_seg)*
+path_seg      <- @type{upper_ident} (@punctuation{'::'} @punctuation{'<'} ws generic_arg_list? ws @punctuation{'>'})?
+               / @function{lower_ident} (@punctuation{'::'} @punctuation{'<'} ws generic_arg_list? ws @punctuation{'>'})?
+
+struct_init   <- @punctuation{'{'} ws struct_init_fields? ws @punctuation{'}'}
+struct_init_fields <- struct_init_field (ws @punctuation{','} ws struct_init_field)* (ws @punctuation{','} ws struct_init_base?)?
+struct_init_field  <- @punctuation{'..'} expr
+                    / @property{ident} ws @punctuation{':'} ws expr
+                    / @property{ident}
+struct_init_base   <- @punctuation{'..'} expr
+
+# --- Statements & blocks ----------------------------------------------
+
+block         <- @punctuation{'{'} ws block_body ws @punctuation{'}'}
+block_body    <- (stmt)*
+
+stmt          <- let_stmt
+               / expr ws @punctuation{';'} ws
+               / expr ws                                    # trailing expression (block-valued)
+
+let_stmt      <- @keyword{'let'} ws pattern (ws @punctuation{':'} ws type_expr)?
+                 (ws @punctuation{'='} ws expr)? (ws @keyword{'else'} ws block)? ws @punctuation{';'} ws
+
+# --- Balanced-bracket helpers (used for macro bodies) -----------------
+#
+# Skip over arbitrary Rust token soup, respecting () [] {} nesting
+# and Rust string / char / comment literals so we don't mis-balance
+# a `}` inside a string. This is the pragmatic alternative to a real
+# token-tree grammar.
+
+brace_block   <- @punctuation{'{'} balanced_body @punctuation{'}'}
+paren_group   <- @punctuation{'('} balanced_body @punctuation{')'}
+bracket_group <- @punctuation{'['} balanced_body @punctuation{']'}
+balanced_body <- (balanced_atom)*
+balanced_atom <- brace_block
+               / paren_group
+               / bracket_group
+               / string_lit
+               / char_lit
+               / comment
+               / !([{}()\[\]]) .
+
+# --- Literals ----------------------------------------------------------
+
+literal       <- string_lit / char_lit / number_lit / @constant{bool_lit}
+bool_lit      <- 'true' / 'false'
+
+# Raw strings first (longer prefix), then regular.
+string_lit    <- @string{raw_string / byte_string / regular_string}
+regular_string <- '"' (str_escape / !'"' .)* '"'
+str_escape    <- '\\' (!'\n' .)
+byte_string   <- 'b' '"' (str_escape / !'"' .)* '"'
+raw_string    <- 'r' raw_hashes '"' raw_body_0 '"' raw_hashes
+               / 'br' raw_hashes '"' raw_body_0 '"' raw_hashes
+# Consume matching hash fences; the body is "up to the closing delim".
+# Keeping this simple: require the closing `"#*` to match the opening.
+# We approximate by supporting 0..=8 hashes explicitly.
+raw_hashes    <- '########' / '#######' / '######' / '#####' / '####' / '###' / '##' / '#' / ''
+raw_body_0    <- (!'"' .)*
+
+char_lit      <- @string{"'" (char_escape / !"'" .) "'"}
+char_escape   <- '\\' (!'\n' .)
+
+number_lit    <- @number{num_body}
+num_body      <- float_num / int_num
+float_num     <- digit_seq '.' digit_seq (exp_part)? num_suffix?
+               / digit_seq exp_part num_suffix?
+int_num       <- '0x' hex_digits num_suffix?
+               / '0o' oct_digits num_suffix?
+               / '0b' bin_digits num_suffix?
+               / digit_seq num_suffix?
+digit_seq     <- [0-9] ([0-9_])*
+hex_digits    <- [0-9a-fA-F] [0-9a-fA-F_]*
+oct_digits    <- [0-7] [0-7_]*
+bin_digits    <- [01] [01_]*
+exp_part      <- [eE] [+\-]? digit_seq
+num_suffix    <- [a-zA-Z_] [a-zA-Z0-9_]*
+
+# --- Lifetimes and identifiers -----------------------------------------
+
+lifetime      <- @type{"'" ident_body}
+
+# `r#keyword` raw identifier is accepted; the `r#` prefix is stripped
+# of special meaning for highlighting.
+ident_any     <- @type{upper_ident}
+               / @variable{lower_ident}
+upper_ident   <- 'r#'? [A-Z] ident_body*
+lower_ident   <- 'r#'? [a-z_] ident_body*
+ident         <- 'r#'? [A-Za-z_] ident_body*
+ident_body    <- [A-Za-z0-9_]
+
+# --- Whitespace and comments ------------------------------------------
+
+comment       <- @comment{line_comment / block_comment}
+line_comment  <- '//' (!'\n' .)*
+# Non-nested block comment. Real Rust allows nesting; for highlighting
+# the occasional mismatch is acceptable and keeps the grammar simpler.
+block_comment <- '/*' (!'*/' .)* '*/'
+
+ws            <- (comment / [ \t\r\n])*
