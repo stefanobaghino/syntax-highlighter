@@ -1,0 +1,375 @@
+# Go (pragmatic subset) grammar with highlight annotations.
+# The first rule is the start rule.
+#
+# Scope: highlighting, not compilation. Parses real-world Go at the
+# token/declaration level. Precedence is flattened and semantic
+# constraints (type checking, method set resolution, package lookup)
+# are not enforced. Composite literals in control-flow headers are
+# disambiguated by a dedicated `expr_no_compound` path that Go's
+# actual grammar also needs.
+#
+# Capture kinds used (all present in src/highlight/theme.rs):
+#   keyword, string, number, comment, operator, punctuation, type,
+#   function, constant, property, variable, recovery.
+#
+# Intentionally out of scope:
+#   - Generics with type parameters are accepted structurally
+#     (`func F[T any](x T) T`) but no constraint checking.
+#   - Build tags and line directives are skipped as comments.
+#   - Raw identifier-vs-type semantic disambiguation (we color by
+#     shape: predeclared names → @type, PascalCase → @type,
+#     lowercase → @variable or @function by context).
+#
+# Recovery: top-level uses `*^` so malformed top-level declarations
+# don't abort the whole file.
+
+go_file       <- ws package_clause ws (import_decl ws)* (top_decl)*^ ws !.
+
+# --- Package / imports ----------------------------------------------
+
+package_clause <- @keyword{'package'} ws @variable{ident} ws opt_semi
+
+import_decl   <- @keyword{'import'} ws import_spec_group ws opt_semi
+               / @keyword{'import'} ws import_spec ws opt_semi
+import_spec_group <- @punctuation{'('} ws (import_spec ws opt_semi)* ws @punctuation{')'}
+import_spec   <- import_alias? string_lit
+import_alias  <- @punctuation{'.'} ws
+               / @variable{ident} ws
+
+# --- Top-level declarations -----------------------------------------
+
+top_decl      <- decl
+                 / func_decl
+                 / method_decl
+
+decl          <- @keyword{'var'} ws var_spec_group
+               / @keyword{'var'} ws var_spec ws opt_semi
+               / @keyword{'const'} ws const_spec_group
+               / @keyword{'const'} ws const_spec ws opt_semi
+               / @keyword{'type'} ws type_spec_group
+               / @keyword{'type'} ws type_spec ws opt_semi
+
+var_spec_group <- @punctuation{'('} ws (var_spec ws opt_semi)* ws @punctuation{')'}
+var_spec      <- ident_list ws type_expr ws @operator{'='} ws expr_list
+               / ident_list ws type_expr
+               / ident_list ws @operator{'='} ws expr_list
+
+const_spec_group <- @punctuation{'('} ws (const_spec ws opt_semi)* ws @punctuation{')'}
+const_spec    <- const_ident_list (ws type_expr)? (ws @operator{'='} ws expr_list)?
+
+type_spec_group <- @punctuation{'('} ws (type_spec ws opt_semi)* ws @punctuation{')'}
+type_spec     <- @type{ident} ws type_params? ws (@operator{'='})? ws type_expr
+
+func_decl     <- @keyword{'func'} ws @function{ident} type_params? ws fn_signature ws block?
+method_decl   <- @keyword{'func'} ws method_receiver ws @function{ident} ws fn_signature ws block?
+method_receiver <- @punctuation{'('} ws (@variable{ident} ws)? type_expr ws @punctuation{')'}
+
+# Generics type parameters: `[T any, U comparable]`.
+type_params   <- @punctuation{'['} ws type_param_list ws @punctuation{']'}
+type_param_list <- type_param (ws @punctuation{','} ws type_param)* (ws @punctuation{','})?
+type_param    <- ident_list ws type_constraint
+type_constraint <- type_union
+type_union    <- type_term (ws @operator{'|'} ws type_term)*
+type_term     <- @operator{'~'} ws type_expr
+               / type_expr
+
+fn_signature  <- fn_params (ws fn_result)?
+fn_params     <- @punctuation{'('} ws fn_param_list? ws @punctuation{')'}
+fn_param_list <- fn_param (ws @punctuation{','} ws fn_param)* (ws @punctuation{','})?
+fn_param      <- ident_list ws (@operator{'...'} ws)? type_expr
+               / (@operator{'...'} ws)? type_expr
+fn_result     <- fn_params
+               / type_expr
+
+# --- Types -----------------------------------------------------------
+
+type_expr     <- type_ptr
+               / type_slice_or_array
+               / type_map
+               / type_chan
+               / type_func
+               / type_struct
+               / type_interface
+               / type_paren
+               / type_name
+
+type_ptr      <- @operator{'*'} ws type_expr
+type_slice_or_array <- @punctuation{'['} ws (@operator{'...'} / expr)? ws @punctuation{']'} ws type_expr
+type_map      <- @keyword{'map'} ws @punctuation{'['} ws type_expr ws @punctuation{']'} ws type_expr
+type_chan     <- @operator{'<-'} ws @keyword{'chan'} ws type_expr
+               / @keyword{'chan'} ws @operator{'<-'} ws type_expr
+               / @keyword{'chan'} ws type_expr
+type_func     <- @keyword{'func'} ws fn_signature
+type_struct   <- @keyword{'struct'} ws @punctuation{'{'} ws struct_field_list? ws @punctuation{'}'}
+struct_field_list <- struct_field (ws opt_semi ws struct_field)* (ws opt_semi)?
+struct_field  <- @property{ident} (ws @punctuation{','} ws @property{ident})* ws type_expr (ws string_lit)?
+               / (@operator{'*'} ws)? type_name (ws string_lit)?       # embedded field
+type_interface <- @keyword{'interface'} ws @punctuation{'{'} ws interface_members? ws @punctuation{'}'}
+interface_members <- interface_member (ws opt_semi ws interface_member)* (ws opt_semi)?
+interface_member <- @function{ident} ws fn_signature
+                  / type_term
+type_paren    <- @punctuation{'('} ws type_expr ws @punctuation{')'}
+type_name     <- @type{qualified_ident} type_args?
+type_args     <- @punctuation{'['} ws type_arg_list ws @punctuation{']'}
+type_arg_list <- type_expr (ws @punctuation{','} ws type_expr)* (ws @punctuation{','})?
+
+# `pkg.Name` or `Name`.
+qualified_ident <- ident (@punctuation{'.'} ident)?
+
+# --- Statements ------------------------------------------------------
+
+block         <- @punctuation{'{'} ws (stmt ws)* @punctuation{'}'}
+
+stmt          <- decl ws opt_semi
+               / block
+               / labeled_stmt
+               / if_stmt
+               / for_stmt
+               / switch_stmt
+               / select_stmt
+               / go_stmt
+               / defer_stmt
+               / return_stmt
+               / break_stmt
+               / continue_stmt
+               / goto_stmt
+               / fallthrough_stmt
+               / simple_stmt ws opt_semi
+               / empty_stmt
+
+empty_stmt    <- @punctuation{';'} ws
+
+simple_stmt   <- send_stmt
+               / inc_dec_stmt
+               / assignment
+               / short_var_decl
+               / expr_stmt
+
+send_stmt     <- expr_no_compound ws @operator{'<-'} ws expr_no_compound
+inc_dec_stmt  <- expr_no_compound ws (@operator{'++'} / @operator{'--'})
+short_var_decl <- ident_list ws @operator{':='} ws expr_list
+assignment    <- expr_no_compound_list ws assign_op ws expr_list
+expr_stmt     <- expr_no_compound
+
+assign_op     <- @operator{'+='} / @operator{'-='} / @operator{'*='} / @operator{'/='}
+               / @operator{'%='} / @operator{'&='} / @operator{'|='} / @operator{'^='}
+               / @operator{'<<='} / @operator{'>>='} / @operator{'&^='}
+               / @operator{'='} !'='
+
+labeled_stmt  <- @variable{ident} ws @punctuation{':'} ws stmt
+
+if_stmt       <- @keyword{'if'} ws (simple_stmt ws @punctuation{';'} ws)? expr_no_compound ws block
+                 (ws @keyword{'else'} ws (if_stmt / block))?
+for_stmt      <- @keyword{'for'} ws for_header? ws block
+for_header    <- for_range
+               / for_c_style
+               / expr_no_compound
+for_range     <- (ident_list ws (@operator{'='} / @operator{':='}) ws)? @keyword{'range'} ws expr_no_compound
+for_c_style   <- simple_stmt? ws @punctuation{';'} ws expr_no_compound? ws @punctuation{';'} ws simple_stmt?
+
+switch_stmt   <- @keyword{'switch'} ws type_switch_header ws @punctuation{'{'} ws type_case* ws @punctuation{'}'}
+               / @keyword{'switch'} ws expr_switch_header ws @punctuation{'{'} ws expr_case* ws @punctuation{'}'}
+expr_switch_header <- (simple_stmt ws @punctuation{';'} ws)? expr_no_compound?
+               / ''
+type_switch_header <- (simple_stmt ws @punctuation{';'} ws)? type_switch_guard
+type_switch_guard  <- (@variable{ident} ws @operator{':='} ws)? expr_no_compound @punctuation{'.'} @punctuation{'('} ws @keyword{'type'} ws @punctuation{')'}
+expr_case     <- @keyword{'case'} ws expr_list ws @punctuation{':'} ws (stmt ws)*
+               / @keyword{'default'} ws @punctuation{':'} ws (stmt ws)*
+type_case     <- @keyword{'case'} ws type_list ws @punctuation{':'} ws (stmt ws)*
+               / @keyword{'default'} ws @punctuation{':'} ws (stmt ws)*
+type_list     <- type_expr (ws @punctuation{','} ws type_expr)*
+
+select_stmt   <- @keyword{'select'} ws @punctuation{'{'} ws comm_case* ws @punctuation{'}'}
+comm_case     <- @keyword{'case'} ws comm_clause ws @punctuation{':'} ws (stmt ws)*
+               / @keyword{'default'} ws @punctuation{':'} ws (stmt ws)*
+comm_clause   <- send_stmt
+               / recv_stmt
+recv_stmt     <- (ident_list ws (@operator{'='} / @operator{':='}) ws)? expr_no_compound
+
+go_stmt       <- @keyword{'go'} ws expr
+defer_stmt    <- @keyword{'defer'} ws expr
+return_stmt   <- @keyword{'return'} (ws expr_list)?
+break_stmt    <- @keyword{'break'} (ws @variable{ident})?
+continue_stmt <- @keyword{'continue'} (ws @variable{ident})?
+goto_stmt     <- @keyword{'goto'} ws @variable{ident}
+fallthrough_stmt <- @keyword{'fallthrough'}
+
+# --- Expressions -----------------------------------------------------
+#
+# Two tracks: `expr` allows composite literals (`T{...}`); in
+# control-flow headers and simple statements we use `expr_no_compound`
+# to avoid parsing `y { z }` as `y{z}` a la composite literal. Mirrors
+# Go's own disambiguation (see go/parser for `exprLev`).
+
+expr          <- expr_bin
+expr_no_compound <- expr_bin_nc
+
+expr_bin      <- expr_unary (ws bin_op ws expr_unary)*
+expr_bin_nc   <- expr_unary_nc (ws bin_op ws expr_unary_nc)*
+
+bin_op        <- @operator{'&&'} / @operator{'||'}
+               / @operator{'=='} / @operator{'!='}
+               / @operator{'<='} / @operator{'>='}
+               / @operator{'<<'} / @operator{'>>'}
+               / @operator{'&^'}
+               / @operator{'+'} / @operator{'-'}
+               / @operator{'*'} / @operator{'/'} / @operator{'%'}
+               / @operator{'&'} / @operator{'|'} / @operator{'^'}
+               / @operator{'<'} / @operator{'>'}
+
+expr_unary    <- (unary_op ws)* expr_postfix
+expr_unary_nc <- (unary_op ws)* expr_postfix_nc
+unary_op      <- @operator{'!'} / @operator{'+'} / @operator{'-'}
+               / @operator{'^'} / @operator{'*'} / @operator{'&'}
+               / @operator{'<-'}
+
+expr_postfix  <- expr_primary (ws postfix_op)*
+expr_postfix_nc <- expr_primary_nc (ws postfix_op_nc)*
+
+postfix_op    <- @punctuation{'.'} postfix_selector
+               / @punctuation{'['} ws slice_or_index ws @punctuation{']'}
+               / @punctuation{'('} ws call_args? ws @punctuation{')'}
+               / composite_body
+postfix_op_nc <- @punctuation{'.'} postfix_selector
+               / @punctuation{'['} ws slice_or_index ws @punctuation{']'}
+               / @punctuation{'('} ws call_args? ws @punctuation{')'}
+postfix_selector <- @punctuation{'('} ws @keyword{'type'} ws @punctuation{')'}           # x.(type) (only in type switch; accepted here too)
+                  / @punctuation{'('} ws type_expr ws @punctuation{')'}                   # x.(T) type assertion
+                  / @function{ident} &(ws @punctuation{'('})
+                  / @property{ident}
+slice_or_index <- expr? ws @punctuation{':'} ws expr? (ws @punctuation{':'} ws expr)?
+               / expr
+
+call_args     <- arg (ws @punctuation{','} ws arg)* (ws @punctuation{','})?
+arg           <- expr ws @operator{'...'}
+               / expr
+               / type_expr
+
+# Composite literal body: `{ ... }` after a type expression.
+composite_body <- @punctuation{'{'} ws composite_elems? ws @punctuation{'}'}
+composite_elems <- composite_elem (ws @punctuation{','} ws composite_elem)* (ws @punctuation{','})?
+composite_elem <- composite_key ws @punctuation{':'} ws composite_value
+               / composite_value
+composite_key  <- @property{ident}
+                / @punctuation{'['} ws expr ws @punctuation{']'}
+                / string_lit
+                / number_lit
+composite_value <- composite_body
+                 / expr
+
+expr_primary  <- literal
+               / fn_lit
+               / composite_lit
+               / type_conv
+               / call_ident
+               / @type{upper_ident}
+               / @constant{predeclared_const}
+               / @type{predeclared_type}
+               / @function{predeclared_fn} &(ws @punctuation{'('})
+               / @variable{lower_ident}
+               / paren_expr
+expr_primary_nc <- literal
+                 / fn_lit
+                 / type_conv
+                 / call_ident
+                 / @type{upper_ident}
+                 / @constant{predeclared_const}
+                 / @type{predeclared_type}
+                 / @function{predeclared_fn} &(ws @punctuation{'('})
+                 / @variable{lower_ident}
+                 / paren_expr
+
+paren_expr    <- @punctuation{'('} ws expr ws @punctuation{')'}
+
+# Composite literal: `T{...}` where T is a named/qualified type.
+composite_lit <- @type{qualified_ident} composite_body
+               / @keyword{'map'} ws @punctuation{'['} ws type_expr ws @punctuation{']'} ws type_expr ws composite_body
+               / @punctuation{'['} ws (@operator{'...'} / expr)? ws @punctuation{']'} ws type_expr ws composite_body
+               / @keyword{'struct'} ws type_struct_body ws composite_body
+type_struct_body <- @punctuation{'{'} ws struct_field_list? ws @punctuation{'}'}
+
+# Type conversion: `T(x)` where T is a named type — only triggers if
+# immediately followed by `(`.
+type_conv     <- @type{predeclared_type} @punctuation{'('} ws expr ws @punctuation{')'}
+
+# Function literal.
+fn_lit        <- @keyword{'func'} ws fn_signature ws block
+
+call_ident    <- @function{ident} &(ws @punctuation{'('})
+
+ident_list    <- @variable{ident} (ws @punctuation{','} ws @variable{ident})*
+const_ident_list <- @constant{ident} (ws @punctuation{','} ws @constant{ident})*
+expr_list     <- expr (ws @punctuation{','} ws expr)*
+expr_no_compound_list <- expr_no_compound (ws @punctuation{','} ws expr_no_compound)*
+
+# --- Literals -------------------------------------------------------
+
+literal       <- string_lit / number_lit / rune_lit / @constant{bool_lit} / @constant{nil_lit} / @constant{iota_lit}
+
+bool_lit      <- 'true' !ident_body / 'false' !ident_body
+nil_lit       <- 'nil' !ident_body
+iota_lit      <- 'iota' !ident_body
+
+string_lit    <- @string{raw_string / interp_string}
+raw_string    <- '`' (!'`' .)* '`'
+interp_string <- '"' (str_escape / !'"' !'\n' .)* '"'
+str_escape    <- '\\' .
+
+rune_lit      <- @string{"'" (char_escape / !"'" .)* "'"}
+char_escape   <- '\\' .
+
+number_lit    <- @number{num_body}
+num_body      <- '0x' hex_digits ('.' hex_digits?)? ([pP] [+\-]? [0-9]+)? imag?
+               / '0X' hex_digits ('.' hex_digits?)? ([pP] [+\-]? [0-9]+)? imag?
+               / '0o' oct_digits imag?
+               / '0b' bin_digits imag?
+               / digit_seq '.' digit_seq? exp_part? imag?
+               / '.' digit_seq exp_part? imag?
+               / digit_seq exp_part? imag?
+digit_seq     <- [0-9] ([0-9_])*
+hex_digits    <- [0-9a-fA-F] [0-9a-fA-F_]*
+oct_digits    <- [0-7] [0-7_]*
+bin_digits    <- [01] [01_]*
+exp_part      <- [eE] [+\-]? [0-9]+
+imag          <- 'i'
+
+# --- Identifiers / predeclared names ---------------------------------
+
+ident         <- !reserved ident_start ident_body*
+upper_ident   <- !reserved [A-Z] ident_body*
+lower_ident   <- !reserved [a-z_] ident_body*
+ident_start   <- [A-Za-z_]
+ident_body    <- [A-Za-z0-9_]
+
+# Reserved keywords blocking identifier capture.
+reserved      <- reserved_word !ident_body
+reserved_word <- 'break' / 'case' / 'chan' / 'const' / 'continue'
+               / 'defer' / 'default' / 'else' / 'fallthrough' / 'for'
+               / 'func' / 'go' / 'goto' / 'if' / 'import' / 'interface'
+               / 'map' / 'package' / 'range' / 'return' / 'select'
+               / 'struct' / 'switch' / 'type' / 'var'
+
+# Predeclared constants / types / builtin funcs — matched as whole
+# identifiers so colouring is consistent without contextual
+# resolution.
+predeclared_const <- ('true' / 'false' / 'nil' / 'iota') !ident_body
+predeclared_type <- ('uint8' / 'uint16' / 'uint32' / 'uint64' / 'uint'
+                   / 'int8' / 'int16' / 'int32' / 'int64' / 'int'
+                   / 'float32' / 'float64' / 'complex64' / 'complex128'
+                   / 'uintptr' / 'byte' / 'rune' / 'string' / 'bool'
+                   / 'error' / 'any' / 'comparable') !ident_body
+predeclared_fn <- ('append' / 'cap' / 'close' / 'complex' / 'copy'
+                 / 'delete' / 'imag' / 'len' / 'make' / 'new' / 'panic'
+                 / 'print' / 'println' / 'real' / 'recover') !ident_body
+
+# --- Whitespace / comments / semicolon handling ----------------------
+
+# Go uses newlines as statement terminators (lexer-inserted `;`); here
+# we accept optional explicit `;` and let `ws` eat whitespace.
+opt_semi      <- (@punctuation{';'} ws)?
+
+comment       <- @comment{line_comment / block_comment}
+line_comment  <- '//' (!'\n' .)*
+block_comment <- '/*' (!'*/' .)* '*/'
+
+ws            <- (comment / [ \t\r\n])*
