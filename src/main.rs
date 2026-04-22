@@ -10,6 +10,7 @@ const SQLITE_GRAMMAR: &str = include_str!("../grammars/sqlite.peg");
 const RUST_GRAMMAR: &str = include_str!("../grammars/rust.peg");
 const JS_GRAMMAR: &str = include_str!("../grammars/javascript.peg");
 const GO_GRAMMAR: &str = include_str!("../grammars/go.peg");
+const C_GRAMMAR: &str = include_str!("../grammars/c.peg");
 
 #[derive(Clone, Copy)]
 enum Lang {
@@ -19,6 +20,7 @@ enum Lang {
     Rust,
     JavaScript,
     Go,
+    C,
 }
 
 impl Lang {
@@ -30,6 +32,7 @@ impl Lang {
             Lang::Rust => RUST_GRAMMAR,
             Lang::JavaScript => JS_GRAMMAR,
             Lang::Go => GO_GRAMMAR,
+            Lang::C => C_GRAMMAR,
         }
     }
 
@@ -41,6 +44,7 @@ impl Lang {
             "rs" | "rust" => Some(Lang::Rust),
             "js" | "javascript" | "mjs" | "cjs" => Some(Lang::JavaScript),
             "go" => Some(Lang::Go),
+            "c" | "h" => Some(Lang::C),
             _ => None,
         }
     }
@@ -65,11 +69,11 @@ fn parse_args<I: Iterator<Item = String>>(args: I) -> Result<Cli, String> {
         match arg.as_str() {
             "-l" | "--lang" => {
                 let name = it.next().ok_or_else(|| {
-                    format!("{} requires a value (json|toml|sql|rust|js|go)", arg)
+                    format!("{} requires a value (json|toml|sql|rust|js|go|c)", arg)
                 })?;
                 lang = Some(Lang::from_name(&name).ok_or_else(|| {
                     format!(
-                        "unknown language {:?} (expected json|toml|sql|rust|js|go)",
+                        "unknown language {:?} (expected json|toml|sql|rust|js|go|c)",
                         name
                     )
                 })?);
@@ -78,7 +82,7 @@ fn parse_args<I: Iterator<Item = String>>(args: I) -> Result<Cli, String> {
                 let name = &other["--lang=".len()..];
                 lang = Some(Lang::from_name(name).ok_or_else(|| {
                     format!(
-                        "unknown language {:?} (expected json|toml|sql|rust|js|go)",
+                        "unknown language {:?} (expected json|toml|sql|rust|js|go|c)",
                         name
                     )
                 })?);
@@ -101,7 +105,7 @@ fn pick_lang(cli: &Cli) -> Result<Lang, String> {
     match &cli.path {
         Some(p) => Lang::from_extension(Path::new(p)).ok_or_else(|| {
             format!(
-                "cannot infer language from path {:?}; pass --lang json|toml|sql|rust|js|go",
+                "cannot infer language from path {:?}; pass --lang json|toml|sql|rust|js|go|c",
                 p
             )
         }),
