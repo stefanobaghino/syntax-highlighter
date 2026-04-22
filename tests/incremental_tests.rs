@@ -215,6 +215,34 @@ fn sql_incremental_matches_fresh_across_edit_sequence() {
 }
 
 #[test]
+fn sql_incremental_matches_fresh_across_recovery_boundary_edits() {
+    // `sql_file`'s top-level `*^` produces `recovery` captures around
+    // syntactically-broken chunks. Equivalence with a fresh parse must
+    // hold across edits that move, fix, or introduce such chunks — the
+    // memo cache must not retain stale entries that span an edit
+    // crossing recovery territory.
+    let mut inc = parser_for(
+        SQL_GRAMMAR,
+        "CREATE TABLE t (a INTEGER);\n!!! oops\nSELECT * FROM t;",
+    );
+    assert_equivalent(&inc, SQL_GRAMMAR, "sql recovery initial");
+
+    // Fix the broken middle by replacing the garbage with a real statement.
+    let oops_start = find_subslice(inc.input(), b"!!! oops").unwrap();
+    inc.edit(
+        oops_start,
+        oops_start + "!!! oops".len(),
+        b"INSERT INTO t VALUES (1);",
+    );
+    assert_equivalent(&inc, SQL_GRAMMAR, "sql recovery fixed");
+
+    // Re-introduce a broken chunk at a different position.
+    let select = find_subslice(inc.input(), b"SELECT").unwrap();
+    inc.edit(select, select, b"???\n");
+    assert_equivalent(&inc, SQL_GRAMMAR, "sql recovery reintroduced");
+}
+
+#[test]
 fn append_char_by_char_matches_fresh_on_every_step() {
     // Streaming-LLM scenario: the classic case incremental parsing is
     // designed to accelerate. Equivalence must hold at every single

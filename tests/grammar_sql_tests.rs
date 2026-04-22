@@ -61,12 +61,21 @@ fn assert_complete_full(input: &str) -> (Vec<Capture>, Vec<String>) {
     (caps, kinds)
 }
 
-fn assert_rejects(input: &str) {
-    let (matched, _caps, _kinds, complete) = run(input);
+/// Assert that the input is not a clean parse: either the VM rejects
+/// it outright, or `sql_file`'s top-level `*^` resync salvages it by
+/// emitting at least one `recovery` capture. Either way, the input is
+/// not a sequence of well-formed statements.
+fn assert_not_clean_parse(input: &str) {
+    let (matched, caps, kinds, complete) = run(input);
+    let parse_failed = !complete || matched < input.len();
+    let recovery_idx = kinds.iter().position(|k| k == "recovery");
+    let has_recovery = recovery_idx
+        .map(|i| caps.iter().any(|c| c.kind.0 as usize == i))
+        .unwrap_or(false);
     assert!(
-        !complete || matched < input.len(),
-        "expected rejection for {:?}, got complete full-input match",
-        input
+        parse_failed || has_recovery,
+        "expected {:?} to fail or trigger recovery, got clean full-input match",
+        input,
     );
 }
 
@@ -112,6 +121,9 @@ fn capture_kinds_are_only_theme_kinds() {
         "function",
         "constant",
         "variable",
+        // Emitted by `sql_file`'s top-level `*^` resync loop; mapped
+        // to verbatim output by src/highlight/theme.rs.
+        "recovery",
     ]
     .into_iter()
     .collect();
@@ -450,11 +462,13 @@ fn non_reserved_words_parse_as_identifiers() {
 }
 
 #[test]
-fn rejects_blatantly_invalid_input() {
-    // Seeds `assert_rejects` usage. Two consecutive SELECTs without a
-    // separator or expression between them are never valid.
-    assert_rejects("SELECT SELECT");
-    assert_rejects("SELECT FROM");
+fn blatantly_invalid_input_is_not_a_clean_parse() {
+    // Two consecutive SELECTs without a separator or expression between
+    // them are never valid as a single clean parse — `sql_file`'s
+    // top-level `*^` either rejects or salvages such input via the
+    // `recovery` capture, but never accepts it as well-formed.
+    assert_not_clean_parse("SELECT SELECT");
+    assert_not_clean_parse("SELECT FROM");
 }
 
 #[test]
@@ -1026,10 +1040,11 @@ fn explain_variants() {
 }
 
 #[test]
-fn explain_explain_rejected() {
+fn explain_explain_is_not_a_clean_parse() {
     // `EXPLAIN EXPLAIN ...` is not valid — explain_stmt wraps
-    // statement_body, not statement.
-    assert_rejects("EXPLAIN EXPLAIN SELECT 1");
+    // statement_body, not statement. Top-level `*^` may salvage it,
+    // but the inner statement parse must not accept the nesting.
+    assert_not_clean_parse("EXPLAIN EXPLAIN SELECT 1");
 }
 
 #[test]
