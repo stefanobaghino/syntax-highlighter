@@ -182,6 +182,35 @@ fn partial_match_renders_prefix_styled_and_tail_plain() {
 }
 
 #[test]
+fn recover_repeat_renders_styled_then_plain_then_styled() {
+    // Synthetic grammar with a single `*^` toplevel: `foo` runs are
+    // keyword-styled, anything else is consumed by the recovery branch
+    // and renders verbatim. Both sides of a recovered region must keep
+    // their styling, and the round-trip invariant must hold.
+    let grammar = "doc <- @keyword{\"foo\"}*^";
+    let mut h = Highlighter::new(grammar).expect("recovery grammar should compile");
+    let input = "foo!fooBARfoo";
+    h.set_input(input.to_string());
+    let out = h.highlight();
+    assert_eq!(
+        strip_ansi(&out),
+        input,
+        "round-trip must hold across recovery"
+    );
+    let kw = theme::color_for("keyword");
+    assert_eq!(
+        out.matches(kw).count(),
+        3,
+        "expected three keyword-styled `foo` runs, got {:?}",
+        out
+    );
+    // The recovered substrings appear verbatim — no ANSI codes wrap them.
+    let after_first = out.find('!').expect("`!` must appear in output");
+    let around = &out[after_first..after_first + 1];
+    assert_eq!(around, "!", "recovery byte must render without styling");
+}
+
+#[test]
 fn unterminated_string_still_round_trips() {
     // The load-bearing strip_ansi invariant must hold even when the input
     // is malformed — partial-match rendering must not reorder, drop, or

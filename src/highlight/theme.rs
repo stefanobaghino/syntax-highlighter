@@ -15,6 +15,10 @@ pub fn color_for(kind: &str) -> &'static str {
         "constant" => "\x1b[35m",    // magenta
         "property" => "\x1b[36m",    // cyan
         "variable" => "\x1b[37m",    // white
+        // `recovery` captures (emitted by `*^` resync loops) render
+        // verbatim by default. Explicit entry so a user theme can
+        // override without falling back through the unknown branch.
+        "recovery" => "",
         _ => "",
     }
 }
