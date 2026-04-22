@@ -64,9 +64,9 @@ fn parse_args<I: Iterator<Item = String>>(args: I) -> Result<Cli, String> {
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "-l" | "--lang" => {
-                let name = it
-                    .next()
-                    .ok_or_else(|| format!("{} requires a value (json|toml|sql|rust|js|go)", arg))?;
+                let name = it.next().ok_or_else(|| {
+                    format!("{} requires a value (json|toml|sql|rust|js|go)", arg)
+                })?;
                 lang = Some(Lang::from_name(&name).ok_or_else(|| {
                     format!(
                         "unknown language {:?} (expected json|toml|sql|rust|js|go)",

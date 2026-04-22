@@ -81,7 +81,8 @@ fn minimal_package_parses() {
 
 #[test]
 fn hello_world_parses() {
-    let input = "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"hello, world\")\n}\n";
+    let input =
+        "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"hello, world\")\n}\n";
     let (caps, kinds) = assert_complete_full(input);
     let k = kinds_for(&caps, &kinds);
     assert!(k.contains(&"keyword"), "expected keywords: {:?}", k);
@@ -177,7 +178,8 @@ fn channel_types_parse() {
 
 #[test]
 fn if_with_init_parses() {
-    let input = "package p\n\nfunc f() {\n\tif v, err := parse(); err != nil {\n\t\t_ = v\n\t}\n}\n";
+    let input =
+        "package p\n\nfunc f() {\n\tif v, err := parse(); err != nil {\n\t\t_ = v\n\t}\n}\n";
     let (_, _) = assert_complete_full(input);
 }
 
