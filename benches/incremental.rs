@@ -28,6 +28,7 @@ const TOML_GRAMMAR: &str = include_str!("../grammars/toml.peg");
 const SQL_GRAMMAR: &str = include_str!("../grammars/sqlite.peg");
 const RUST_GRAMMAR: &str = include_str!("../grammars/rust.peg");
 const JS_GRAMMAR: &str = include_str!("../grammars/javascript.peg");
+const GO_GRAMMAR: &str = include_str!("../grammars/go.peg");
 
 const JSON_SMALL: &str = include_str!("fixtures/small.json");
 const JSON_MEDIUM: &str = include_str!("fixtures/medium.json");
@@ -53,6 +54,11 @@ const JS_SMALL: &str = include_str!("fixtures/small.js");
 const JS_MEDIUM: &str = include_str!("fixtures/medium.js");
 const JS_LARGE: &str = include_str!("fixtures/large.js");
 const JS_XLARGE: &str = include_str!("fixtures/xlarge.js");
+
+const GO_SMALL: &str = include_str!("fixtures/small.go");
+const GO_MEDIUM: &str = include_str!("fixtures/medium.go");
+const GO_LARGE: &str = include_str!("fixtures/large.go");
+const GO_XLARGE: &str = include_str!("fixtures/xlarge.go");
 
 const RUNS_PER_CELL: usize = 11;
 
@@ -301,6 +307,16 @@ fn main() {
                 ("medium", JS_MEDIUM),
                 ("large", JS_LARGE),
                 ("xlarge", JS_XLARGE),
+            ],
+        },
+        GrammarCase {
+            label: "go",
+            source: GO_GRAMMAR,
+            fixtures: &[
+                ("small", GO_SMALL),
+                ("medium", GO_MEDIUM),
+                ("large", GO_LARGE),
+                ("xlarge", GO_XLARGE),
             ],
         },
     ];
