@@ -26,6 +26,7 @@ use common::{json_f64, json_num, json_str, median, open_jsonl, write_jsonl_row};
 const JSON_GRAMMAR: &str = include_str!("../grammars/json.peg");
 const TOML_GRAMMAR: &str = include_str!("../grammars/toml.peg");
 const SQL_GRAMMAR: &str = include_str!("../grammars/sqlite.peg");
+const RUST_GRAMMAR: &str = include_str!("../grammars/rust.peg");
 
 const JSON_SMALL: &str = include_str!("fixtures/small.json");
 const JSON_MEDIUM: &str = include_str!("fixtures/medium.json");
@@ -41,6 +42,11 @@ const SQL_SMALL: &str = include_str!("fixtures/small.sql");
 const SQL_MEDIUM: &str = include_str!("fixtures/medium.sql");
 const SQL_LARGE: &str = include_str!("fixtures/large.sql");
 const SQL_XLARGE: &str = include_str!("fixtures/xlarge.sql");
+
+const RUST_SMALL: &str = include_str!("fixtures/small.rs");
+const RUST_MEDIUM: &str = include_str!("fixtures/medium.rs");
+const RUST_LARGE: &str = include_str!("fixtures/large.rs");
+const RUST_XLARGE: &str = include_str!("fixtures/xlarge.rs");
 
 const RUNS_PER_CELL: usize = 11;
 
@@ -269,6 +275,16 @@ fn main() {
                 ("medium", SQL_MEDIUM),
                 ("large", SQL_LARGE),
                 ("xlarge", SQL_XLARGE),
+            ],
+        },
+        GrammarCase {
+            label: "rust",
+            source: RUST_GRAMMAR,
+            fixtures: &[
+                ("small", RUST_SMALL),
+                ("medium", RUST_MEDIUM),
+                ("large", RUST_LARGE),
+                ("xlarge", RUST_XLARGE),
             ],
         },
     ];
