@@ -30,14 +30,17 @@ const SQL_GRAMMAR: &str = include_str!("../grammars/sqlite.peg");
 const JSON_SMALL: &str = include_str!("fixtures/small.json");
 const JSON_MEDIUM: &str = include_str!("fixtures/medium.json");
 const JSON_LARGE: &str = include_str!("fixtures/large.json");
+const JSON_XLARGE: &str = include_str!("fixtures/xlarge.json");
 
 const TOML_SMALL: &str = include_str!("fixtures/small.toml");
 const TOML_MEDIUM: &str = include_str!("fixtures/medium.toml");
 const TOML_LARGE: &str = include_str!("fixtures/large.toml");
+const TOML_XLARGE: &str = include_str!("fixtures/xlarge.toml");
 
 const SQL_SMALL: &str = include_str!("fixtures/small.sql");
 const SQL_MEDIUM: &str = include_str!("fixtures/medium.sql");
 const SQL_LARGE: &str = include_str!("fixtures/large.sql");
+const SQL_XLARGE: &str = include_str!("fixtures/xlarge.sql");
 
 const RUNS_PER_CELL: usize = 11;
 
@@ -245,6 +248,7 @@ fn main() {
                 ("small", JSON_SMALL),
                 ("medium", JSON_MEDIUM),
                 ("large", JSON_LARGE),
+                ("xlarge", JSON_XLARGE),
             ],
         },
         GrammarCase {
@@ -254,6 +258,7 @@ fn main() {
                 ("small", TOML_SMALL),
                 ("medium", TOML_MEDIUM),
                 ("large", TOML_LARGE),
+                ("xlarge", TOML_XLARGE),
             ],
         },
         GrammarCase {
@@ -263,6 +268,7 @@ fn main() {
                 ("small", SQL_SMALL),
                 ("medium", SQL_MEDIUM),
                 ("large", SQL_LARGE),
+                ("xlarge", SQL_XLARGE),
             ],
         },
     ];

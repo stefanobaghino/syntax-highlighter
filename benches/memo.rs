@@ -30,14 +30,17 @@ const SQL_GRAMMAR: &str = include_str!("../grammars/sqlite.peg");
 const JSON_SMALL: &str = include_str!("fixtures/small.json");
 const JSON_MEDIUM: &str = include_str!("fixtures/medium.json");
 const JSON_LARGE: &str = include_str!("fixtures/large.json");
+const JSON_XLARGE: &str = include_str!("fixtures/xlarge.json");
 
 const TOML_SMALL: &str = include_str!("fixtures/small.toml");
 const TOML_MEDIUM: &str = include_str!("fixtures/medium.toml");
 const TOML_LARGE: &str = include_str!("fixtures/large.toml");
+const TOML_XLARGE: &str = include_str!("fixtures/xlarge.toml");
 
 const SQL_SMALL: &str = include_str!("fixtures/small.sql");
 const SQL_MEDIUM: &str = include_str!("fixtures/medium.sql");
 const SQL_LARGE: &str = include_str!("fixtures/large.sql");
+const SQL_XLARGE: &str = include_str!("fixtures/xlarge.sql");
 
 const THRESHOLDS: &[usize] = &[0, 32, 64, 128, 256, 512, 1024, 2048, 4096];
 const RUNS_PER_CELL: usize = 11;
@@ -157,6 +160,7 @@ fn main() {
                 ("small", JSON_SMALL.as_bytes()),
                 ("medium", JSON_MEDIUM.as_bytes()),
                 ("large", JSON_LARGE.as_bytes()),
+                ("xlarge", JSON_XLARGE.as_bytes()),
             ],
         },
         GrammarCase {
@@ -166,6 +170,7 @@ fn main() {
                 ("small", TOML_SMALL.as_bytes()),
                 ("medium", TOML_MEDIUM.as_bytes()),
                 ("large", TOML_LARGE.as_bytes()),
+                ("xlarge", TOML_XLARGE.as_bytes()),
             ],
         },
         GrammarCase {
@@ -175,6 +180,7 @@ fn main() {
                 ("small", SQL_SMALL.as_bytes()),
                 ("medium", SQL_MEDIUM.as_bytes()),
                 ("large", SQL_LARGE.as_bytes()),
+                ("xlarge", SQL_XLARGE.as_bytes()),
             ],
         },
     ];
