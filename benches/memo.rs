@@ -30,6 +30,7 @@ const RUST_GRAMMAR: &str = include_str!("../grammars/rust.peg");
 const JS_GRAMMAR: &str = include_str!("../grammars/javascript.peg");
 const GO_GRAMMAR: &str = include_str!("../grammars/go.peg");
 const C_GRAMMAR: &str = include_str!("../grammars/c.peg");
+const CSS_GRAMMAR: &str = include_str!("../grammars/css.peg");
 
 const JSON_SMALL: &str = include_str!("fixtures/small.json");
 const JSON_MEDIUM: &str = include_str!("fixtures/medium.json");
@@ -65,6 +66,11 @@ const C_SMALL: &str = include_str!("fixtures/small.c");
 const C_MEDIUM: &str = include_str!("fixtures/medium.c");
 const C_LARGE: &str = include_str!("fixtures/large.c");
 const C_XLARGE: &str = include_str!("fixtures/xlarge.c");
+
+const CSS_SMALL: &str = include_str!("fixtures/small.css");
+const CSS_MEDIUM: &str = include_str!("fixtures/medium.css");
+const CSS_LARGE: &str = include_str!("fixtures/large.css");
+const CSS_XLARGE: &str = include_str!("fixtures/xlarge.css");
 
 const THRESHOLDS: &[usize] = &[0, 32, 64, 128, 256, 512, 1024, 2048, 4096];
 const RUNS_PER_CELL: usize = 11;
@@ -245,6 +251,16 @@ fn main() {
                 ("medium", C_MEDIUM.as_bytes()),
                 ("large", C_LARGE.as_bytes()),
                 ("xlarge", C_XLARGE.as_bytes()),
+            ],
+        },
+        GrammarCase {
+            name: "css",
+            program: compile_case("css", CSS_GRAMMAR),
+            inputs: vec![
+                ("small", CSS_SMALL.as_bytes()),
+                ("medium", CSS_MEDIUM.as_bytes()),
+                ("large", CSS_LARGE.as_bytes()),
+                ("xlarge", CSS_XLARGE.as_bytes()),
             ],
         },
     ];
