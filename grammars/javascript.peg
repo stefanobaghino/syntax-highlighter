@@ -1,0 +1,361 @@
+# JavaScript (pragmatic subset) grammar with highlight annotations.
+# The first rule is the start rule.
+#
+# Scope: highlighting, not execution. Parses ES2020-ish JavaScript at
+# the token level. Precedence is not enforced and semantic constraints
+# (binding rules, strict-mode, generator-vs-function context) are not
+# checked. The bench value lives in the shared-prefix backtracking
+# induced by arrow-fn-vs-paren-expr and template-literal expression
+# splicing.
+#
+# ASI (automatic semicolon insertion) is handled loosely: `;` is
+# accepted but not required at statement boundaries. Tokens that
+# would be invalid under a real ASI pass are still accepted here
+# because highlighting does not need to agree with the engine.
+#
+# Capture kinds used (all present in src/highlight/theme.rs):
+#   keyword, string, number, comment, operator, punctuation, type,
+#   function, constant, property, variable, recovery.
+#
+# Intentionally out of scope:
+#   - JSX. Requires its own expression/statement mode.
+#   - Regex literals. Disambiguation from division requires parser
+#     state the VM does not carry; `/re/` is rare enough that giving
+#     up on it is a fair trade.
+#   - Decorator proposals.
+#   - TypeScript type annotations.
+#
+# Recovery: top-level uses `*^` so malformed statements don't abort
+# the whole file.
+
+js_file        <- ws (stmt)*^ ws !.
+
+# --- Statements -------------------------------------------------------
+#
+# Order matters (PEG first-match). Declaration-shaped items precede
+# expression-statements so their leading keywords aren't misparsed as
+# identifiers.
+
+stmt           <- import_decl
+                / export_decl
+                / fn_decl
+                / class_decl
+                / var_decl ws opt_semi
+                / if_stmt
+                / for_stmt
+                / while_stmt
+                / do_while_stmt
+                / switch_stmt
+                / try_stmt
+                / throw_stmt
+                / return_stmt
+                / break_stmt
+                / continue_stmt
+                / debugger_stmt
+                / labeled_stmt
+                / block_stmt
+                / empty_stmt
+                / expr ws opt_semi
+
+opt_semi       <- (@punctuation{';'} ws)?
+empty_stmt     <- @punctuation{';'} ws
+
+# --- Imports / exports ------------------------------------------------
+
+import_decl    <- @keyword{'import'} ws import_body ws opt_semi
+import_body    <- import_clause ws @keyword{'from'} ws string_lit
+                / string_lit
+import_clause  <- import_default ws @punctuation{','} ws import_ns_or_named
+                / import_default
+                / import_ns_or_named
+import_default <- @variable{ident}
+import_ns_or_named <- import_namespace / import_named
+import_namespace <- @operator{'*'} ws @keyword{'as'} ws @variable{ident}
+import_named   <- @punctuation{'{'} ws import_specifier_list? ws @punctuation{'}'}
+import_specifier_list <- import_specifier (ws @punctuation{','} ws import_specifier)* (ws @punctuation{','})?
+import_specifier <- @variable{ident} ws @keyword{'as'} ws @variable{ident}
+                  / @variable{ident}
+
+export_decl    <- @keyword{'export'} ws @keyword{'default'} ws export_default_body
+                / @keyword{'export'} ws @operator{'*'} ws (@keyword{'as'} ws @variable{ident} ws)? @keyword{'from'} ws string_lit ws opt_semi
+                / @keyword{'export'} ws export_named
+                / @keyword{'export'} ws fn_decl
+                / @keyword{'export'} ws class_decl
+                / @keyword{'export'} ws var_decl ws opt_semi
+export_default_body <- fn_decl
+                     / class_decl
+                     / expr ws opt_semi
+export_named   <- @punctuation{'{'} ws export_specifier_list? ws @punctuation{'}'} (ws @keyword{'from'} ws string_lit)? ws opt_semi
+export_specifier_list <- export_specifier (ws @punctuation{','} ws export_specifier)* (ws @punctuation{','})?
+export_specifier <- @variable{ident} ws @keyword{'as'} ws @variable{ident}
+                  / @variable{ident}
+
+# --- Function / class declarations ------------------------------------
+
+fn_decl        <- @keyword{'async'} ws fn_decl_core
+                / fn_decl_core
+fn_decl_core   <- @keyword{'function'} (ws @operator{'*'})? ws @function{ident} ws fn_params ws block
+
+class_decl     <- @keyword{'class'} ws @type{ident} ws class_heritage? ws class_body
+class_heritage <- @keyword{'extends'} ws expr_lhs
+class_body     <- @punctuation{'{'} ws class_member* ws @punctuation{'}'}
+class_member   <- @punctuation{';'} ws
+                / class_method_or_field
+class_method_or_field <- (@keyword{'static'} ws)? (class_method / class_field)
+class_method   <- (@keyword{'async'} ws)? (@operator{'*'} ws)? method_head ws fn_params ws block ws
+                / (@keyword{'get'} / @keyword{'set'}) ws method_head ws fn_params ws block ws
+method_head    <- computed_prop
+                / @function{ident}
+                / string_lit
+                / number_lit
+class_field    <- (computed_prop / @property{ident}) ws (@operator{'='} ws expr_no_comma)? ws opt_semi
+
+# --- Variable declarations -------------------------------------------
+
+var_decl       <- (@keyword{'var'} / @keyword{'let'} / @keyword{'const'}) ws var_declarator_list
+var_declarator_list <- var_declarator (ws @punctuation{','} ws var_declarator)*
+var_declarator <- pattern (ws @operator{'='} ws expr_no_comma)?
+
+# --- Control flow -----------------------------------------------------
+
+if_stmt        <- @keyword{'if'} ws @punctuation{'('} ws expr ws @punctuation{')'} ws stmt
+                  (ws @keyword{'else'} ws stmt)?
+for_stmt       <- @keyword{'for'} (ws @keyword{'await'})? ws @punctuation{'('} ws for_head ws @punctuation{')'} ws stmt
+for_head       <- for_c_style
+                / for_in_of
+for_c_style    <- for_init? ws @punctuation{';'} ws expr? ws @punctuation{';'} ws expr?
+for_in_of      <- for_binding ws (@keyword{'in'} / @keyword{'of'}) ws expr
+for_init       <- var_decl
+                / expr
+for_binding    <- (@keyword{'var'} / @keyword{'let'} / @keyword{'const'}) ws pattern
+                / pattern
+
+while_stmt     <- @keyword{'while'} ws @punctuation{'('} ws expr ws @punctuation{')'} ws stmt
+do_while_stmt  <- @keyword{'do'} ws stmt ws @keyword{'while'} ws @punctuation{'('} ws expr ws @punctuation{')'} ws opt_semi
+switch_stmt    <- @keyword{'switch'} ws @punctuation{'('} ws expr ws @punctuation{')'} ws
+                  @punctuation{'{'} ws switch_case* ws @punctuation{'}'}
+switch_case    <- @keyword{'case'} ws expr ws @punctuation{':'} ws (!switch_case_term stmt)*
+                / @keyword{'default'} ws @punctuation{':'} ws (!switch_case_term stmt)*
+switch_case_term <- @keyword{'case'} / @keyword{'default'} / @punctuation{'}'}
+try_stmt       <- @keyword{'try'} ws block (ws catch_clause)? (ws finally_clause)?
+catch_clause   <- @keyword{'catch'} (ws @punctuation{'('} ws pattern ws @punctuation{')'})? ws block
+finally_clause <- @keyword{'finally'} ws block
+throw_stmt     <- @keyword{'throw'} ws expr ws opt_semi
+return_stmt    <- @keyword{'return'} (ws expr)? ws opt_semi
+break_stmt     <- @keyword{'break'} (ws @variable{ident})? ws opt_semi
+continue_stmt  <- @keyword{'continue'} (ws @variable{ident})? ws opt_semi
+debugger_stmt  <- @keyword{'debugger'} ws opt_semi
+labeled_stmt   <- @variable{ident} ws @punctuation{':'} ws stmt
+block_stmt     <- block
+block          <- @punctuation{'{'} ws stmt* ws @punctuation{'}'}
+
+# --- Function params and patterns -------------------------------------
+
+fn_params      <- @punctuation{'('} ws fn_param_list? ws @punctuation{')'}
+fn_param_list  <- fn_param (ws @punctuation{','} ws fn_param)* (ws @punctuation{','})?
+fn_param       <- @operator{'...'} pattern
+                / pattern (ws @operator{'='} ws expr_no_comma)?
+
+# --- Destructuring patterns ------------------------------------------
+
+pattern        <- array_pattern / object_pattern / @variable{ident}
+array_pattern  <- @punctuation{'['} ws array_pattern_list? ws @punctuation{']'}
+array_pattern_list <- array_pattern_el (ws @punctuation{','} ws array_pattern_el)* (ws @punctuation{','})?
+array_pattern_el <- @operator{'...'} pattern
+                  / pattern (ws @operator{'='} ws expr_no_comma)?
+                  / ''
+object_pattern <- @punctuation{'{'} ws object_pattern_list? ws @punctuation{'}'}
+object_pattern_list <- object_pattern_prop (ws @punctuation{','} ws object_pattern_prop)* (ws @punctuation{','})?
+object_pattern_prop <- @operator{'...'} pattern
+                     / (computed_prop / @property{ident}) ws @punctuation{':'} ws pattern (ws @operator{'='} ws expr_no_comma)?
+                     / @property{ident} (ws @operator{'='} ws expr_no_comma)?
+
+computed_prop  <- @punctuation{'['} ws expr ws @punctuation{']'}
+
+# --- Expressions ------------------------------------------------------
+
+expr           <- expr_no_comma (ws @punctuation{','} ws expr_no_comma)*
+expr_no_comma  <- expr_assign
+expr_assign    <- expr_arrow
+                / expr_yield
+                / expr_conditional (ws assign_op ws expr_assign)?
+
+assign_op      <- @operator{'**='}
+                / @operator{'<<='} / @operator{'>>>='} / @operator{'>>='}
+                / @operator{'||='} / @operator{'&&='} / @operator{'??='}
+                / @operator{'+='} / @operator{'-='} / @operator{'*='} / @operator{'/='}
+                / @operator{'%='} / @operator{'&='} / @operator{'|='} / @operator{'^='}
+                / @operator{'='} !'='
+
+# Arrow functions tried first. `async x => ...`, `x => ...`,
+# `(a, b) => ...`, `() => ...`.
+expr_arrow     <- arrow_head ws @operator{'=>'} ws arrow_body
+arrow_head     <- @keyword{'async'} ws arrow_params
+                / arrow_params
+arrow_params   <- @variable{ident}
+                / arrow_paren_params
+arrow_paren_params <- @punctuation{'('} ws fn_param_list? ws @punctuation{')'}
+arrow_body     <- block
+                / expr_no_comma
+
+expr_yield     <- @keyword{'yield'} (ws @operator{'*'})? (ws expr_assign)?
+
+# Ternary.
+expr_conditional <- expr_bin (ws @operator{'?'} ws expr_no_comma ws @punctuation{':'} ws expr_no_comma)?
+
+# Binary / logical / bitwise — flattened, precedence not enforced.
+expr_bin       <- expr_unary (ws bin_op ws expr_unary)*
+bin_op         <- @operator{'??'}
+                / @operator{'||'} / @operator{'&&'}
+                / @operator{'==='} / @operator{'!=='}
+                / @operator{'=='} / @operator{'!='}
+                / @operator{'<='} / @operator{'>='}
+                / @operator{'<<'} / @operator{'>>>'} / @operator{'>>'}
+                / @operator{'**'}
+                / @operator{'+'} / @operator{'-'}
+                / @operator{'*'} / @operator{'/'} / @operator{'%'}
+                / @operator{'&'} / @operator{'|'} / @operator{'^'}
+                / @operator{'<'} / @operator{'>'}
+                / @keyword{'instanceof'}
+                / @keyword{'in'}
+
+expr_unary     <- (unary_op ws)* expr_postfix
+unary_op       <- @keyword{'typeof'}
+                / @keyword{'void'}
+                / @keyword{'delete'}
+                / @keyword{'await'}
+                / @operator{'++'} / @operator{'--'}
+                / @operator{'+'} / @operator{'-'}
+                / @operator{'!'} / @operator{'~'}
+
+# Postfix: calls, member, optional chain, index, `++`/`--`.
+expr_postfix   <- expr_lhs (ws postfix_op)*
+postfix_op     <- @operator{'++'}
+                / @operator{'--'}
+                / @operator{'?.'} ws postfix_after_optional
+                / @punctuation{'.'} member_target
+                / @punctuation{'['} ws expr ws @punctuation{']'}
+                / call_args
+                / template_lit
+postfix_after_optional <- call_args
+                        / @punctuation{'['} ws expr ws @punctuation{']'}
+                        / member_target
+member_target  <- @function{ident} &(ws @punctuation{'('})
+                / @property{ident}
+call_args      <- @punctuation{'('} ws arg_list? ws @punctuation{')'}
+arg_list       <- arg (ws @punctuation{','} ws arg)* (ws @punctuation{','})?
+arg            <- @operator{'...'} expr_no_comma
+                / expr_no_comma
+
+expr_lhs       <- expr_new / expr_primary
+expr_new       <- @keyword{'new'} ws expr_new_target
+expr_new_target <- @type{upper_ident} new_tail?
+                 / @variable{lower_ident} new_tail?
+                 / expr_primary new_tail?
+new_tail       <- (ws postfix_op)+
+
+expr_primary   <- literal
+                / expr_this
+                / expr_super
+                / expr_fn
+                / expr_class
+                / expr_array
+                / expr_object
+                / expr_paren
+                / call_ident
+                / @type{upper_ident}
+                / @variable{lower_ident}
+
+call_ident     <- @function{ident} &(ws @punctuation{'('})
+
+expr_this      <- @keyword{'this'}
+expr_super     <- @keyword{'super'}
+expr_fn        <- (@keyword{'async'} ws)? @keyword{'function'} (ws @operator{'*'})? ws (@function{ident} ws)? fn_params ws block
+expr_class     <- @keyword{'class'} (ws @type{ident})? ws class_heritage? ws class_body
+expr_array     <- @punctuation{'['} ws array_elem_list? ws @punctuation{']'}
+array_elem_list <- array_elem (ws @punctuation{','} ws array_elem)* (ws @punctuation{','})?
+array_elem     <- @operator{'...'} expr_no_comma
+                / expr_no_comma
+                / ''
+expr_object    <- @punctuation{'{'} ws object_props? ws @punctuation{'}'}
+object_props   <- object_prop (ws @punctuation{','} ws object_prop)* (ws @punctuation{','})?
+object_prop    <- @operator{'...'} expr_no_comma
+                / object_method
+                / (computed_prop / string_lit / number_lit / @property{ident}) ws @punctuation{':'} ws expr_no_comma
+                / @property{ident}
+object_method  <- (@keyword{'async'} ws)? (@operator{'*'} ws)? method_head ws fn_params ws block
+                / (@keyword{'get'} / @keyword{'set'}) ws method_head ws fn_params ws block
+expr_paren     <- @punctuation{'('} ws expr ws @punctuation{')'}
+
+# --- Literals ---------------------------------------------------------
+
+literal        <- template_lit
+                / string_lit
+                / number_lit
+                / @constant{bool_lit}
+                / @constant{null_lit}
+                / @constant{undefined_lit}
+
+bool_lit       <- 'true' !ident_body
+                / 'false' !ident_body
+null_lit       <- 'null' !ident_body
+undefined_lit  <- 'undefined' !ident_body
+
+string_lit     <- @string{sq_string / dq_string}
+sq_string      <- "'" (str_escape / !"'" !'\n' .)* "'"
+dq_string      <- '"' (str_escape / !'"' !'\n' .)* '"'
+str_escape     <- '\\' .
+
+# Template literals with ${...} interpolation. Chunks outside the
+# interpolations get @string; the interpolation braces stay
+# @punctuation and the inner expression is parsed as normal.
+template_lit   <- @string{'`'} template_body @string{'`'}
+template_body  <- (template_chunk / template_interp)*
+template_chunk <- @string{('\\' . / !'`' !'${' .)+}
+template_interp <- @punctuation{'${'} ws expr ws @punctuation{'}'}
+
+number_lit     <- @number{num_body}
+num_body       <- '0x' hex_digits bigint?
+                / '0o' oct_digits bigint?
+                / '0b' bin_digits bigint?
+                / decimal_num bigint?
+decimal_num    <- digit_seq '.' digit_seq? exp_part?
+                / '.' digit_seq exp_part?
+                / digit_seq exp_part?
+digit_seq      <- [0-9] ([0-9_])*
+hex_digits     <- [0-9a-fA-F] [0-9a-fA-F_]*
+oct_digits     <- [0-7] [0-7_]*
+bin_digits     <- [01] [01_]*
+exp_part       <- [eE] [+\-]? [0-9]+
+bigint         <- 'n'
+
+# --- Identifiers / reserved words ------------------------------------
+
+ident          <- !reserved ident_start ident_body*
+upper_ident    <- !reserved [A-Z] ident_body*
+lower_ident    <- !reserved [a-z_$] ident_body*
+ident_start    <- [A-Za-z_$]
+ident_body     <- [A-Za-z0-9_$]
+
+# Reserved words that must not appear as identifiers. The grammar uses
+# explicit `@keyword{...}` at each call site, so this list only blocks
+# accidental ident capture. Contextual keywords (`async`, `await`,
+# `of`, `from`, `as`, `get`, `set`, `static`, `yield` outside
+# generators) are intentionally omitted so they can still be used as
+# identifiers where the language allows.
+reserved       <- reserved_word !ident_body
+reserved_word  <- 'break' / 'case' / 'catch' / 'class' / 'const' / 'continue'
+                / 'debugger' / 'default' / 'delete' / 'do' / 'else'
+                / 'export' / 'extends' / 'false' / 'finally' / 'for'
+                / 'function' / 'if' / 'import' / 'instanceof' / 'in'
+                / 'new' / 'null' / 'return' / 'super' / 'switch'
+                / 'this' / 'throw' / 'true' / 'try' / 'typeof' / 'var'
+                / 'void' / 'while' / 'with' / 'yield'
+
+# --- Whitespace / comments --------------------------------------------
+
+comment        <- @comment{line_comment / block_comment}
+line_comment   <- '//' (!'\n' .)*
+block_comment  <- '/*' (!'*/' .)* '*/'
+
+ws             <- (comment / [ \t\r\n])*
