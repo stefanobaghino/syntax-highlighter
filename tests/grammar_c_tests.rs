@@ -82,10 +82,15 @@ fn empty_document_matches() {
 
 #[test]
 fn hello_world_parses() {
-    let input = "#include <stdio.h>\n\nint main(void) {\n\tprintf(\"hello, world\\n\");\n\treturn 0;\n}\n";
+    let input =
+        "#include <stdio.h>\n\nint main(void) {\n\tprintf(\"hello, world\\n\");\n\treturn 0;\n}\n";
     let (caps, kinds) = assert_complete_full(input);
     let k = kinds_for(&caps, &kinds);
-    assert!(k.contains(&"comment"), "expected #include as comment: {:?}", k);
+    assert!(
+        k.contains(&"comment"),
+        "expected #include as comment: {:?}",
+        k
+    );
     assert!(k.contains(&"keyword"), "expected keywords: {:?}", k);
     assert!(k.contains(&"type"), "expected int as type: {:?}", k);
 }
@@ -119,7 +124,11 @@ fn enum_decl_parses() {
     let input = "enum Colors { RED = 0, GREEN, BLUE };\n";
     let (caps, kinds) = assert_complete_full(input);
     let k = kinds_for(&caps, &kinds);
-    assert!(k.contains(&"constant"), "enum items should be @constant: {:?}", k);
+    assert!(
+        k.contains(&"constant"),
+        "enum items should be @constant: {:?}",
+        k
+    );
 }
 
 #[test]
@@ -186,7 +195,8 @@ fn string_concat_parses() {
 
 #[test]
 fn number_literals_parse() {
-    let input = "int a = 42; long b = 0xdeadBEEFul; int c = 0b1010; float d = 3.14f; double e = 1.5e10;\n";
+    let input =
+        "int a = 42; long b = 0xdeadBEEFul; int c = 0b1010; float d = 3.14f; double e = 1.5e10;\n";
     let (caps, kinds) = assert_complete_full(input);
     let k = kinds_for(&caps, &kinds);
     assert!(k.contains(&"number"), "expected numbers: {:?}", k);
