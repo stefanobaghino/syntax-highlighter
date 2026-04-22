@@ -215,31 +215,31 @@ fn large_fixture_parses_to_completion() {
 
 #[test]
 fn multi_statement_error_recovery() {
-    // The full SQLite grammar exercises farthest-failure tracking across
-    // a `;`-separated script: DDL and DML preceding a malformed chunk
-    // should stay styled; the tail from `!!!` onward renders plain.
+    // `sql_file` opts the top-level statement loop into `*^` resync:
+    // every well-formed statement around a malformed chunk stays styled,
+    // the malformed bytes render verbatim under the `recovery` capture,
+    // and the round-trip invariant holds across the boundary.
     let input = "CREATE TABLE t (a INTEGER);\n\
                  INSERT INTO t VALUES (1);\n\
                  !!! oops\n\
                  SELECT * FROM t;";
     let out = hl(input).highlight();
     assert_eq!(strip_ansi(&out), input, "round-trip must hold");
-    assert!(
-        out.contains(theme::color_for("keyword")),
-        "expected the CREATE/INSERT prefix to carry keyword styling"
-    );
-    assert!(
-        out.contains("!!! oops"),
-        "invalid middle chunk must render verbatim"
-    );
-    // The trailing SELECT is past the farthest-failure point, so it
-    // renders plain rather than styled.
+    let kw = theme::color_for("keyword");
+    // CREATE / INSERT (prefix) and SELECT / FROM (tail) all keyword-styled.
+    assert!(out.contains(kw), "expected keyword styling somewhere");
     let tail_idx = out
         .find("!!! oops")
         .expect("garbage marker must appear in output");
     let tail = &out[tail_idx..];
     assert!(
-        !tail.contains(theme::color_for("keyword")),
-        "tail past the error should render without styling, got {tail:?}"
+        tail.contains(kw),
+        "tail past the recovered region must regain keyword styling, got {tail:?}",
+    );
+    // The malformed middle chunk renders verbatim (recovery captures
+    // map to the empty ANSI string by default).
+    assert!(
+        out.contains("!!! oops"),
+        "recovered middle chunk must render verbatim"
     );
 }

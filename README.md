@@ -27,6 +27,9 @@ to JSON.
 
 Malformed or incomplete inputs render the longest valid prefix styled and
 the rest plain (see `src/pegvm/vm.rs` for the farthest-failure tracking).
+Grammars that opt into the `*^` recovery operator on a top-level
+repetition resync past broken regions instead — see the SQL grammar
+(`grammars/sqlite.peg`) for the shipped example.
 
 `Highlighter` owns its input and reuses the memo table across edits:
 append-only streaming and arbitrary-position edits reparse only the
@@ -79,9 +82,11 @@ printf 'SELECT id FROM users WHERE active;\n' | cargo run -- -l sql
 ## Grammar format
 
 See `grammars/json.peg` for a complete example. The format follows standard
-PEG notation with a single extension: `@name{pattern}` declares a capture
-with the given highlight name. Names are mapped to ANSI colors by the
-highlighter's built-in theme (see `src/highlight/theme.rs`).
+PEG notation with two extensions: `@name{pattern}` declares a capture with
+the given highlight name (mapped to ANSI colors by the built-in theme in
+`src/highlight/theme.rs`), and `p*^` / `p+^` mark a repetition for
+skip-byte error recovery (see `Pattern::RecoverRepeat` in
+`src/pegc/pattern.rs` and the emission pattern in `src/pegc/compiler.rs`).
 
 ## Roadmap
 
@@ -126,7 +131,10 @@ Each item is a self-contained feature that unlocks further work.
   filter. Warth/Douglass/Millstein 2008 is the seminal paper and the
   most widely cited approach, but it couples seed-and-grow to the memo
   table itself — which would fight the threshold filter — and inherits
-  the nullable-LR bugs Medeiros 2014 §6 documents.
+  the nullable-LR bugs Medeiros 2014 §6 documents. Integration note:
+  the L table must be unwound through the same `fail()` path that
+  already commits `Memo` frames and that the shipped `*^` recovery
+  operator relies on.
 - **Explicit memoization opt-out.** Maybe. Per-rule or per-expression
   annotation (e.g. `Rule <-! body` or `{{! expr }}`) disabling caching
   on named hot spots. Grammar authors should not have to reason about
@@ -141,17 +149,6 @@ Each item is a self-contained feature that unlocks further work.
   also expose a `Parser::from_program(Program)` constructor so the deep
   `parser` module accepts pre-compiled bytecode without callers falling
   back to the `pegvm` primitives.
-- **Error recovery / parsing past syntax errors.** PEG is strict by
-  default — a parse either succeeds or fails. For syntax highlighting,
-  the input is frequently incomplete or malformed (mid-edit buffers,
-  streaming responses, in-progress code). The ability to recover past
-  a syntax error and continue highlighting the rest of the input is
-  important; this is a real extension to the VM and a known research
-  area in PEG implementations. If left recursion lands first, the
-  recovery protocol must unwind Medeiros' L table consistently
-  alongside the VM stack — analogous to how `fail()` already handles
-  `Memo` frames.
-
 ### Self-hosting — parsing PEG grammars using pegvm itself
 
 The long-form project: replace the hand-written recursive-descent parser

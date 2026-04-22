@@ -38,6 +38,7 @@ Every other type in the module exists to serve one of these three stages.
 | `AndPredicate(Box<Pattern>)` | `&p` | Zero-width: succeeds iff `p` would succeed here. Consumes no input. |
 | `NonTerminal(String)` | `rule_name` | References another `Pattern` in the enclosing `Grammar`. |
 | `Capture(String, Box<Pattern>)` | `@name{p}` | Matches `p`; additionally records the matched span under the tag `name`. |
+| `RecoverRepeat { inner, recovery_kind }` | `p*^` / `p+^` | Like `Repeat` / `RepeatOne`, but resync past failures inside the loop by consuming one byte under a capture tagged `recovery_kind` and retrying. The loop terminates cleanly at end of input. |
 
 A `Pattern` is a plain value. It can be constructed programmatically (see the compiler tests) or produced by `pegc::parse` from text. A `Pattern` has no knowledge of its environment: a `NonTerminal("digit")` is a dangling reference until it's placed inside a `Grammar` that defines `digit`.
 
@@ -181,6 +182,8 @@ A `MatchResult` is always returned. The `complete` flag distinguishes the two ca
 
 This partial result is what lets the highlighter render a styled prefix and a plain tail for malformed input, without the VM knowing anything about highlighting.
 
+A grammar that opts into the `*^` recovery operator on a top-level repetition can flip a parse that would otherwise be partial into `complete: true`: the loop emits `recovery_kind`-tagged captures over the bytes it skipped past inner failures and exits cleanly at end of input. Captures returned in that case interleave the successful `inner` captures with the recovery captures in input order.
+
 ## Error types
 
 The module has two error types, one per transformation in the pipeline that can fail ahead of time:
@@ -202,6 +205,7 @@ Some properties the module relies on can't be encoded in the Rust type system. T
 5. **Memo replay is absolute-sp.** Cached captures carry the original `start`/`end` byte offsets; a `MemoOpen` hit only fires when `sp == start_sp`, so the stored values are replayed verbatim. Entries are inserted as already-closed `OpenCapture`s so the enclosing `CaptureEnd`'s innermost-still-open search (`rposition(c.end.is_none())`) binds to the caller's open capture rather than a replayed one.
 6. **`VM::fail` records every `Memo` frame it traverses.** When unwinding to find a `Backtrack`, each `Memo` frame encountered is committed as a failure entry before being discarded. Silently dropping a frame would leak re-executions on future calls at the same sp. The loop is an exhaustive `match` over `StackEntry` specifically to make omissions a compiler error.
 7. **`MemoOpen` calls `maybe_snapshot` after applying a success hit.** The hit advances `sp` past code that didn't execute; without the snapshot call the farthest-failure bookkeeping would miss the advance and `MatchResult.complete == false` would report a stale deepest point.
+8. **`RecoverRepeat` emits a fresh `Choice`/`Commit` pair per iteration, never `PartialCommit`.** The loop's retry baseline must sit at the *advanced* `sp` after each successful iteration; `PartialCommit`'s in-place mutation of a stale backtrack frame would corrupt that baseline and re-trigger invariant 1's hazard. See `compile_pat`'s `RecoverRepeat` arm in `src/pegc/compiler.rs`.
 
 ## References
 

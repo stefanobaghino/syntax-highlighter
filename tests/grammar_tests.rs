@@ -63,6 +63,34 @@ fn postfix_operators() {
 }
 
 #[test]
+fn recover_repeat_postfix_star_caret() {
+    let g = parse("r <- 'x'*^");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::RecoverRepeat {
+            inner: Box::new(Pattern::literal("x")),
+            recovery_kind: "recovery".into(),
+        }
+    );
+}
+
+#[test]
+fn recover_repeat_postfix_plus_caret_lowers_to_seq() {
+    // p+^  ≡  p (p*^)  — at least one inner success required.
+    let g = parse("r <- 'x'+^");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Sequence(vec![
+            Pattern::literal("x"),
+            Pattern::RecoverRepeat {
+                inner: Box::new(Pattern::literal("x")),
+                recovery_kind: "recovery".into(),
+            },
+        ])
+    );
+}
+
+#[test]
 fn predicate_operators() {
     let g = parse("a <- !'x' .\nb <- &'y' 'y'");
     assert_eq!(
@@ -179,6 +207,25 @@ fn end_to_end_grammar_compile_run() {
     let r = VM::new(&prog.code, b"42abc").run();
     assert!(r.complete);
     assert_eq!(r.matched, 2);
+}
+
+#[test]
+fn end_to_end_recover_repeat_compile_run() {
+    use syntax_highlighter::pegvm::VM;
+    // Top-level `*^` resyncs past garbage one byte at a time; the parse
+    // completes at EOF, with one "recovery"-tagged capture per skipped byte.
+    let g = parse("doc <- @kw{\"foo\"}*^");
+    let prog = g.compile().unwrap();
+    let r = VM::new(&prog.code, b"fooXXfoo").run();
+    assert!(r.complete);
+    assert_eq!(r.matched, 8);
+    // Capture-kind interning order in the bytecode: "recovery" first
+    // (RecoverRepeat enters before its inner), "kw" second.
+    assert_eq!(prog.capture_kinds, vec!["recovery", "kw"]);
+    let kinds: Vec<u16> = r.captures.iter().map(|c| c.kind.0).collect();
+    let spans: Vec<(usize, usize)> = r.captures.iter().map(|c| (c.start, c.end)).collect();
+    assert_eq!(kinds, vec![1, 0, 0, 1]);
+    assert_eq!(spans, vec![(0, 3), (3, 4), (4, 5), (5, 8)]);
 }
 
 #[test]

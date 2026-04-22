@@ -811,4 +811,40 @@ mod examined_max_tests {
             "start's execution examined up to position 3"
         );
     }
+
+    #[test]
+    fn recover_repeat_propagates_examined_max_through_loop_iterations() {
+        // start <- ("ab")*^   against "abxab"
+        //
+        // The recovery loop runs entirely inside start's memo entry.
+        // Across iterations the loop reads positions 0, 1 (success),
+        // 2 (Char 'a' fails on 'x'), 2 (Any(1) consumes 'x' → sp=3),
+        // 3, 4 (success), 5 (Char 'a' at EOF). Whether the failed
+        // EOF read at sp=5 contributes depends on track_read's call
+        // discipline, so the assertion is a lower bound: every
+        // position the loop *successfully* read must appear in
+        // examined_max.
+        let mut rules = HashMap::new();
+        rule(
+            &mut rules,
+            "start",
+            Pattern::RecoverRepeat {
+                inner: Box::new(Pattern::literal("ab")),
+                recovery_kind: "recovery".into(),
+            },
+        );
+        let prog = Grammar::new(rules, "start").compile().unwrap();
+        let (result, _stats, memo) = VM::new(&prog.code, b"abxab")
+            .with_memo_threshold(0)
+            .run_core();
+        assert!(result.complete);
+        assert_eq!(result.matched, 5);
+        let entry = memo.get(&(MemoId(0), 0)).expect("start entry missing");
+        assert_eq!(entry.end_sp, Some(5));
+        assert!(
+            entry.examined_max >= 5,
+            "recovery-loop reads must propagate to enclosing rule's watermark; got {}",
+            entry.examined_max
+        );
+    }
 }

@@ -180,6 +180,42 @@ impl Compiler {
                 self.compile_pat(inner);
                 self.emit(Instruction::CaptureEnd);
             }
+            Pattern::RecoverRepeat {
+                inner,
+                recovery_kind,
+            } => {
+                // loop_top: Choice rec
+                //           <inner>
+                //           Commit loop_top
+                // rec:      Choice exit       ; Any(1) at EOF exits cleanly
+                //           CaptureBegin <recovery_kind>
+                //           Any(1)
+                //           CaptureEnd
+                //           Commit loop_top
+                // exit:
+                //
+                // Uses fresh Choice/Commit per iteration (not PartialCommit) so
+                // each retry gets a backtrack baseline at the advanced sp; an
+                // in-place PartialCommit on a stale frame would violate the
+                // hazard documented in src/pegvm/README.md invariant 1.
+                let kind = self.intern_capture(recovery_kind);
+                let loop_top = self.pos();
+                let outer_choice = self.emit(Instruction::Choice(Label(0))); // → rec
+                self.compile_pat(inner);
+                self.emit(Instruction::Commit(Label(loop_top)));
+
+                let rec = self.pos();
+                self.patch_jump(outer_choice, rec);
+
+                let inner_choice = self.emit(Instruction::Choice(Label(0))); // → exit
+                self.emit(Instruction::CaptureBegin(kind));
+                self.emit(Instruction::Any(1));
+                self.emit(Instruction::CaptureEnd);
+                self.emit(Instruction::Commit(Label(loop_top)));
+
+                let exit = self.pos();
+                self.patch_jump(inner_choice, exit);
+            }
         }
     }
 }

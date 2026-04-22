@@ -41,6 +41,16 @@
 //! rather than the whole input going unstyled on the first character
 //! that fails to parse.
 //!
+//! Grammars that opt into the `p*^` recovery operator (see
+//! [`crate::pegc::Pattern::RecoverRepeat`]) can do better: the VM
+//! resyncs past failed inner attempts, emitting `recovery`-kind
+//! captures over the skipped bytes. The renderer is kind-agnostic and
+//! `recovery` maps to the empty ANSI string by default
+//! ([`theme::color_for`]), so recovered regions render verbatim
+//! between styled regions in a single pass — no separate "tail plain"
+//! code path. The strip-ANSI invariant below holds across recovery
+//! boundaries.
+//!
 //! # UTF-8 invariant
 //!
 //! `Parser` stores input as bytes. `Highlighter` accepts only

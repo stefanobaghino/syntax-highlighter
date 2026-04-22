@@ -14,6 +14,17 @@ pub enum Pattern {
     AndPredicate(Box<Pattern>),
     NonTerminal(String),
     Capture(String, Box<Pattern>),
+    /// Like `Repeat`, but resync past failures inside the loop by
+    /// consuming one byte under a capture tagged with `recovery_kind`
+    /// and retrying. At end of input the loop terminates cleanly.
+    ///
+    /// Inherits the empty-match livelock of `Repeat`: if `inner` ever
+    /// matches the empty string successfully, the enclosing loop spins
+    /// forever — same hazard as plain `p*`.
+    RecoverRepeat {
+        inner: Box<Pattern>,
+        recovery_kind: String,
+    },
 }
 
 impl Pattern {

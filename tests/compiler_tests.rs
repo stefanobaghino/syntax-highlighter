@@ -182,6 +182,121 @@ fn repeat_one_or_more() {
     );
 }
 
+fn recover(inner: Pattern, kind: &str) -> Pattern {
+    Pattern::RecoverRepeat {
+        inner: Box::new(inner),
+        recovery_kind: kind.into(),
+    }
+}
+
+#[test]
+fn recover_repeat_empty_input() {
+    let p = recover(Pattern::literal("a"), "recovery");
+    assert_eq!(
+        run_pattern(&p, b""),
+        MatchResult {
+            matched: 0,
+            captures: vec![],
+            complete: true,
+        }
+    );
+}
+
+#[test]
+fn recover_repeat_all_inner_matches_emit_no_recovery_captures() {
+    let p = recover(Pattern::literal("a"), "recovery");
+    assert_eq!(
+        run_pattern(&p, b"aaa"),
+        MatchResult {
+            matched: 3,
+            captures: vec![],
+            complete: true,
+        }
+    );
+}
+
+#[test]
+fn recover_repeat_all_garbage_emits_one_recovery_capture_per_byte() {
+    let p = recover(Pattern::literal("a"), "recovery");
+    let r = run_pattern(&p, b"xyz");
+    assert!(r.complete);
+    assert_eq!(r.matched, 3);
+    assert_eq!(
+        r.captures,
+        vec![cap(0, 0, 1), cap(0, 1, 2), cap(0, 2, 3)],
+        "one recovery capture per skipped byte; complete parse at EOF",
+    );
+}
+
+#[test]
+fn recover_repeat_mixed_success_and_recovery() {
+    let p = recover(Pattern::literal("a"), "recovery");
+    let r = run_pattern(&p, b"axa");
+    assert!(r.complete);
+    assert_eq!(r.matched, 3);
+    assert_eq!(
+        r.captures,
+        vec![cap(0, 1, 2)],
+        "successful 'a' iterations emit no captures; the middle 'x' is the only recovery span",
+    );
+}
+
+#[test]
+fn recover_repeat_truncates_failed_inner_attempt_captures() {
+    // inner = @open{"a"} "b" — the @open capture opens before the "b"
+    // that may fail. After a failed attempt, that partial @open must NOT
+    // appear in the result; only successful attempts contribute to it.
+    //
+    // Kind interning order: RecoverRepeat enters before recursing into
+    // inner, so "recovery" interns first (id 0), "open" second (id 1).
+    let inner = Pattern::seq(vec![
+        Pattern::Capture("open".into(), Box::new(Pattern::literal("a"))),
+        Pattern::literal("b"),
+    ]);
+    let p = recover(inner, "recovery");
+    let r = run_pattern(&p, b"axab");
+    assert!(r.complete);
+    assert_eq!(r.matched, 4);
+    assert_eq!(
+        r.captures,
+        vec![
+            cap(0, 0, 1), // recovery: 'a' (failed inner attempt's @open(0,1) is gone)
+            cap(0, 1, 2), // recovery: 'x'
+            cap(1, 2, 3), // @open: the successful 'a' at sp=2
+        ],
+        "the failed inner attempt's open capture must not leak into the result",
+    );
+}
+
+#[test]
+fn recover_repeat_inside_called_rule_returns_cleanly() {
+    // start <- "PRE" loop
+    // loop  <- "a"*^
+    //
+    // Against "PREaxa": the *^ runs to EOF, then start's Return must
+    // pop a Return frame — not a Backtrack frame leaked from the loop.
+    // This is the regression analogue of the PartialCommit hazard
+    // documented in src/pegvm/README.md invariant 1.
+    let mut rules = HashMap::new();
+    rules.insert(
+        "start".into(),
+        Pattern::seq(vec![
+            Pattern::literal("PRE"),
+            Pattern::NonTerminal("loop".into()),
+        ]),
+    );
+    rules.insert("loop".into(), recover(Pattern::literal("a"), "recovery"));
+    let prog = Grammar::new(rules, "start").compile().unwrap();
+    let r = VM::new(&prog.code, b"PREaxa").run();
+    assert!(
+        r.complete,
+        "Return after *^ loop must not panic on stack shape"
+    );
+    assert_eq!(r.matched, 6);
+    // Recovery capture for the middle 'x'; the two 'a's matched cleanly.
+    assert_eq!(r.captures, vec![cap(0, 4, 5)]);
+}
+
 #[test]
 fn optional_pattern() {
     let p = Pattern::seq(vec![
@@ -359,6 +474,40 @@ fn repeat_emits_partial_commit() {
             Instruction::End,
         ]
     );
+}
+
+#[test]
+fn recover_repeat_emits_choice_commit_skeleton() {
+    let p = recover(Pattern::literal("a"), "recovery");
+    let prog = compile_pattern(&p);
+    // loop_top: Choice rec
+    //           Char 'a'
+    //           Commit loop_top
+    // rec:      Choice exit
+    //           CaptureBegin recovery
+    //           Any(1)
+    //           CaptureEnd
+    //           Commit loop_top
+    // exit:     End
+    //
+    // The recovery loop uses fresh Choice/Commit per iteration (not
+    // PartialCommit) so each retry's backtrack baseline is at the
+    // advanced sp. See src/pegvm/README.md invariant 1.
+    assert_eq!(
+        prog.code,
+        vec![
+            Instruction::Choice(Label(3)),             // → rec
+            Instruction::Char(b'a'),                   // <inner>
+            Instruction::Commit(Label(0)),             // → loop_top
+            Instruction::Choice(Label(8)),             // rec: → exit
+            Instruction::CaptureBegin(CaptureKind(0)), // recovery
+            Instruction::Any(1),
+            Instruction::CaptureEnd,
+            Instruction::Commit(Label(0)), // → loop_top
+            Instruction::End,              // exit
+        ]
+    );
+    assert_eq!(prog.capture_kinds, vec!["recovery".to_string()]);
 }
 
 #[test]

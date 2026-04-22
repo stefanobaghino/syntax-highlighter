@@ -39,7 +39,7 @@
 
 # --- Top level --------------------------------------------------------
 
-sql_file   <- ws (statement (stmt_sep statement)*)? stmt_sep? ws !.
+sql_file   <- ws (statement stmt_sep?)*^ ws !.
 stmt_sep   <- ws @punctuation{';'} ws
 statement       <- explain_stmt / statement_body
 statement_body  <- select_stmt
