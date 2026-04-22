@@ -86,7 +86,11 @@ fn simple_rule_parses() {
     let (caps, kinds) = assert_complete_full(input);
     let k = kinds_for(&caps, &kinds);
     assert!(k.contains(&"type"), "body should be @type: {:?}", k);
-    assert!(k.contains(&"property"), "color should be @property: {:?}", k);
+    assert!(
+        k.contains(&"property"),
+        "color should be @property: {:?}",
+        k
+    );
 }
 
 #[test]
@@ -94,8 +98,16 @@ fn class_id_selectors_parse() {
     let input = ".foo { color: blue; }\n#bar { margin: 10px; }\n";
     let (caps, kinds) = assert_complete_full(input);
     let k = kinds_for(&caps, &kinds);
-    assert!(k.contains(&"property"), "class selector should be @property: {:?}", k);
-    assert!(k.contains(&"constant"), "id selector should be @constant: {:?}", k);
+    assert!(
+        k.contains(&"property"),
+        "class selector should be @property: {:?}",
+        k
+    );
+    assert!(
+        k.contains(&"constant"),
+        "id selector should be @constant: {:?}",
+        k
+    );
 }
 
 #[test]
@@ -136,7 +148,11 @@ fn function_call_and_calc_parse() {
     let input = ".c { color: rgb(255, 0, 0); background: rgba(0, 0, 0, 0.5); width: calc(100% - 20px); transform: rotate(45deg); }\n";
     let (caps, kinds) = assert_complete_full(input);
     let k = kinds_for(&caps, &kinds);
-    assert!(k.contains(&"function"), "value fns should be @function: {:?}", k);
+    assert!(
+        k.contains(&"function"),
+        "value fns should be @function: {:?}",
+        k
+    );
 }
 
 #[test]
