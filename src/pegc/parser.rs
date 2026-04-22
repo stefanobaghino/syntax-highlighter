@@ -183,11 +183,32 @@ impl<'a> Parser<'a> {
             match self.peek() {
                 Some(b'*') => {
                     self.pos += 1;
-                    atom = Pattern::Repeat(Box::new(atom));
+                    if self.peek() == Some(b'^') {
+                        self.pos += 1;
+                        atom = Pattern::RecoverRepeat {
+                            inner: Box::new(atom),
+                            recovery_kind: "recovery".into(),
+                        };
+                    } else {
+                        atom = Pattern::Repeat(Box::new(atom));
+                    }
                 }
                 Some(b'+') => {
                     self.pos += 1;
-                    atom = Pattern::RepeatOne(Box::new(atom));
+                    if self.peek() == Some(b'^') {
+                        self.pos += 1;
+                        // p+^  ≡  p (p*^)  — at least one inner success required.
+                        let head = atom.clone();
+                        atom = Pattern::seq(vec![
+                            head,
+                            Pattern::RecoverRepeat {
+                                inner: Box::new(atom),
+                                recovery_kind: "recovery".into(),
+                            },
+                        ]);
+                    } else {
+                        atom = Pattern::RepeatOne(Box::new(atom));
+                    }
                 }
                 Some(b'?') => {
                     self.pos += 1;
