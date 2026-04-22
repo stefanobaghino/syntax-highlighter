@@ -418,3 +418,47 @@ fn partial_match_prefers_deepest_point_across_backtracks() {
     assert!(!r.complete);
     assert_eq!(r.matched, 2);
 }
+
+#[test]
+fn partial_match_captures_survive_backtrack_below_watermark() {
+    // Regression for the lazy-snapshot path: an open capture created
+    // inside a failing first alternative must still appear in the
+    // partial-match result even though `fail()` truncates the captures
+    // vector below the `max_sp` watermark before the second alternative
+    // runs. The lazy snapshot has to rescue those captures before the
+    // truncate; otherwise the final result loses them.
+    //
+    // Grammar: `@mark{ "abc" } / "ab" "x"` against input "abdX".
+    //  0: Choice L1 (=6)
+    //  1: CaptureBegin 0
+    //  2: Char a
+    //  3: Char b
+    //  4: Char c       <- fails here on 'd', sp was 2 → max_sp=2,
+    //                     captures=[{kind:0,start:0,end:None}]
+    //  5: CaptureEnd
+    //  6: Commit L2 (=11) — unreached; Char c failure triggers Backtrack
+    //                         unwind that truncates captures to 0.
+    //  7: Char a     (L1, second alternative)
+    //  8: Char b
+    //  9: Char x      <- fails here on 'd'
+    // 10: End        (L2, unreached)
+    //
+    // Expect: complete=false, matched=2, one capture (kind=0, 0..2).
+    let prog = [
+        Instruction::Choice(Label(7)),
+        Instruction::CaptureBegin(CaptureKind(0)),
+        Instruction::Char(b'a'),
+        Instruction::Char(b'b'),
+        Instruction::Char(b'c'),
+        Instruction::CaptureEnd,
+        Instruction::Commit(Label(10)),
+        Instruction::Char(b'a'),
+        Instruction::Char(b'b'),
+        Instruction::Char(b'x'),
+        Instruction::End,
+    ];
+    let r = run(&prog, b"abdX");
+    assert!(!r.complete);
+    assert_eq!(r.matched, 2);
+    assert_eq!(r.captures, vec![cap(0, 0, 2)]);
+}
