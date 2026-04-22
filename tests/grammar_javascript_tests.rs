@@ -103,7 +103,11 @@ fn simple_function_decl_parses() {
         "expected `function` as keyword: {:?}",
         k
     );
-    assert!(k.contains(&"function"), "expected main as function: {:?}", k);
+    assert!(
+        k.contains(&"function"),
+        "expected main as function: {:?}",
+        k
+    );
 }
 
 #[test]
@@ -136,7 +140,11 @@ fn template_literal_parses_with_interp() {
     let input = "const s = `hello ${name}, age ${age + 1}`;\n";
     let (caps, kinds) = assert_complete_full(input);
     let k = kinds_for(&caps, &kinds);
-    assert!(k.contains(&"string"), "expected @string for template: {:?}", k);
+    assert!(
+        k.contains(&"string"),
+        "expected @string for template: {:?}",
+        k
+    );
 }
 
 #[test]
@@ -181,9 +189,8 @@ fn spread_in_call_and_array_parses() {
 
 #[test]
 fn for_of_and_for_in_parse() {
-    let (_, _) = assert_complete_full(
-        "for (const x of arr) { log(x); }\nfor (let k in obj) { log(k); }\n",
-    );
+    let (_, _) =
+        assert_complete_full("for (const x of arr) { log(x); }\nfor (let k in obj) { log(k); }\n");
 }
 
 #[test]
@@ -203,9 +210,8 @@ fn nullish_coalescing_parses() {
 
 #[test]
 fn try_catch_finally_parses() {
-    let (_, _) = assert_complete_full(
-        "try { f(); } catch (e) { log(e); } finally { cleanup(); }\n",
-    );
+    let (_, _) =
+        assert_complete_full("try { f(); } catch (e) { log(e); } finally { cleanup(); }\n");
 }
 
 #[test]
@@ -219,7 +225,11 @@ fn import_named_parses() {
     let input = "import { a, b as c } from 'mod';\n";
     let (caps, kinds) = assert_complete_full(input);
     let k = kinds_for(&caps, &kinds);
-    assert!(k.contains(&"keyword"), "expected import/from keywords: {:?}", k);
+    assert!(
+        k.contains(&"keyword"),
+        "expected import/from keywords: {:?}",
+        k
+    );
     assert!(k.contains(&"string"), "expected string for module: {:?}", k);
 }
 
@@ -247,14 +257,17 @@ fn new_expression_parses() {
     let input = "const x = new Foo(1, 2);\n";
     let (caps, kinds) = assert_complete_full(input);
     let k = kinds_for(&caps, &kinds);
-    assert!(k.contains(&"type"), "expected Foo as @type after new: {:?}", k);
+    assert!(
+        k.contains(&"type"),
+        "expected Foo as @type after new: {:?}",
+        k
+    );
 }
 
 #[test]
 fn typeof_instanceof_parse() {
-    let (_, _) = assert_complete_full(
-        "const t = typeof x === 'string'; const y = obj instanceof Foo;\n",
-    );
+    let (_, _) =
+        assert_complete_full("const t = typeof x === 'string'; const y = obj instanceof Foo;\n");
 }
 
 #[test]
@@ -340,7 +353,6 @@ fn ternary_parses() {
 
 #[test]
 fn labeled_statement_and_break_parse() {
-    let (_, _) = assert_complete_full(
-        "outer: for (let i = 0; i < 10; i++) { if (i === 5) break outer; }\n",
-    );
+    let (_, _) =
+        assert_complete_full("outer: for (let i = 0; i < 10; i++) { if (i === 5) break outer; }\n");
 }

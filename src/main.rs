@@ -64,13 +64,19 @@ fn parse_args<I: Iterator<Item = String>>(args: I) -> Result<Cli, String> {
                     .next()
                     .ok_or_else(|| format!("{} requires a value (json|toml|sql|rust|js)", arg))?;
                 lang = Some(Lang::from_name(&name).ok_or_else(|| {
-                    format!("unknown language {:?} (expected json|toml|sql|rust|js)", name)
+                    format!(
+                        "unknown language {:?} (expected json|toml|sql|rust|js)",
+                        name
+                    )
                 })?);
             }
             other if other.starts_with("--lang=") => {
                 let name = &other["--lang=".len()..];
                 lang = Some(Lang::from_name(name).ok_or_else(|| {
-                    format!("unknown language {:?} (expected json|toml|sql|rust|js)", name)
+                    format!(
+                        "unknown language {:?} (expected json|toml|sql|rust|js)",
+                        name
+                    )
                 })?);
             }
             _ => {
