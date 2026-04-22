@@ -22,9 +22,9 @@ grammar exercising multi-statement error recovery). Expect breaking
 changes.
 
 The CLI picks a grammar by file extension (`.json`, `.toml`, `.sql`,
-`.rs`, `.js`/`.mjs`/`.cjs`, `.go`, `.c`/`.h`) or an explicit
-`-l json|toml|sql|rust|js|go|c` flag; stdin without a flag defaults
-to JSON.
+`.rs`, `.js`/`.mjs`/`.cjs`, `.go`, `.c`/`.h`, `.css`) or an explicit
+`-l json|toml|sql|rust|js|go|c|css` flag; stdin without a flag
+defaults to JSON.
 
 Malformed or incomplete inputs render the longest valid prefix styled and
 the rest plain (see `src/pegvm/vm.rs` for the farthest-failure tracking).
@@ -101,16 +101,17 @@ These need no new VM or compiler machinery.
 
 - **More language grammars.** JSON, TOML, the full SQLite dialect,
   a pragmatic Rust subset, an ES2020-ish JavaScript subset, a Go
-  subset, and a lex-level C subset ship today. Adding a language
-  means writing a grammar file. SQLite remains the large-grammar
-  bytecode-size datapoint the design goals called for: 5,627 VM
-  instructions across 426 rules — an order of magnitude larger than
-  JSON (165 instr) or TOML (511 instr); Rust (3,413 instr / 172
-  rules), Go (3,118 instr / 145 rules), JavaScript (2,916 instr /
-  137 rules), and C (2,483 instr / 102 rules) sit between, still
+  subset, a lex-level C subset, and a CSS grammar (including
+  nesting) ship today. Adding a language means writing a grammar
+  file. SQLite remains the large-grammar bytecode-size datapoint
+  the design goals called for: 5,627 VM instructions across 426
+  rules — an order of magnitude larger than JSON (165 instr), CSS
+  (688 instr), or TOML (511 instr); Rust (3,413 instr / 172 rules),
+  Go (3,118 instr / 145 rules), JavaScript (2,916 instr / 137
+  rules), and C (2,483 instr / 102 rules) sit between, still
   comfortably inside the "kilobyte range per grammar" ambition.
-  Remaining candidates: Python, TypeScript, CSS. YAML is deferred
-  — its context-sensitive indentation semantics make it a poor fit
+  Remaining candidates: Python, TypeScript. YAML is deferred —
+  its context-sensitive indentation semantics make it a poor fit
   for PEG without additional machinery.
 - **User-configurable themes.** The capture-name → ANSI mapping is
   hard-coded today; lifting it to a theme file (TOML or similar) is
