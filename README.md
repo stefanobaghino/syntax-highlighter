@@ -13,12 +13,13 @@ that can scale to many languages without binary bloat.
 
 ## Status
 
-Early MVP. Ships JSON, TOML, and SQLite-SELECT grammars and an
+Early MVP. Ships JSON, TOML, and the full SQLite dialect, plus an
 ANSI-coloring CLI. The properties described in *Why this approach*
 below are **design goals that this MVP is trying to prove** — the
 architecture supports them, and cross-language validation spans three
-grammar shapes (JSON, TOML, and a backtracking-heavy SQL SELECT
-subset). Expect breaking changes.
+grammar shapes (JSON, TOML, and a large backtracking-heavy SQLite
+grammar exercising multi-statement error recovery). Expect breaking
+changes.
 
 The CLI picks a grammar by file extension (`.json`, `.toml`, `.sql`)
 or an explicit `-l json|toml|sql` flag; stdin without a flag defaults
@@ -92,16 +93,15 @@ largest piece of work.
 
 These need no new VM or compiler machinery.
 
-- **More language grammars.** JSON, TOML, and a SQLite SELECT subset
-  ship today. Adding a language means writing a grammar file.
-  Expanding the SQLite grammar to the full dialect (INSERT/UPDATE/
-  DELETE/DDL/triggers) is the intended vehicle for two roadmap
-  deliverables it is uniquely positioned to support: a large-grammar
-  bytecode-size datapoint (JSON and TOML are both compact formats) and
-  a multi-statement error-recovery use case (single-SELECT does not
-  exercise it). Remaining candidates beyond SQLite: Python, Rust, CSS.
-  YAML is deferred — its context-sensitive indentation semantics make
-  it a poor fit for PEG without additional machinery.
+- **More language grammars.** JSON, TOML, and the full SQLite dialect
+  ship today. Adding a language means writing a grammar file. The
+  SQLite grammar is the large-grammar bytecode-size datapoint the
+  design goals called for: 5,627 VM instructions across 426 rules —
+  an order of magnitude larger than JSON (165 instr) or TOML (511
+  instr), and still comfortably inside the "kilobyte range per
+  grammar" ambition. Remaining candidates: Python, Rust, CSS. YAML is
+  deferred — its context-sensitive indentation semantics make it a
+  poor fit for PEG without additional machinery.
 - **User-configurable themes.** The capture-name → ANSI mapping is
   hard-coded today; lifting it to a theme file (TOML or similar) is
   orthogonal to the VM.

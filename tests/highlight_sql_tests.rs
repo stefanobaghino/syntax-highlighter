@@ -193,3 +193,53 @@ fn partial_match_renders_prefix_styled_and_tail_plain() {
         out
     );
 }
+
+#[test]
+fn large_fixture_parses_to_completion() {
+    // Round-trip on the memo-bench fixture: every byte must parse.
+    // This is the end-to-end guard that catches false-reject regressions
+    // (e.g. reserving an identifier that real SQL uses as a column name).
+    let input = include_str!("../benches/fixtures/large.sql");
+    let mut h = Highlighter::new(SQLITE_GRAMMAR).expect("grammar compiles");
+    h.set_input(input.to_string());
+    let (matched, _caps) = h.captures();
+    assert_eq!(
+        matched,
+        input.len(),
+        "expected full parse of benches/fixtures/large.sql; stopped at byte {} before {:?}",
+        matched,
+        &input[matched..matched.saturating_add(80).min(input.len())]
+    );
+    assert_eq!(strip_ansi(&h.highlight()), input, "round-trip must hold");
+}
+
+#[test]
+fn multi_statement_error_recovery() {
+    // The full SQLite grammar exercises farthest-failure tracking across
+    // a `;`-separated script: DDL and DML preceding a malformed chunk
+    // should stay styled; the tail from `!!!` onward renders plain.
+    let input = "CREATE TABLE t (a INTEGER);\n\
+                 INSERT INTO t VALUES (1);\n\
+                 !!! oops\n\
+                 SELECT * FROM t;";
+    let out = hl(input).highlight();
+    assert_eq!(strip_ansi(&out), input, "round-trip must hold");
+    assert!(
+        out.contains(theme::color_for("keyword")),
+        "expected the CREATE/INSERT prefix to carry keyword styling"
+    );
+    assert!(
+        out.contains("!!! oops"),
+        "invalid middle chunk must render verbatim"
+    );
+    // The trailing SELECT is past the farthest-failure point, so it
+    // renders plain rather than styled.
+    let tail_idx = out
+        .find("!!! oops")
+        .expect("garbage marker must appear in output");
+    let tail = &out[tail_idx..];
+    assert!(
+        !tail.contains(theme::color_for("keyword")),
+        "tail past the error should render without styling, got {tail:?}"
+    );
+}

@@ -1,53 +1,85 @@
-# SQLite SELECT grammar with highlight annotations.
+# Full SQLite grammar with highlight annotations.
 # The first rule is the start rule.
 #
-# Scope: SQLite SELECT statements sufficient to highlight realistic
-# read-only queries. Covers expressions, JOINs, simple (non-recursive)
-# CTEs, compound SELECT (UNION / INTERSECT / EXCEPT), CASE, CAST, EXISTS,
-# scalar subqueries, function calls, bind parameters, string / BLOB /
-# numeric / NULL / boolean literals, and line / block comments.
-#
-# Deferred: INSERT / UPDATE / DELETE / DDL / triggers / PRAGMA /
-# transactions; WITH RECURSIVE; window functions (`OVER(...)`).
-# Expanding to the full SQLite dialect is intended future work with two
-# specific payoffs (see README.md roadmap):
-#   - a large-grammar bytecode-size datapoint (vs. JSON and TOML)
-#   - a multi-statement error-recovery use case, which single-SELECT
-#     does not exercise
+# Scope: the SQLite dialect. SELECT (with WITH RECURSIVE, compound
+# SELECT, CTEs, window functions), DML (INSERT with UPSERT and
+# RETURNING, UPDATE with FROM, DELETE), DDL (CREATE / DROP / ALTER
+# TABLE with the full constraint vocabulary, generated columns,
+# WITHOUT ROWID / STRICT, foreign-key actions, INDEX, VIEW, TRIGGER,
+# VIRTUAL TABLE), transactions and savepoints, PRAGMA, EXPLAIN
+# [QUERY PLAN], and the administrative statements (VACUUM, ATTACH /
+# DETACH, REINDEX, ANALYZE).
 #
 # Capture kinds (all present in src/highlight/theme.rs):
 #   keyword, string, number, comment, operator, punctuation,
 #   type, function, constant, variable.
 #
 # Capture-kind notes:
-#   - Table names in FROM / JOIN / CTE heads are @type; column
-#     references are @variable. The same lexeme gets a different kind
-#     depending on syntactic position — a genuine win of grammar-driven
-#     highlighting over scope-based matchers.
-#   - BLOB literals X'...' are @string (byte strings; no @bytes kind).
-#   - Bind parameters (?, ?N, :name, @name, $name) are @variable.
-#   - Quoted identifiers ("...", `...`, [...]) are @variable.
+#   - Table names in FROM / JOIN / CTE heads and schema-object names
+#     (indexes, views, triggers, schemas in ATTACH / PRAGMA) are
+#     `@type`; column references are `@variable`. The same lexeme
+#     gets a different kind depending on syntactic position — a
+#     genuine win of grammar-driven highlighting over scope-based
+#     matchers.
+#   - Type names in column definitions (including multi-word forms
+#     like `DOUBLE PRECISION`) are `@type`, matching CAST targets.
+#   - BLOB literals `X'...'` are `@string` (byte strings; no `@bytes`
+#     kind).
+#   - Bind parameters (`?`, `?N`, `:name`, `@name`, `$name`) are
+#     `@variable`.
+#   - Quoted identifiers (`"..."`, backtick, `[...]`) are `@variable`.
+#   - CREATE VIRTUAL TABLE module name after USING is `@function` —
+#     the module is invoked, not merely referenced.
 #
 # This grammar deliberately exercises shared-prefix backtracking in the
 # expression rules (function_call vs qualified_column_ref vs bare
-# column_ref; paren_expr vs scalar subquery). These patterns motivate
-# the memoization work in the README roadmap.
+# column_ref; paren_expr vs scalar subquery) and in the CREATE-family
+# top-level alternatives (CREATE [TEMP] [VIRTUAL] TABLE / INDEX / VIEW
+# / TRIGGER). These patterns motivate the memoization layer.
 
 # --- Top level --------------------------------------------------------
 
 sql_file   <- ws (statement (stmt_sep statement)*)? stmt_sep? ws !.
 stmt_sep   <- ws @punctuation{';'} ws
-statement  <- select_stmt
+statement       <- explain_stmt / statement_body
+statement_body  <- select_stmt
+                 / insert_stmt
+                 / update_stmt
+                 / delete_stmt
+                 / create_virtual_table_stmt
+                 / create_table_stmt
+                 / create_index_stmt
+                 / create_view_stmt
+                 / create_trigger_stmt
+                 / drop_table_stmt
+                 / drop_index_stmt
+                 / drop_view_stmt
+                 / drop_trigger_stmt
+                 / alter_table_stmt
+                 / begin_stmt
+                 / commit_stmt
+                 / rollback_stmt
+                 / savepoint_stmt
+                 / release_stmt
+                 / pragma_stmt
+                 / vacuum_stmt
+                 / attach_stmt
+                 / detach_stmt
+                 / reindex_stmt
+                 / analyze_stmt
 
 # --- SELECT statement -------------------------------------------------
 
 select_stmt    <- with_clause? select_core compound_tail* order_clause? limit_clause?
 
-with_clause    <- kw_with ws cte_defn (ws @punctuation{','} ws cte_defn)* ws
-cte_defn       <- @type{bare_ident} ws kw_as ws @punctuation{'('} ws select_stmt ws @punctuation{')'}
+with_clause    <- kw_with (ws kw_recursive)? ws cte_defn (ws @punctuation{','} ws cte_defn)* ws
+cte_defn       <- @type{bare_ident}
+                  (ws @punctuation{'('} ws ident_list ws @punctuation{')'})?
+                  ws kw_as ws @punctuation{'('} ws select_stmt ws @punctuation{')'}
 
 select_core    <- kw_select (ws (kw_distinct / kw_all))? ws result_list
                   (ws from_clause)? (ws where_clause)? (ws group_clause)? (ws having_clause)?
+                  (ws window_clause)?
 
 result_list    <- result_column (ws @punctuation{','} ws result_column)*
 result_column  <- table_star / @operator{'*'} / aliased_expr
@@ -87,6 +119,267 @@ order_item     <- expr (ws (kw_asc / kw_desc))?
 
 limit_clause   <- ws kw_limit ws expr (ws kw_offset ws expr
                                      / ws @punctuation{','} ws expr)?
+
+# --- Window functions & WINDOW clause --------------------------------
+# Not counted as reserved keywords in SQLite aside from WINDOW and
+# OVER — PARTITION, FILTER, RANGE, ROWS, GROUPS, PRECEDING, FOLLOWING,
+# UNBOUNDED, CURRENT, EXCLUDE, TIES, OTHERS, NO, ROW and RECURSIVE
+# are matched positionally here, so existing SELECTs that use any of
+# those as identifiers keep working.
+
+window_clause  <- kw_window ws named_window (ws @punctuation{','} ws named_window)*
+named_window   <- @variable{bare_ident_nonkw} ws kw_as ws window_defn
+
+filter_clause  <- kw_filter ws @punctuation{'('} ws kw_where ws expr ws @punctuation{')'}
+
+window_defn    <- @punctuation{'('} ws
+                      (!window_section_keyword @variable{bare_ident_nonkw} ws)?
+                      (kw_partition ws kw_by ws expr (ws @punctuation{','} ws expr)* ws)?
+                      (window_order_body ws)?
+                      (frame_spec ws)? @punctuation{')'}
+# Guard the optional base-window-name slot against consuming a keyword
+# that actually starts the next positional section (PARTITION / ORDER /
+# RANGE / ROWS / GROUPS). Without the lookahead, PEG would eat
+# `PARTITION` as a bare identifier and then fail on the partition clause.
+window_section_keyword <- kw_partition / kw_order / kw_range / kw_rows / kw_groups
+window_order_body <- kw_order ws kw_by ws order_item (ws @punctuation{','} ws order_item)*
+window_ref     <- window_defn / @variable{bare_ident_nonkw}
+
+frame_spec     <- (kw_range / kw_rows / kw_groups) ws
+                  (kw_between ws frame_bound ws kw_and ws frame_bound
+                   / frame_bound)
+                  (ws kw_exclude ws frame_exclude)?
+frame_bound    <- kw_unbounded ws (kw_preceding / kw_following)
+                / kw_current ws kw_row
+                / expr ws (kw_preceding / kw_following)
+frame_exclude  <- kw_no ws kw_others
+                / kw_current ws kw_row
+                / kw_group
+                / kw_ties
+
+# --- DML: INSERT ------------------------------------------------------
+# UPSERT's DO UPDATE path and UPDATE (added in a later commit) share
+# `update_set_list`, which is defined here.
+
+insert_stmt    <- with_clause? insert_prefix ws kw_into ws qualified_table_name
+                  (ws kw_as ws @variable{bare_ident_nonkw})?
+                  (ws @punctuation{'('} ws ident_list ws @punctuation{')'})?
+                  ws insert_source
+                  (ws upsert_clause)*
+                  (ws returning_clause)?
+
+insert_prefix  <- kw_insert (ws kw_or ws conflict_action)?
+                / kw_replace
+
+insert_source  <- kw_default ws kw_values
+                / kw_values ws values_row (ws @punctuation{','} ws values_row)*
+                / select_stmt
+values_row     <- @punctuation{'('} ws expr (ws @punctuation{','} ws expr)* ws @punctuation{')'}
+
+conflict_action <- kw_rollback / kw_abort / kw_fail / kw_ignore / kw_replace
+
+upsert_clause  <- kw_on ws kw_conflict
+                  (ws @punctuation{'('} ws indexed_col_list ws @punctuation{')'} (ws where_clause)?)?
+                  ws kw_do ws (kw_nothing
+                             / kw_update ws kw_set ws update_set_list (ws where_clause)?)
+
+indexed_col_list <- indexed_col (ws @punctuation{','} ws indexed_col)*
+indexed_col      <- expr (ws kw_collate ws @type{bare_ident})? (ws (kw_asc / kw_desc))?
+
+update_set_list <- update_set_item (ws @punctuation{','} ws update_set_item)*
+update_set_item <- @variable{bare_ident_nonkw} ws @operator{'='} ws expr
+                 / @punctuation{'('} ws ident_list ws @punctuation{')'} ws @operator{'='} ws row_value
+# RHS of a column-tuple assignment: parens-wrapped row-value (literal
+# list or sub-select) or a single expression that yields a row.
+row_value        <- @punctuation{'('} ws
+                    (select_stmt / expr (ws @punctuation{','} ws expr)*)
+                    ws @punctuation{')'}
+                  / expr
+
+returning_clause <- kw_returning ws result_list
+
+# --- DML: UPDATE, DELETE ---------------------------------------------
+# UPDATE FROM and DELETE reuse `from_clause` and `where_clause` from
+# the SELECT section. ORDER BY + LIMIT are accepted even on builds
+# compiled without SQLITE_ENABLE_UPDATE_DELETE_LIMIT — highlighting
+# should not pretend the syntax doesn't exist.
+
+update_stmt <- with_clause? kw_update (ws kw_or ws conflict_action)? ws
+               qualified_table_name (ws table_alias)?
+               ws kw_set ws update_set_list
+               (ws from_clause)?
+               (ws where_clause)?
+               order_clause?
+               limit_clause?
+               (ws returning_clause)?
+
+delete_stmt <- with_clause? kw_delete ws kw_from ws qualified_table_name (ws table_alias)?
+               (ws where_clause)?
+               order_clause?
+               limit_clause?
+               (ws returning_clause)?
+
+# --- DDL: CREATE / DROP / ALTER TABLE --------------------------------
+# Interleaves column_def with table_constraint because SQLite does
+# accept constraints in any order, not just trailing. Column vs table
+# constraint disambiguation falls out of PEG first-match: column_def
+# requires a non-keyword leading identifier, while table_constraint
+# starts with CONSTRAINT, PRIMARY, UNIQUE, CHECK, or FOREIGN.
+
+create_table_stmt <- kw_create (ws (kw_temporary / kw_temp))? ws kw_table
+                     (ws kw_if ws kw_not ws kw_exists)?
+                     ws qualified_table_name
+                     ws (@punctuation{'('} ws
+                             (column_def / table_constraint)
+                             (ws @punctuation{','} ws (column_def / table_constraint))*
+                         ws @punctuation{')'}
+                         (ws table_option (ws @punctuation{','} ws table_option)*)?
+                       / kw_as ws select_stmt)
+
+column_def     <- @variable{bare_ident_nonkw}
+                  (ws type_name)?
+                  (ws column_constraint)*
+
+# SQLite accepts multi-word type names like `DOUBLE PRECISION` and
+# `UNSIGNED BIG INT`. Consume consecutive non-keyword identifiers.
+type_name      <- @type{bare_ident_nonkw} (ws @type{bare_ident_nonkw})*
+                  (ws @punctuation{'('} ws signed_number
+                       (ws @punctuation{','} ws signed_number)? ws @punctuation{')'})?
+
+signed_number  <- (@operator{'-'} / @operator{'+'})? ws @number{number_body}
+
+column_constraint      <- (kw_constraint ws @variable{bare_ident_nonkw} ws)? column_constraint_body
+column_constraint_body <-
+      kw_primary ws kw_key (ws (kw_asc / kw_desc))? (ws conflict_clause)? (ws kw_autoincrement)?
+    / (kw_not ws)? kw_null (ws conflict_clause)?
+    / kw_unique (ws conflict_clause)?
+    / kw_check ws @punctuation{'('} ws expr ws @punctuation{')'}
+    / kw_default ws (signed_number / literal / @punctuation{'('} ws expr ws @punctuation{')'})
+    / kw_collate ws @type{bare_ident}
+    / foreign_key_clause
+    / (kw_generated ws kw_always ws)? kw_as ws @punctuation{'('} ws expr ws @punctuation{')'}
+      (ws (kw_stored / kw_virtual))?
+
+table_constraint      <- (kw_constraint ws @variable{bare_ident_nonkw} ws)? table_constraint_body
+table_constraint_body <-
+      (kw_primary ws kw_key / kw_unique)
+          ws @punctuation{'('} ws indexed_col_list ws @punctuation{')'}
+          (ws conflict_clause)?
+    / kw_check ws @punctuation{'('} ws expr ws @punctuation{')'}
+    / kw_foreign ws kw_key ws @punctuation{'('} ws ident_list ws @punctuation{')'}
+          ws foreign_key_clause
+
+foreign_key_clause <- kw_references ws @type{bare_ident_nonkw}
+                      (ws @punctuation{'('} ws ident_list ws @punctuation{')'})?
+                      (ws fk_action)*
+                      (ws fk_deferrable)?
+fk_action      <- kw_on ws (kw_delete / kw_update) ws fk_action_body
+                / kw_match ws @variable{bare_ident_nonkw}
+fk_action_body <- kw_set ws (kw_null / kw_default)
+                / kw_cascade
+                / kw_restrict
+                / kw_no ws kw_action
+fk_deferrable  <- (kw_not ws)? kw_deferrable (ws kw_initially ws (kw_immediate / kw_deferred))?
+
+conflict_clause <- kw_on ws kw_conflict ws conflict_action
+
+table_option   <- kw_without ws kw_rowid / kw_strict
+
+drop_table_stmt <- kw_drop ws kw_table (ws kw_if ws kw_exists)? ws qualified_table_name
+
+alter_table_stmt <- kw_alter ws kw_table ws qualified_table_name ws (
+      kw_rename ws kw_to ws @type{bare_ident_nonkw}
+    / kw_rename (ws kw_column)? ws @variable{bare_ident_nonkw}
+        ws kw_to ws @variable{bare_ident_nonkw}
+    / kw_add (ws kw_column)? ws column_def
+    / kw_drop (ws kw_column)? ws @variable{bare_ident_nonkw}
+  )
+
+# --- DDL: CREATE / DROP INDEX and VIEW -------------------------------
+
+create_index_stmt <- kw_create (ws kw_unique)? ws kw_index
+                     (ws kw_if ws kw_not ws kw_exists)?
+                     ws qualified_table_name
+                     ws kw_on ws @type{bare_ident_nonkw}
+                     ws @punctuation{'('} ws indexed_col_list ws @punctuation{')'}
+                     (ws where_clause)?
+
+drop_index_stmt   <- kw_drop ws kw_index (ws kw_if ws kw_exists)? ws qualified_table_name
+
+create_view_stmt  <- kw_create (ws (kw_temporary / kw_temp))? ws kw_view
+                     (ws kw_if ws kw_not ws kw_exists)?
+                     ws qualified_table_name
+                     (ws @punctuation{'('} ws ident_list ws @punctuation{')'})?
+                     ws kw_as ws select_stmt
+
+drop_view_stmt    <- kw_drop ws kw_view (ws kw_if ws kw_exists)? ws qualified_table_name
+
+# --- DDL: CREATE / DROP TRIGGER --------------------------------------
+# Trigger bodies are `;`-separated sequences of DML/SELECT wrapped in
+# BEGIN...END. The inner `;` is mandatory after each body statement,
+# which keeps the nesting disjoint from sql_file's top-level stmt_sep.
+
+create_trigger_stmt <- kw_create (ws (kw_temporary / kw_temp))? ws kw_trigger
+                       (ws kw_if ws kw_not ws kw_exists)?
+                       ws qualified_table_name
+                       (ws (kw_before / kw_after / kw_instead ws kw_of))?
+                       ws trigger_event
+                       ws kw_on ws @type{bare_ident_nonkw}
+                       (ws kw_for ws kw_each ws kw_row)?
+                       (ws kw_when ws expr)?
+                       ws kw_begin
+                       ws (trigger_body_stmt ws @punctuation{';'} ws)+
+                       kw_end
+trigger_event     <- kw_delete
+                   / kw_insert
+                   / kw_update (ws kw_of ws ident_list)?
+trigger_body_stmt <- insert_stmt / update_stmt / delete_stmt / select_stmt
+
+drop_trigger_stmt <- kw_drop ws kw_trigger (ws kw_if ws kw_exists)? ws qualified_table_name
+
+# --- Transactions & savepoints ---------------------------------------
+
+begin_stmt     <- kw_begin (ws (kw_deferred / kw_immediate / kw_exclusive))?
+                  (ws kw_transaction)?
+commit_stmt    <- (kw_commit / kw_end) (ws kw_transaction)?
+rollback_stmt  <- kw_rollback (ws kw_transaction)?
+                  (ws kw_to (ws kw_savepoint)? ws @variable{bare_ident_nonkw})?
+savepoint_stmt <- kw_savepoint ws @variable{bare_ident_nonkw}
+release_stmt   <- kw_release (ws kw_savepoint)? ws @variable{bare_ident_nonkw}
+
+# --- PRAGMA, admin statements, EXPLAIN, CREATE VIRTUAL TABLE ---------
+# EXPLAIN wraps statement_body rather than statement, so
+# `EXPLAIN EXPLAIN …` is rejected. PRAGMA names and ATTACH schema
+# names reuse the `schema.name` shape as @type (namespace / handle).
+# CREATE VIRTUAL TABLE's module name after USING is @function —
+# the module is invoked, not merely referenced.
+
+pragma_stmt     <- kw_pragma ws qualified_table_name
+                   (ws @operator{'='} ws pragma_value
+                    / ws @punctuation{'('} ws pragma_value ws @punctuation{')'})?
+pragma_value    <- signed_number / string_lit / @variable{bare_ident}
+
+vacuum_stmt     <- kw_vacuum (ws @type{bare_ident_nonkw})? (ws kw_into ws string_lit)?
+
+attach_stmt     <- kw_attach (ws kw_database)? ws expr ws kw_as
+                   ws @type{bare_ident_nonkw}
+detach_stmt     <- kw_detach (ws kw_database)? ws @type{bare_ident_nonkw}
+
+reindex_stmt    <- kw_reindex (ws qualified_table_name)?
+analyze_stmt    <- kw_analyze (ws qualified_table_name)?
+
+explain_stmt    <- kw_explain (ws kw_query ws kw_plan)? ws statement_body
+
+create_virtual_table_stmt <-
+    kw_create ws kw_virtual ws kw_table
+    (ws kw_if ws kw_not ws kw_exists)?
+    ws qualified_table_name
+    ws kw_using ws @function{bare_ident_nonkw}
+    (ws @punctuation{'('} ws vtab_args? ws @punctuation{')'})?
+vtab_args       <- vtab_arg (ws @punctuation{','} ws vtab_arg)*
+# Module args are deliberately permissive — fts5/rtree/etc have
+# module-specific mini-grammars that are not worth modelling.
+vtab_arg        <- (!@punctuation{','} !@punctuation{')'} .)+
 
 # --- Expressions (low → high precedence) -------------------------------
 # Classic precedence-climbing without left recursion. Each level either
@@ -136,6 +429,8 @@ primary     <- literal
 paren_primary <- @punctuation{'('} ws (select_stmt / expr) ws @punctuation{')'}
 
 function_call <- @function{bare_ident_nonkw} ws @punctuation{'('} ws func_args? ws @punctuation{')'}
+                 (ws filter_clause)?
+                 (ws kw_over ws window_ref)?
 func_args   <- @operator{'*'}
              / (kw_distinct ws)? expr (ws @punctuation{','} ws expr)*
 
@@ -254,6 +549,107 @@ kw_cast      <- @keyword{cast_body !ident_char}
 kw_exists    <- @keyword{exists_body !ident_char}
 kw_collate   <- @keyword{collate_body !ident_char}
 
+# Window-function vocabulary. Only WINDOW and OVER are reserved; the
+# rest are matched positionally inside window_defn / frame_spec and
+# remain usable as identifiers outside those positions.
+kw_recursive <- @keyword{recursive_body !ident_char}
+kw_window    <- @keyword{window_body !ident_char}
+kw_over      <- @keyword{over_body !ident_char}
+kw_filter    <- @keyword{filter_body !ident_char}
+kw_partition <- @keyword{partition_body !ident_char}
+kw_range     <- @keyword{range_body !ident_char}
+kw_rows      <- @keyword{rows_body !ident_char}
+kw_groups    <- @keyword{groups_body !ident_char}
+kw_unbounded <- @keyword{unbounded_body !ident_char}
+kw_preceding <- @keyword{preceding_body !ident_char}
+kw_following <- @keyword{following_body !ident_char}
+kw_current   <- @keyword{current_body !ident_char}
+kw_row       <- @keyword{row_body !ident_char}
+kw_exclude   <- @keyword{exclude_body !ident_char}
+kw_ties      <- @keyword{ties_body !ident_char}
+kw_others    <- @keyword{others_body !ident_char}
+kw_no        <- @keyword{no_body !ident_char}
+
+# DML (INSERT family). UPDATE lands in a later commit but its keyword
+# rule goes here so UPSERT's DO UPDATE path can use it now.
+kw_insert    <- @keyword{insert_body !ident_char}
+kw_replace   <- @keyword{replace_body !ident_char}
+kw_into      <- @keyword{into_body !ident_char}
+kw_values    <- @keyword{values_body !ident_char}
+kw_default   <- @keyword{default_body !ident_char}
+kw_conflict  <- @keyword{conflict_body !ident_char}
+kw_do        <- @keyword{do_body !ident_char}
+kw_nothing   <- @keyword{nothing_body !ident_char}
+kw_rollback  <- @keyword{rollback_body !ident_char}
+kw_abort     <- @keyword{abort_body !ident_char}
+kw_fail      <- @keyword{fail_body !ident_char}
+kw_ignore    <- @keyword{ignore_body !ident_char}
+kw_set       <- @keyword{set_body !ident_char}
+kw_returning <- @keyword{returning_body !ident_char}
+kw_update    <- @keyword{update_body !ident_char}
+kw_delete    <- @keyword{delete_body !ident_char}
+
+# DDL (CREATE / ALTER / DROP TABLE, constraints, foreign-key actions).
+kw_create    <- @keyword{create_body !ident_char}
+kw_table     <- @keyword{table_body !ident_char}
+kw_alter     <- @keyword{alter_body !ident_char}
+kw_drop      <- @keyword{drop_body !ident_char}
+kw_rename    <- @keyword{rename_body !ident_char}
+kw_add       <- @keyword{add_body !ident_char}
+kw_column    <- @keyword{column_body !ident_char}
+kw_if        <- @keyword{if_body !ident_char}
+kw_temp      <- @keyword{temp_body !ident_char}
+kw_temporary <- @keyword{temporary_body !ident_char}
+kw_primary   <- @keyword{primary_body !ident_char}
+kw_key       <- @keyword{key_body !ident_char}
+kw_unique    <- @keyword{unique_body !ident_char}
+kw_check     <- @keyword{check_body !ident_char}
+kw_null      <- @keyword{null_body !ident_char}
+kw_references <- @keyword{references_body !ident_char}
+kw_generated <- @keyword{generated_body !ident_char}
+kw_always    <- @keyword{always_body !ident_char}
+kw_stored    <- @keyword{stored_body !ident_char}
+kw_virtual   <- @keyword{virtual_body !ident_char}
+kw_constraint<- @keyword{constraint_body !ident_char}
+kw_foreign   <- @keyword{foreign_body !ident_char}
+kw_action    <- @keyword{action_body !ident_char}
+kw_cascade   <- @keyword{cascade_body !ident_char}
+kw_restrict  <- @keyword{restrict_body !ident_char}
+kw_deferrable<- @keyword{deferrable_body !ident_char}
+kw_initially <- @keyword{initially_body !ident_char}
+kw_immediate <- @keyword{immediate_body !ident_char}
+kw_deferred  <- @keyword{deferred_body !ident_char}
+kw_autoincrement <- @keyword{autoincrement_body !ident_char}
+kw_rowid     <- @keyword{rowid_body !ident_char}
+kw_strict    <- @keyword{strict_body !ident_char}
+kw_without   <- @keyword{without_body !ident_char}
+kw_to        <- @keyword{to_body !ident_char}
+kw_index     <- @keyword{index_body !ident_char}
+kw_view      <- @keyword{view_body !ident_char}
+kw_trigger   <- @keyword{trigger_body !ident_char}
+kw_before    <- @keyword{before_body !ident_char}
+kw_after     <- @keyword{after_body !ident_char}
+kw_instead   <- @keyword{instead_body !ident_char}
+kw_of        <- @keyword{of_body !ident_char}
+kw_for       <- @keyword{for_body !ident_char}
+kw_each      <- @keyword{each_body !ident_char}
+kw_begin     <- @keyword{begin_body !ident_char}
+kw_commit    <- @keyword{commit_body !ident_char}
+kw_transaction <- @keyword{transaction_body !ident_char}
+kw_savepoint <- @keyword{savepoint_body !ident_char}
+kw_release   <- @keyword{release_body !ident_char}
+kw_exclusive <- @keyword{exclusive_body !ident_char}
+kw_pragma    <- @keyword{pragma_body !ident_char}
+kw_vacuum    <- @keyword{vacuum_body !ident_char}
+kw_attach    <- @keyword{attach_body !ident_char}
+kw_detach    <- @keyword{detach_body !ident_char}
+kw_database  <- @keyword{database_body !ident_char}
+kw_reindex   <- @keyword{reindex_body !ident_char}
+kw_analyze   <- @keyword{analyze_body !ident_char}
+kw_explain   <- @keyword{explain_body !ident_char}
+kw_query     <- @keyword{query_body !ident_char}
+kw_plan      <- @keyword{plan_body !ident_char}
+
 # Keyword bodies — raw letter matchers, no boundary check.
 
 sel_body       <- [sS][eE][lL][eE][cC][tT]
@@ -303,25 +699,240 @@ end_body       <- [eE][nN][dD]
 cast_body      <- [cC][aA][sS][tT]
 exists_body    <- [eE][xX][iI][sS][tT][sS]
 collate_body   <- [cC][oO][lL][lL][aA][tT][eE]
+recursive_body <- [rR][eE][cC][uU][rR][sS][iI][vV][eE]
+window_body    <- [wW][iI][nN][dD][oO][wW]
+over_body      <- [oO][vV][eE][rR]
+filter_body    <- [fF][iI][lL][tT][eE][rR]
+partition_body <- [pP][aA][rR][tT][iI][tT][iI][oO][nN]
+range_body     <- [rR][aA][nN][gG][eE]
+rows_body      <- [rR][oO][wW][sS]
+groups_body    <- [gG][rR][oO][uU][pP][sS]
+unbounded_body <- [uU][nN][bB][oO][uU][nN][dD][eE][dD]
+preceding_body <- [pP][rR][eE][cC][eE][dD][iI][nN][gG]
+following_body <- [fF][oO][lL][lL][oO][wW][iI][nN][gG]
+current_body   <- [cC][uU][rR][rR][eE][nN][tT]
+row_body       <- [rR][oO][wW]
+exclude_body   <- [eE][xX][cC][lL][uU][dD][eE]
+ties_body      <- [tT][iI][eE][sS]
+others_body    <- [oO][tT][hH][eE][rR][sS]
+no_body        <- [nN][oO]
+insert_body    <- [iI][nN][sS][eE][rR][tT]
+replace_body   <- [rR][eE][pP][lL][aA][cC][eE]
+into_body      <- [iI][nN][tT][oO]
+values_body    <- [vV][aA][lL][uU][eE][sS]
+default_body   <- [dD][eE][fF][aA][uU][lL][tT]
+conflict_body  <- [cC][oO][nN][fF][lL][iI][cC][tT]
+do_body        <- [dD][oO]
+nothing_body   <- [nN][oO][tT][hH][iI][nN][gG]
+rollback_body  <- [rR][oO][lL][lL][bB][aA][cC][kK]
+abort_body     <- [aA][bB][oO][rR][tT]
+fail_body      <- [fF][aA][iI][lL]
+ignore_body    <- [iI][gG][nN][oO][rR][eE]
+set_body       <- [sS][eE][tT]
+returning_body <- [rR][eE][tT][uU][rR][nN][iI][nN][gG]
+update_body    <- [uU][pP][dD][aA][tT][eE]
+delete_body    <- [dD][eE][lL][eE][tT][eE]
+create_body    <- [cC][rR][eE][aA][tT][eE]
+table_body     <- [tT][aA][bB][lL][eE]
+alter_body     <- [aA][lL][tT][eE][rR]
+drop_body      <- [dD][rR][oO][pP]
+rename_body    <- [rR][eE][nN][aA][mM][eE]
+add_body       <- [aA][dD][dD]
+column_body    <- [cC][oO][lL][uU][mM][nN]
+if_body        <- [iI][fF]
+temp_body      <- [tT][eE][mM][pP]
+temporary_body <- [tT][eE][mM][pP][oO][rR][aA][rR][yY]
+primary_body   <- [pP][rR][iI][mM][aA][rR][yY]
+key_body       <- [kK][eE][yY]
+unique_body    <- [uU][nN][iI][qQ][uU][eE]
+check_body     <- [cC][hH][eE][cC][kK]
+references_body <- [rR][eE][fF][eE][rR][eE][nN][cC][eE][sS]
+generated_body <- [gG][eE][nN][eE][rR][aA][tT][eE][dD]
+always_body    <- [aA][lL][wW][aA][yY][sS]
+stored_body    <- [sS][tT][oO][rR][eE][dD]
+virtual_body   <- [vV][iI][rR][tT][uU][aA][lL]
+constraint_body<- [cC][oO][nN][sS][tT][rR][aA][iI][nN][tT]
+foreign_body   <- [fF][oO][rR][eE][iI][gG][nN]
+action_body    <- [aA][cC][tT][iI][oO][nN]
+cascade_body   <- [cC][aA][sS][cC][aA][dD][eE]
+restrict_body  <- [rR][eE][sS][tT][rR][iI][cC][tT]
+deferrable_body<- [dD][eE][fF][eE][rR][rR][aA][bB][lL][eE]
+initially_body <- [iI][nN][iI][tT][iI][aA][lL][lL][yY]
+immediate_body <- [iI][mM][mM][eE][dD][iI][aA][tT][eE]
+deferred_body  <- [dD][eE][fF][eE][rR][rR][eE][dD]
+autoincrement_body <- [aA][uU][tT][oO][iI][nN][cC][rR][eE][mM][eE][nN][tT]
+rowid_body     <- [rR][oO][wW][iI][dD]
+strict_body    <- [sS][tT][rR][iI][cC][tT]
+without_body   <- [wW][iI][tT][hH][oO][uU][tT]
+to_body        <- [tT][oO]
+index_body     <- [iI][nN][dD][eE][xX]
+view_body      <- [vV][iI][eE][wW]
+trigger_body   <- [tT][rR][iI][gG][gG][eE][rR]
+before_body    <- [bB][eE][fF][oO][rR][eE]
+after_body     <- [aA][fF][tT][eE][rR]
+instead_body   <- [iI][nN][sS][tT][eE][aA][dD]
+of_body        <- [oO][fF]
+for_body       <- [fF][oO][rR]
+each_body      <- [eE][aA][cC][hH]
+begin_body     <- [bB][eE][gG][iI][nN]
+commit_body    <- [cC][oO][mM][mM][iI][tT]
+transaction_body <- [tT][rR][aA][nN][sS][aA][cC][tT][iI][oO][nN]
+savepoint_body <- [sS][aA][vV][eE][pP][oO][iI][nN][tT]
+release_body   <- [rR][eE][lL][eE][aA][sS][eE]
+exclusive_body <- [eE][xX][cC][lL][uU][sS][iI][vV][eE]
+pragma_body    <- [pP][rR][aA][gG][mM][aA]
+vacuum_body    <- [vV][aA][cC][uU][uU][mM]
+attach_body    <- [aA][tT][tT][aA][cC][hH]
+detach_body    <- [dD][eE][tT][aA][cC][hH]
+database_body  <- [dD][aA][tT][aA][bB][aA][sS][eE]
+reindex_body   <- [rR][eE][iI][nN][dD][eE][xX]
+analyze_body   <- [aA][nN][aA][lL][yY][zZ][eE]
+explain_body   <- [eE][xX][pP][lL][aA][iI][nN]
+query_body     <- [qQ][uU][eE][rR][yY]
+plan_body      <- [pP][lL][aA][nN]
 
-# Keyword negative-lookahead for the identifier rule. Ordering: among
-# alternatives that share a prefix, put the longer body first so PEG
-# first-match doesn't accept a shorter keyword when a longer one would
-# match (e.g. INTERSECT before IN, NATURAL before NOT, DISTINCT before
-# DESC, OUTER before OR). `!ident_char` is applied once at the outside
-# so each body stays boundary-free.
+# Keyword negative-lookahead for the identifier rule.
+#
+# Invariant: among alternatives that share a prefix, the longer body
+# must come first so PEG first-match doesn't accept a shorter keyword
+# when a longer one also matches (e.g. INTERSECT before IN). We enforce
+# it by sorting the whole list strictly length-descending, then
+# alphabetically within each length tier. New keywords slot in by
+# length alone — no per-cluster reasoning needed. The known shared-
+# prefix clusters (all satisfied by length-descending ordering):
+#
+#   INTERSECT > IN / IS             (I-prefix)
+#   DISTINCT > DESC                 (D-prefix)
+#   NATURAL > NULL > NOT            (N-prefix)
+#   OFFSET > ORDER / OUTER > ON / OR (O-prefix)
+#
+# `!ident_char` is applied once on the outside so each body stays
+# boundary-free.
 keyword_word <-
-    ( intersect_body / between_body / distinct_body / collate_body
-    / natural_body / regexp_body / outer_body / offset_body
-    / having_body / except_body / exists_body / escape_body
-    / sel_body / union_body / inner_body / right_body
-    / group_body / order_body / where_body / match_body / cross_body
-    / limit_body / from_body / join_body / left_body
-    / full_body / glob_body / desc_body / with_body / cast_body
-    / case_body / when_body / then_body / else_body / like_body
-    / null_body / bool_body / using_body / asc_body / all_body
-    / end_body / and_body / not_body
-    / in_body / is_body / on_body / or_body / as_body / by_body
+    ( autoincrement_body   # 13
+    / transaction_body     # 11
+    / constraint_body      # 10
+    / deferrable_body      # 10
+    / references_body      # 10
+    / exclusive_body       # 9
+    / generated_body       # 9
+    / immediate_body       # 9
+    / initially_body       # 9
+    / intersect_body       # 9
+    / returning_body       # 9
+    / savepoint_body       # 9
+    / temporary_body       # 9
+    / conflict_body        # 8
+    / database_body        # 8
+    / deferred_body        # 8
+    / distinct_body        # 8
+    / restrict_body        # 8
+    / rollback_body        # 8
+    / analyze_body         # 7
+    / between_body         # 7
+    / cascade_body         # 7
+    / collate_body         # 7
+    / default_body         # 7
+    / explain_body         # 7
+    / foreign_body         # 7
+    / instead_body         # 7
+    / natural_body         # 7
+    / nothing_body         # 7
+    / primary_body         # 7
+    / reindex_body         # 7
+    / release_body         # 7
+    / replace_body         # 7
+    / trigger_body         # 7
+    / virtual_body         # 7
+    / without_body         # 7
+    / action_body          # 6
+    / always_body          # 6
+    / attach_body          # 6
+    / before_body          # 6
+    / column_body          # 6
+    / commit_body          # 6
+    / create_body          # 6
+    / delete_body          # 6
+    / detach_body          # 6
+    / escape_body          # 6
+    / except_body          # 6
+    / exists_body          # 6
+    / having_body          # 6
+    / ignore_body          # 6
+    / insert_body          # 6
+    / offset_body          # 6
+    / pragma_body          # 6
+    / regexp_body          # 6
+    / rename_body          # 6
+    / sel_body             # 6 (SELECT)
+    / stored_body          # 6
+    / strict_body          # 6
+    / unique_body          # 6
+    / update_body          # 6
+    / vacuum_body          # 6
+    / values_body          # 6
+    / window_body          # 6
+    / abort_body           # 5
+    / after_body           # 5
+    / alter_body           # 5
+    / begin_body           # 5
+    / bool_body            # 5 (FALSE) / 4 (TRUE); alternation handles both
+    / check_body           # 5
+    / cross_body           # 5
+    / group_body           # 5
+    / index_body           # 5
+    / inner_body           # 5
+    / limit_body           # 5
+    / match_body           # 5
+    / order_body           # 5
+    / outer_body           # 5
+    / query_body           # 5
+    / right_body           # 5
+    / rowid_body           # 5
+    / table_body           # 5
+    / union_body           # 5
+    / using_body           # 5
+    / where_body           # 5
+    / case_body            # 4
+    / cast_body            # 4
+    / desc_body            # 4
+    / drop_body            # 4
+    / each_body            # 4
+    / else_body            # 4
+    / fail_body            # 4
+    / from_body            # 4
+    / full_body            # 4
+    / glob_body            # 4
+    / into_body            # 4
+    / join_body            # 4
+    / left_body            # 4
+    / like_body            # 4
+    / null_body            # 4
+    / over_body            # 4
+    / plan_body            # 4
+    / temp_body            # 4
+    / then_body            # 4
+    / view_body            # 4
+    / when_body            # 4
+    / with_body            # 4
+    / add_body             # 3
+    / all_body             # 3
+    / and_body             # 3
+    / asc_body             # 3
+    / end_body             # 3
+    / for_body             # 3
+    / not_body             # 3
+    / set_body             # 3
+    / as_body              # 2
+    / by_body              # 2
+    / if_body              # 2
+    / in_body              # 2
+    / is_body              # 2
+    / no_body              # 2
+    / of_body              # 2
+    / on_body              # 2
+    / or_body              # 2
+    / to_body              # 2
     ) !ident_char
 
 # --- Whitespace & comments -------------------------------------------
