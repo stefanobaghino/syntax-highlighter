@@ -104,7 +104,11 @@ fn simple_fn_parses() {
     // we just want `fn` and `main` both flagged).
     let k = kinds_for(&caps, &kinds);
     assert!(k.contains(&"keyword"), "expected `fn` as keyword: {:?}", k);
-    assert!(k.contains(&"function"), "expected main as function: {:?}", k);
+    assert!(
+        k.contains(&"function"),
+        "expected main as function: {:?}",
+        k
+    );
 }
 
 #[test]
@@ -129,7 +133,11 @@ fn struct_field_is_property() {
     // are @type.
     let (caps, kinds) = assert_complete_full("struct Foo { a: i32 }\n");
     let kv = kinds_for(&caps, &kinds);
-    assert!(kv.contains(&"property"), "field `a` should be @property: {:?}", kv);
+    assert!(
+        kv.contains(&"property"),
+        "field `a` should be @property: {:?}",
+        kv
+    );
     assert!(kv.contains(&"type"), "Foo/i32 should be @type: {:?}", kv);
 }
 
@@ -166,7 +174,8 @@ fn method_chain_with_turbofish_parses() {
 
 #[test]
 fn match_with_guards_and_ranges_parses() {
-    let input = "fn f(n: i32) -> i32 { match n { 0 => 1, 1..=10 => 2, x if x > 10 => 3, _ => 0, } }\n";
+    let input =
+        "fn f(n: i32) -> i32 { match n { 0 => 1, 1..=10 => 2, x if x > 10 => 3, _ => 0, } }\n";
     let (_, _) = assert_complete_full(input);
 }
 
