@@ -2,7 +2,7 @@
 
 This module is a self-contained implementation of a parsing machine for parsing expression grammars (PEGs). Its role in the crate is to execute a compiled program against an input and emit a list of captured spans. Everything else — ANSI rendering, themes, the CLI — lives outside this module and treats captures as the abstract output. The module has no dependencies beyond `std`.
 
-This document is a guided tour of the **types** that make up the module, extended upstream to cover the full `&str → Grammar → Program → MatchResult` pipeline for continuity. Types that surface grammar-source parsing and compilation (`Pattern`, `Grammar`, `ParseError`, `CompileError`) now live in [`crate::pegc`](../pegc/) after the split — the sections below keep their names for clarity but the module path is `pegc`, not `pegvm`. Implementation details (bit layouts, dispatch tables) are only mentioned when the semantics force them.
+This document is a guided tour of the **types** that make up the module, extended upstream to cover the full `&str → Grammar → Program → MatchResult` pipeline for continuity. Types that surface grammar-source parsing and compilation (`Pattern`, `Grammar`, `ParseError`, `CompileError`) now live in [`crate::pegc`](../pegc/) after the split; see [`src/pegc/README.md`](../pegc/README.md) for the grammar-source language spec (syntax, escapes, precedence, extensions, errors). The sections below keep their names for clarity but the module path is `pegc`, not `pegvm`. Implementation details (bit layouts, dispatch tables) are only mentioned when the semantics force them.
 
 ## The pipeline in one picture
 
@@ -186,13 +186,7 @@ A grammar that opts into the `*^` recovery operator on a top-level repetition ca
 
 ## Error types
 
-The module has two error types, one per transformation in the pipeline that can fail ahead of time:
-
-- `pegc::ParseError` is returned by `pegc::parse` when the grammar source is malformed (unterminated string, missing `<-`, duplicate rule, etc.). It carries line and column information.
-- `pegc::CompileError` is returned by `Grammar::compile` when the grammar is well-formed text but semantically invalid — a `NonTerminal("foo")` with no matching rule, or a start rule that doesn't exist.
-- `pegc::Error` is the unified wrapper exposed by `pegc::compile(source)` so one-step callers learn one error type rather than two.
-
-Runtime mismatch (the input doesn't match the grammar) is not an error type: `VM::run` returns a `MatchResult` whose `complete` flag is `false` when the input didn't conform. The distinction is deliberate — a grammar error is an author bug (the grammar needs fixing), a runtime non-match is a data bug (the input didn't conform).
+Grammar-source errors (`ParseError`, `CompileError`, unified `Error`) belong to the compiler — see [`src/pegc/README.md`](../pegc/README.md#errors). The VM's contract is simpler: `VM::run` always returns a `MatchResult`; its `complete` flag distinguishes a successful match from a non-match. A non-match is not an error — the distinction is between *author bugs* (grammar) and *data bugs* (input).
 
 ## Invariants the types alone can't express
 
