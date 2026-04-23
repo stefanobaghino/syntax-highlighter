@@ -98,15 +98,6 @@ append-only streaming and arbitrary-position edits reparse only the
 regions whose memo entries cross the edit point, not the whole buffer
 (see `src/pegvm/incremental.rs` for the invalidation protocol).
 
-## Grammar format
-
-See `grammars/json.peg` for a complete example. The format follows standard
-PEG notation with two extensions: `@name{pattern}` declares a capture with
-the given highlight name (mapped to ANSI colors by the built-in theme in
-`src/highlight/theme.rs`), and `p*^` / `p+^` mark a repetition for
-skip-byte error recovery (see `Pattern::RecoverRepeat` in
-`src/pegc/pattern.rs` and the emission pattern in `src/pegc/compiler.rs`).
-
 ## More documentation
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — how the codebase is organized:
