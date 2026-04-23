@@ -1,0 +1,118 @@
+/* Medium-sized CSS bench fixture: exercises nested rules, at-rules,
+ * custom properties, calc(), pseudo-classes, and value functions.
+ */
+
+:root {
+  --primary: #3366ff;
+  --primary-dark: #1a4dcc;
+  --bg: #ffffff;
+  --fg: #111111;
+  --gap: 16px;
+  --radius: 6px;
+  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--fg);
+  background: var(--bg);
+  line-height: 1.5;
+}
+
+.container {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: calc(var(--gap) * 2);
+}
+
+.button {
+  display: inline-block;
+  padding: 8px 16px;
+  border-radius: var(--radius);
+  background: var(--primary);
+  color: white;
+  text-decoration: none;
+  border: none;
+  cursor: pointer;
+  transition: background 0.2s ease-in-out;
+}
+
+.button:hover,
+.button:focus {
+  background: var(--primary-dark);
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.card {
+  background: #f5f5f5;
+  padding: var(--gap);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+
+  .card-title {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0 0 8px;
+  }
+
+  .card-body {
+    color: rgb(60, 60, 60);
+    font-size: 14px;
+  }
+
+  &:hover {
+    transform: translateY(-2px);
+  }
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--gap);
+}
+
+@media (min-width: 640px) {
+  .container {
+    padding: calc(var(--gap) * 3);
+  }
+
+  .grid {
+    gap: calc(var(--gap) * 1.5);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111111;
+    --fg: #ffffff;
+  }
+
+  .card {
+    background: #1a1a1a;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in {
+  animation: fade-in 0.3s ease-out !important;
+}

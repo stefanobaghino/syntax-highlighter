@@ -1,0 +1,157 @@
+# CSS grammar with highlight annotations.
+# The first rule is the start rule.
+#
+# Scope: highlighting, not conformance validation. Covers standard
+# rules, at-rules (`@media`, `@keyframes`, `@import`, ...), nested
+# rules, declarations, selectors (type/class/id/attribute/pseudo/
+# combinators, including the nesting `&`), and value forms including
+# `calc()`, `rgb()`, `var(--x)`, hex colors, and numeric literals
+# with units.
+#
+# Capture kinds used (all present in src/highlight/theme.rs):
+#   keyword, string, number, comment, operator, punctuation, type,
+#   function, constant, property, variable, recovery.
+#
+# Intentionally out of scope:
+#   - `@document`, `@container` advanced preludes (treated as generic
+#     token stream).
+#   - Full selector-list validation; we accept most practical shapes.
+#   - CSS `url(noquote)` with no quotes is supported but not the
+#     full URL whitespace rules.
+#
+# Recovery: top-level uses `*^` so malformed statements don't abort
+# the whole stylesheet.
+
+css_file      <- ws (statement)*^ ws !.
+
+statement     <- at_rule
+                / rule
+
+# --- At-rules --------------------------------------------------------
+
+at_rule       <- at_name ws prelude ws (block / @punctuation{';'}) ws
+at_name       <- @keyword{at_name_body}
+at_name_body  <- '@' ident_body+
+
+# Prelude: tokens up to `{` or `;` — sequences of value-like tokens.
+prelude       <- (prelude_token ws)*
+prelude_token <- string_lit
+                / fn_call
+                / hex_color
+                / number_with_unit
+                / @keyword{important_flag}
+                / @type{ident}
+                / @punctuation{'('} ws prelude ws @punctuation{')'}
+                / @punctuation{','}
+                / @punctuation{':'}
+                / @operator{'='}
+                / @operator{'+'}
+                / @operator{'-'}
+                / @operator{'*'}
+                / @operator{'/'}
+                / @operator{'>'}
+
+# --- Rules -----------------------------------------------------------
+
+rule          <- selector_list ws block ws
+selector_list <- selector (ws @punctuation{','} ws selector)*
+selector      <- compound_selector (ws combinator_and_next)*
+combinator_and_next <- @operator{'>'} ws compound_selector
+                     / @operator{'+'} ws compound_selector
+                     / @operator{'~'} ws compound_selector
+                     / compound_selector
+
+compound_selector <- selector_atom (selector_atom)*
+selector_atom <- @property{class_selector}
+               / @constant{id_selector}
+               / @function{pseudo_element}
+               / @function{pseudo_class}
+               / attr_selector
+               / @punctuation{'&'}
+               / @punctuation{'*'}
+               / @type{ident}
+
+class_selector <- '.' ident
+id_selector    <- '#' ident
+pseudo_element <- '::' ident pseudo_args?
+pseudo_class   <- ':' ident pseudo_args?
+pseudo_args    <- '(' (!')' .)* ')'
+attr_selector  <- @punctuation{'['} ws attr_body ws @punctuation{']'}
+attr_body      <- (!']' .)*
+
+# --- Blocks & declarations ------------------------------------------
+
+block         <- @punctuation{'{'} ws block_body ws @punctuation{'}'}
+block_body    <- (block_item ws)*
+block_item    <- at_rule
+                / declaration
+                / rule
+                / @punctuation{';'}
+
+declaration   <- @property{prop_ident} ws @punctuation{':'} ws value_list ws
+                 important? ws (@punctuation{';'} / &'}')
+important     <- @keyword{'!important'}
+
+prop_ident    <- '--' ident_body+
+                / '-'? ident
+
+# --- Values ---------------------------------------------------------
+
+value_list    <- value_term (ws @punctuation{','} ws value_term)*
+value_term    <- value_factor (ws value_factor)*
+value_factor  <- string_lit
+                / fn_call
+                / hex_color
+                / number_with_unit
+                / url_unquoted
+                / @variable{ident}
+                / @operator{'/'}
+                / @operator{'+'}
+                / @operator{'-'}
+                / @operator{'*'}
+
+fn_call       <- @function{fn_name} @punctuation{'('} ws fn_args? ws @punctuation{')'}
+fn_name       <- ident
+fn_args       <- fn_arg (ws @punctuation{','} ws fn_arg)*
+fn_arg        <- value_term
+
+# Unquoted `url(...)` arg — bare text till the closing paren.
+url_unquoted  <- @function{'url'} @punctuation{'('} ws @string{url_body} ws @punctuation{')'}
+url_body      <- (!')' .)*
+
+# --- Literals -------------------------------------------------------
+
+hex_color     <- @constant{hex_body}
+hex_body      <- '#' hex_digit+
+hex_digit     <- [0-9a-fA-F]
+
+number_with_unit <- @number{num_body}
+num_body      <- sign? (num_float / num_int) num_unit?
+sign          <- [+\-]
+num_int       <- [0-9]+
+num_float     <- [0-9]* '.' [0-9]+
+                / [0-9]+ '.' [0-9]*
+num_unit      <- '%'
+                / ident
+
+string_lit    <- @string{dq_string / sq_string}
+dq_string     <- '"' (str_escape / !'"' !'\n' .)* '"'
+sq_string     <- "'" (str_escape / !"'" !'\n' .)* "'"
+str_escape    <- '\\' .
+
+important_flag <- '!important'
+
+# --- Identifiers ----------------------------------------------------
+
+ident         <- ident_start ident_body*
+ident_start   <- [A-Za-z_\-]
+ident_body    <- [A-Za-z0-9_\-]
+
+# --- Whitespace / comments -----------------------------------------
+#
+# CSS has only block comments.
+
+comment       <- @comment{block_comment}
+block_comment <- '/*' (!'*/' .)* '*/'
+
+ws            <- (comment / [ \t\r\n])*
