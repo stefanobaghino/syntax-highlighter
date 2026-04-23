@@ -1,0 +1,1783 @@
+# A synthetic dependency manifest used as an xlarge benchmark fixture.
+# Exercises many sections, arrays of tables, wide key/value distribution.
+schema = "corpus.v1"
+generated = 2026-04-22T12:00:00Z
+seed = 42
+
+[meta]
+count = 160
+description = "xlarge benchmark corpus — shape mirrors large.toml, scaled to push past Yedidia's §5.2.4 knee."
+thresholds = [0, 32, 64, 128, 256, 512, 1024, 2048, 4096]
+runs_per_cell = 11
+grammars = ["json", "toml", "sql"]
+
+[[package]]
+name = "alpha"
+version = "0.0.0"
+authors = ["alice"]
+license = "MIT"
+keywords = ["alpha"]
+edition = "2018"
+description = "A synthetic crate named alpha for benchmark purposes."
+readme = true
+
+[package.metadata.alpha]
+homepage = "https://example.invalid/alpha"
+repository = "https://example.invalid/alpha.git"
+documentation = "https://example.invalid/docs/alpha"
+
+[[package]]
+name = "beta"
+version = "1.3.7"
+authors = ["bob", "ivan"]
+license = "Apache-2.0"
+keywords = ["beta", "nu"]
+edition = "2021"
+
+[[package]]
+name = "gamma"
+version = "2.6.14"
+authors = ["carol", "judy"]
+license = "MIT OR Apache-2.0"
+keywords = ["gamma", "xi", "arc"]
+edition = "2024"
+
+[package.metadata.gamma]
+homepage = "https://example.invalid/gamma"
+repository = "https://example.invalid/gamma.git"
+documentation = "https://example.invalid/docs/gamma"
+
+[[package]]
+name = "delta"
+version = "3.9.4"
+authors = ["dave"]
+license = "BSD-3-Clause"
+keywords = ["delta"]
+edition = "2018"
+
+[[package]]
+name = "epsilon"
+version = "4.12.11"
+authors = ["erin", "leon"]
+license = "BSD-2-Clause"
+keywords = ["epsilon", "pi"]
+edition = "2021"
+description = "A synthetic crate named epsilon for benchmark purposes."
+
+[package.metadata.epsilon]
+homepage = "https://example.invalid/epsilon"
+repository = "https://example.invalid/epsilon.git"
+documentation = "https://example.invalid/docs/epsilon"
+
+[[package]]
+name = "zeta"
+version = "5.2.1"
+authors = ["frank", "mallory"]
+license = "MPL-2.0"
+keywords = ["zeta", "rho", "dune"]
+edition = "2024"
+readme = true
+
+[[package]]
+name = "eta"
+version = "6.5.8"
+authors = ["grace"]
+license = "Unlicense"
+keywords = ["eta"]
+edition = "2018"
+
+[package.metadata.eta]
+homepage = "https://example.invalid/eta"
+repository = "https://example.invalid/eta.git"
+documentation = "https://example.invalid/docs/eta"
+
+[[package]]
+name = "theta"
+version = "7.8.15"
+authors = ["heidi", "olivia"]
+license = "ISC"
+keywords = ["theta", "tau"]
+edition = "2021"
+
+[[package]]
+name = "iota"
+version = "8.11.5"
+authors = ["ivan", "peggy"]
+license = "Zlib"
+keywords = ["iota", "upsilon", "glade"]
+edition = "2024"
+description = "A synthetic crate named iota for benchmark purposes."
+
+[package.metadata.iota]
+homepage = "https://example.invalid/iota"
+repository = "https://example.invalid/iota.git"
+documentation = "https://example.invalid/docs/iota"
+
+[[package]]
+name = "kappa"
+version = "9.1.12"
+authors = ["judy"]
+license = "CC0-1.0"
+keywords = ["kappa"]
+edition = "2018"
+
+[[package]]
+name = "lambda"
+version = "0.4.2"
+authors = ["kate", "ruth"]
+license = "MIT"
+keywords = ["lambda", "chi"]
+edition = "2021"
+readme = true
+
+[package.metadata.lambda]
+homepage = "https://example.invalid/lambda"
+repository = "https://example.invalid/lambda.git"
+documentation = "https://example.invalid/docs/lambda"
+
+[[package]]
+name = "mu"
+version = "1.7.9"
+authors = ["leon", "sybil"]
+license = "Apache-2.0"
+keywords = ["mu", "psi", "jetty"]
+edition = "2024"
+
+[[package]]
+name = "nu"
+version = "2.10.16"
+authors = ["mallory"]
+license = "MIT OR Apache-2.0"
+keywords = ["nu"]
+edition = "2018"
+description = "A synthetic crate named nu for benchmark purposes."
+
+[package.metadata.nu]
+homepage = "https://example.invalid/nu"
+repository = "https://example.invalid/nu.git"
+documentation = "https://example.invalid/docs/nu"
+
+[[package]]
+name = "xi"
+version = "3.0.6"
+authors = ["niaj", "uma"]
+license = "BSD-3-Clause"
+keywords = ["xi", "arc"]
+edition = "2021"
+
+[[package]]
+name = "omicron"
+version = "4.3.13"
+authors = ["olivia", "victor"]
+license = "BSD-2-Clause"
+keywords = ["omicron", "basilisk", "marsh"]
+edition = "2024"
+
+[package.metadata.omicron]
+homepage = "https://example.invalid/omicron"
+repository = "https://example.invalid/omicron.git"
+documentation = "https://example.invalid/docs/omicron"
+
+[[package]]
+name = "pi"
+version = "5.6.3"
+authors = ["peggy"]
+license = "MPL-2.0"
+keywords = ["pi"]
+edition = "2018"
+readme = true
+
+[[package]]
+name = "rho"
+version = "6.9.10"
+authors = ["quentin", "xavier"]
+license = "Unlicense"
+keywords = ["rho", "dune"]
+edition = "2021"
+description = "A synthetic crate named rho for benchmark purposes."
+
+[package.metadata.rho]
+homepage = "https://example.invalid/rho"
+repository = "https://example.invalid/rho.git"
+documentation = "https://example.invalid/docs/rho"
+
+[[package]]
+name = "sigma"
+version = "7.12.0"
+authors = ["ruth", "yvonne"]
+license = "ISC"
+keywords = ["sigma", "ember", "pier"]
+edition = "2024"
+
+[[package]]
+name = "tau"
+version = "8.2.7"
+authors = ["sybil"]
+license = "Zlib"
+keywords = ["tau"]
+edition = "2018"
+
+[package.metadata.tau]
+homepage = "https://example.invalid/tau"
+repository = "https://example.invalid/tau.git"
+documentation = "https://example.invalid/docs/tau"
+
+[[package]]
+name = "upsilon"
+version = "9.5.14"
+authors = ["trent", "alice"]
+license = "CC0-1.0"
+keywords = ["upsilon", "glade"]
+edition = "2021"
+
+[[package]]
+name = "phi"
+version = "0.8.4"
+authors = ["uma", "bob"]
+license = "MIT"
+keywords = ["phi", "harbor", "sand"]
+edition = "2024"
+description = "A synthetic crate named phi for benchmark purposes."
+readme = true
+
+[package.metadata.phi]
+homepage = "https://example.invalid/phi"
+repository = "https://example.invalid/phi.git"
+documentation = "https://example.invalid/docs/phi"
+
+[[package]]
+name = "chi"
+version = "1.11.11"
+authors = ["victor"]
+license = "Apache-2.0"
+keywords = ["chi"]
+edition = "2018"
+
+[[package]]
+name = "psi"
+version = "2.1.1"
+authors = ["wendy", "dave"]
+license = "MIT OR Apache-2.0"
+keywords = ["psi", "jetty"]
+edition = "2021"
+
+[package.metadata.psi]
+homepage = "https://example.invalid/psi"
+repository = "https://example.invalid/psi.git"
+documentation = "https://example.invalid/docs/psi"
+
+[[package]]
+name = "omega"
+version = "3.4.8"
+authors = ["xavier", "erin"]
+license = "BSD-3-Clause"
+keywords = ["omega", "kelp", "valley"]
+edition = "2024"
+
+[[package]]
+name = "arc"
+version = "4.7.15"
+authors = ["yvonne"]
+license = "BSD-2-Clause"
+keywords = ["arc"]
+edition = "2018"
+description = "A synthetic crate named arc for benchmark purposes."
+
+[package.metadata.arc]
+homepage = "https://example.invalid/arc"
+repository = "https://example.invalid/arc.git"
+documentation = "https://example.invalid/docs/arc"
+
+[[package]]
+name = "basilisk"
+version = "5.10.5"
+authors = ["zack", "grace"]
+license = "MPL-2.0"
+keywords = ["basilisk", "marsh"]
+edition = "2021"
+readme = true
+
+[[package]]
+name = "cedar"
+version = "6.0.12"
+authors = ["alice", "heidi"]
+license = "Unlicense"
+keywords = ["cedar", "nest", "yarrow"]
+edition = "2024"
+
+[package.metadata.cedar]
+homepage = "https://example.invalid/cedar"
+repository = "https://example.invalid/cedar.git"
+documentation = "https://example.invalid/docs/cedar"
+
+[[package]]
+name = "dune"
+version = "7.3.2"
+authors = ["bob"]
+license = "ISC"
+keywords = ["dune"]
+edition = "2018"
+
+[[package]]
+name = "ember"
+version = "8.6.9"
+authors = ["carol", "judy"]
+license = "Zlib"
+keywords = ["ember", "pier"]
+edition = "2021"
+description = "A synthetic crate named ember for benchmark purposes."
+
+[package.metadata.ember]
+homepage = "https://example.invalid/ember"
+repository = "https://example.invalid/ember.git"
+documentation = "https://example.invalid/docs/ember"
+
+[[package]]
+name = "fjord"
+version = "9.9.16"
+authors = ["dave", "kate"]
+license = "CC0-1.0"
+keywords = ["fjord", "quill", "briar"]
+edition = "2024"
+
+[[package]]
+name = "glade"
+version = "0.12.6"
+authors = ["erin"]
+license = "MIT"
+keywords = ["glade"]
+edition = "2018"
+readme = true
+
+[package.metadata.glade]
+homepage = "https://example.invalid/glade"
+repository = "https://example.invalid/glade.git"
+documentation = "https://example.invalid/docs/glade"
+
+[[package]]
+name = "harbor"
+version = "1.2.13"
+authors = ["frank", "mallory"]
+license = "Apache-2.0"
+keywords = ["harbor", "sand"]
+edition = "2021"
+
+[[package]]
+name = "inlet"
+version = "2.5.3"
+authors = ["grace", "niaj"]
+license = "MIT OR Apache-2.0"
+keywords = ["inlet", "tide", "elm"]
+edition = "2024"
+description = "A synthetic crate named inlet for benchmark purposes."
+
+[package.metadata.inlet]
+homepage = "https://example.invalid/inlet"
+repository = "https://example.invalid/inlet.git"
+documentation = "https://example.invalid/docs/inlet"
+
+[[package]]
+name = "jetty"
+version = "3.8.10"
+authors = ["heidi"]
+license = "BSD-3-Clause"
+keywords = ["jetty"]
+edition = "2018"
+
+[[package]]
+name = "kelp"
+version = "4.11.0"
+authors = ["ivan", "peggy"]
+license = "BSD-2-Clause"
+keywords = ["kelp", "valley"]
+edition = "2021"
+
+[package.metadata.kelp]
+homepage = "https://example.invalid/kelp"
+repository = "https://example.invalid/kelp.git"
+documentation = "https://example.invalid/docs/kelp"
+
+[[package]]
+name = "loam"
+version = "5.1.7"
+authors = ["judy", "quentin"]
+license = "MPL-2.0"
+keywords = ["loam", "wave", "holly"]
+edition = "2024"
+readme = true
+
+[[package]]
+name = "marsh"
+version = "6.4.14"
+authors = ["kate"]
+license = "Unlicense"
+keywords = ["marsh"]
+edition = "2018"
+description = "A synthetic crate named marsh for benchmark purposes."
+
+[package.metadata.marsh]
+homepage = "https://example.invalid/marsh"
+repository = "https://example.invalid/marsh.git"
+documentation = "https://example.invalid/docs/marsh"
+
+[[package]]
+name = "nest"
+version = "7.7.4"
+authors = ["leon", "sybil"]
+license = "ISC"
+keywords = ["nest", "yarrow"]
+edition = "2021"
+
+[[package]]
+name = "oak"
+version = "8.10.11"
+authors = ["mallory", "trent"]
+license = "Zlib"
+keywords = ["oak", "zenith", "kale"]
+edition = "2024"
+
+[package.metadata.oak]
+homepage = "https://example.invalid/oak"
+repository = "https://example.invalid/oak.git"
+documentation = "https://example.invalid/docs/oak"
+
+[[package]]
+name = "pier"
+version = "9.0.1"
+authors = ["niaj"]
+license = "CC0-1.0"
+keywords = ["pier"]
+edition = "2018"
+
+[[package]]
+name = "quill"
+version = "0.3.8"
+authors = ["olivia", "victor"]
+license = "MIT"
+keywords = ["quill", "briar"]
+edition = "2021"
+description = "A synthetic crate named quill for benchmark purposes."
+readme = true
+
+[package.metadata.quill]
+homepage = "https://example.invalid/quill"
+repository = "https://example.invalid/quill.git"
+documentation = "https://example.invalid/docs/quill"
+
+[[package]]
+name = "reef"
+version = "1.6.15"
+authors = ["peggy", "wendy"]
+license = "Apache-2.0"
+keywords = ["reef", "cove", "nettle"]
+edition = "2024"
+
+[[package]]
+name = "sand"
+version = "2.9.5"
+authors = ["quentin"]
+license = "MIT OR Apache-2.0"
+keywords = ["sand"]
+edition = "2018"
+
+[package.metadata.sand]
+homepage = "https://example.invalid/sand"
+repository = "https://example.invalid/sand.git"
+documentation = "https://example.invalid/docs/sand"
+
+[[package]]
+name = "tide"
+version = "3.12.12"
+authors = ["ruth", "yvonne"]
+license = "BSD-3-Clause"
+keywords = ["tide", "elm"]
+edition = "2021"
+
+[[package]]
+name = "undertow"
+version = "4.2.2"
+authors = ["sybil", "zack"]
+license = "BSD-2-Clause"
+keywords = ["undertow", "fern", "quince"]
+edition = "2024"
+description = "A synthetic crate named undertow for benchmark purposes."
+
+[package.metadata.undertow]
+homepage = "https://example.invalid/undertow"
+repository = "https://example.invalid/undertow.git"
+documentation = "https://example.invalid/docs/undertow"
+
+[[package]]
+name = "valley"
+version = "5.5.9"
+authors = ["trent"]
+license = "MPL-2.0"
+keywords = ["valley"]
+edition = "2018"
+readme = true
+
+[[package]]
+name = "wave"
+version = "6.8.16"
+authors = ["uma", "bob"]
+license = "Unlicense"
+keywords = ["wave", "holly"]
+edition = "2021"
+
+[package.metadata.wave]
+homepage = "https://example.invalid/wave"
+repository = "https://example.invalid/wave.git"
+documentation = "https://example.invalid/docs/wave"
+
+[[package]]
+name = "xeric"
+version = "7.11.6"
+authors = ["victor", "carol"]
+license = "ISC"
+keywords = ["xeric", "ivy", "thyme"]
+edition = "2024"
+
+[[package]]
+name = "yarrow"
+version = "8.1.13"
+authors = ["wendy"]
+license = "Zlib"
+keywords = ["yarrow"]
+edition = "2018"
+description = "A synthetic crate named yarrow for benchmark purposes."
+
+[package.metadata.yarrow]
+homepage = "https://example.invalid/yarrow"
+repository = "https://example.invalid/yarrow.git"
+documentation = "https://example.invalid/docs/yarrow"
+
+[[package]]
+name = "zenith"
+version = "9.4.3"
+authors = ["xavier", "erin"]
+license = "CC0-1.0"
+keywords = ["zenith", "kale"]
+edition = "2021"
+
+[[package]]
+name = "acacia"
+version = "0.7.10"
+authors = ["yvonne", "frank"]
+license = "MIT"
+keywords = ["acacia", "lotus", "willow"]
+edition = "2024"
+readme = true
+
+[package.metadata.acacia]
+homepage = "https://example.invalid/acacia"
+repository = "https://example.invalid/acacia.git"
+documentation = "https://example.invalid/docs/acacia"
+
+[[package]]
+name = "briar"
+version = "1.10.0"
+authors = ["zack"]
+license = "Apache-2.0"
+keywords = ["briar"]
+edition = "2018"
+
+[[package]]
+name = "cove"
+version = "2.0.7"
+authors = ["alice", "heidi"]
+license = "MIT OR Apache-2.0"
+keywords = ["cove", "nettle"]
+edition = "2021"
+description = "A synthetic crate named cove for benchmark purposes."
+
+[package.metadata.cove]
+homepage = "https://example.invalid/cove"
+repository = "https://example.invalid/cove.git"
+documentation = "https://example.invalid/docs/cove"
+
+[[package]]
+name = "delta2"
+version = "3.3.14"
+authors = ["bob", "ivan"]
+license = "BSD-3-Clause"
+keywords = ["delta2", "olive", "zinnia"]
+edition = "2024"
+
+[[package]]
+name = "elm"
+version = "4.6.4"
+authors = ["carol"]
+license = "BSD-2-Clause"
+keywords = ["elm"]
+edition = "2018"
+
+[package.metadata.elm]
+homepage = "https://example.invalid/elm"
+repository = "https://example.invalid/elm.git"
+documentation = "https://example.invalid/docs/elm"
+
+[[package]]
+name = "fern"
+version = "5.9.11"
+authors = ["dave", "kate"]
+license = "MPL-2.0"
+keywords = ["fern", "quince"]
+edition = "2021"
+readme = true
+
+[[package]]
+name = "gorse"
+version = "6.12.1"
+authors = ["erin", "leon"]
+license = "Unlicense"
+keywords = ["gorse", "rose", "current"]
+edition = "2024"
+description = "A synthetic crate named gorse for benchmark purposes."
+
+[package.metadata.gorse]
+homepage = "https://example.invalid/gorse"
+repository = "https://example.invalid/gorse.git"
+documentation = "https://example.invalid/docs/gorse"
+
+[[package]]
+name = "holly"
+version = "7.2.8"
+authors = ["frank"]
+license = "ISC"
+keywords = ["holly"]
+edition = "2018"
+
+[[package]]
+name = "ivy"
+version = "8.5.15"
+authors = ["grace", "niaj"]
+license = "Zlib"
+keywords = ["ivy", "thyme"]
+edition = "2021"
+
+[package.metadata.ivy]
+homepage = "https://example.invalid/ivy"
+repository = "https://example.invalid/ivy.git"
+documentation = "https://example.invalid/docs/ivy"
+
+[[package]]
+name = "juniper"
+version = "9.8.5"
+authors = ["heidi", "olivia"]
+license = "CC0-1.0"
+keywords = ["juniper", "umbra", "fathom"]
+edition = "2024"
+
+[[package]]
+name = "kale"
+version = "0.11.12"
+authors = ["ivan"]
+license = "MIT"
+keywords = ["kale"]
+edition = "2018"
+description = "A synthetic crate named kale for benchmark purposes."
+readme = true
+
+[package.metadata.kale]
+homepage = "https://example.invalid/kale"
+repository = "https://example.invalid/kale.git"
+documentation = "https://example.invalid/docs/kale"
+
+[[package]]
+name = "lotus"
+version = "1.1.2"
+authors = ["judy", "quentin"]
+license = "Apache-2.0"
+keywords = ["lotus", "willow"]
+edition = "2021"
+
+[[package]]
+name = "maple"
+version = "2.4.9"
+authors = ["kate", "ruth"]
+license = "MIT OR Apache-2.0"
+keywords = ["maple", "xylia", "isle"]
+edition = "2024"
+
+[package.metadata.maple]
+homepage = "https://example.invalid/maple"
+repository = "https://example.invalid/maple.git"
+documentation = "https://example.invalid/docs/maple"
+
+[[package]]
+name = "nettle"
+version = "3.7.16"
+authors = ["leon"]
+license = "BSD-3-Clause"
+keywords = ["nettle"]
+edition = "2018"
+
+[[package]]
+name = "olive"
+version = "4.10.6"
+authors = ["mallory", "trent"]
+license = "BSD-2-Clause"
+keywords = ["olive", "zinnia"]
+edition = "2021"
+description = "A synthetic crate named olive for benchmark purposes."
+
+[package.metadata.olive]
+homepage = "https://example.invalid/olive"
+repository = "https://example.invalid/olive.git"
+documentation = "https://example.invalid/docs/olive"
+
+[[package]]
+name = "pine"
+version = "5.0.13"
+authors = ["niaj", "uma"]
+license = "MPL-2.0"
+keywords = ["pine", "azure", "mooring"]
+edition = "2024"
+readme = true
+
+[[package]]
+name = "quince"
+version = "6.3.3"
+authors = ["olivia"]
+license = "Unlicense"
+keywords = ["quince"]
+edition = "2018"
+
+[package.metadata.quince]
+homepage = "https://example.invalid/quince"
+repository = "https://example.invalid/quince.git"
+documentation = "https://example.invalid/docs/quince"
+
+[[package]]
+name = "rose"
+version = "7.6.10"
+authors = ["peggy", "wendy"]
+license = "ISC"
+keywords = ["rose", "current"]
+edition = "2021"
+
+[[package]]
+name = "spruce"
+version = "8.9.0"
+authors = ["quentin", "xavier"]
+license = "Zlib"
+keywords = ["spruce", "depth", "port"]
+edition = "2024"
+description = "A synthetic crate named spruce for benchmark purposes."
+
+[package.metadata.spruce]
+homepage = "https://example.invalid/spruce"
+repository = "https://example.invalid/spruce.git"
+documentation = "https://example.invalid/docs/spruce"
+
+[[package]]
+name = "thyme"
+version = "9.12.7"
+authors = ["ruth"]
+license = "CC0-1.0"
+keywords = ["thyme"]
+edition = "2018"
+
+[[package]]
+name = "umbra"
+version = "0.2.14"
+authors = ["sybil", "zack"]
+license = "MIT"
+keywords = ["umbra", "fathom"]
+edition = "2021"
+readme = true
+
+[package.metadata.umbra]
+homepage = "https://example.invalid/umbra"
+repository = "https://example.invalid/umbra.git"
+documentation = "https://example.invalid/docs/umbra"
+
+[[package]]
+name = "vine"
+version = "1.5.4"
+authors = ["trent", "alice"]
+license = "Apache-2.0"
+keywords = ["vine", "gulf", "shore"]
+edition = "2024"
+
+[[package]]
+name = "willow"
+version = "2.8.11"
+authors = ["uma"]
+license = "MIT OR Apache-2.0"
+keywords = ["willow"]
+edition = "2018"
+description = "A synthetic crate named willow for benchmark purposes."
+
+[package.metadata.willow]
+homepage = "https://example.invalid/willow"
+repository = "https://example.invalid/willow.git"
+documentation = "https://example.invalid/docs/willow"
+
+[[package]]
+name = "xylia"
+version = "3.11.1"
+authors = ["victor", "carol"]
+license = "BSD-3-Clause"
+keywords = ["xylia", "isle"]
+edition = "2021"
+
+[[package]]
+name = "yew"
+version = "4.1.8"
+authors = ["wendy", "dave"]
+license = "BSD-2-Clause"
+keywords = ["yew", "knot", "vortex"]
+edition = "2024"
+
+[package.metadata.yew]
+homepage = "https://example.invalid/yew"
+repository = "https://example.invalid/yew.git"
+documentation = "https://example.invalid/docs/yew"
+
+[[package]]
+name = "zinnia"
+version = "5.4.15"
+authors = ["xavier"]
+license = "MPL-2.0"
+keywords = ["zinnia"]
+edition = "2018"
+readme = true
+
+[[package]]
+name = "azure"
+version = "6.7.5"
+authors = ["yvonne", "frank"]
+license = "Unlicense"
+keywords = ["azure", "mooring"]
+edition = "2021"
+description = "A synthetic crate named azure for benchmark purposes."
+
+[package.metadata.azure]
+homepage = "https://example.invalid/azure"
+repository = "https://example.invalid/azure.git"
+documentation = "https://example.invalid/docs/azure"
+
+[[package]]
+name = "brine"
+version = "7.10.12"
+authors = ["zack", "grace"]
+license = "ISC"
+keywords = ["brine", "nautilus", "yacht"]
+edition = "2024"
+
+[[package]]
+name = "current"
+version = "8.0.2"
+authors = ["alice"]
+license = "Zlib"
+keywords = ["current"]
+edition = "2018"
+
+[package.metadata.current]
+homepage = "https://example.invalid/current"
+repository = "https://example.invalid/current.git"
+documentation = "https://example.invalid/docs/current"
+
+[[package]]
+name = "depth"
+version = "9.3.9"
+authors = ["bob", "ivan"]
+license = "CC0-1.0"
+keywords = ["depth", "port"]
+edition = "2021"
+
+[[package]]
+name = "estuary"
+version = "0.6.16"
+authors = ["carol", "judy"]
+license = "MIT"
+keywords = ["estuary", "quay", "balsam"]
+edition = "2024"
+description = "A synthetic crate named estuary for benchmark purposes."
+readme = true
+
+[package.metadata.estuary]
+homepage = "https://example.invalid/estuary"
+repository = "https://example.invalid/estuary.git"
+documentation = "https://example.invalid/docs/estuary"
+
+[[package]]
+name = "fathom"
+version = "1.9.6"
+authors = ["dave"]
+license = "Apache-2.0"
+keywords = ["fathom"]
+edition = "2018"
+
+[[package]]
+name = "gulf"
+version = "2.12.13"
+authors = ["erin", "leon"]
+license = "MIT OR Apache-2.0"
+keywords = ["gulf", "shore"]
+edition = "2021"
+
+[package.metadata.gulf]
+homepage = "https://example.invalid/gulf"
+repository = "https://example.invalid/gulf.git"
+documentation = "https://example.invalid/docs/gulf"
+
+[[package]]
+name = "haven"
+version = "3.2.3"
+authors = ["frank", "mallory"]
+license = "BSD-3-Clause"
+keywords = ["haven", "tidepool", "ether"]
+edition = "2024"
+
+[[package]]
+name = "isle"
+version = "4.5.10"
+authors = ["grace"]
+license = "BSD-2-Clause"
+keywords = ["isle"]
+edition = "2018"
+description = "A synthetic crate named isle for benchmark purposes."
+
+[package.metadata.isle]
+homepage = "https://example.invalid/isle"
+repository = "https://example.invalid/isle.git"
+documentation = "https://example.invalid/docs/isle"
+
+[[package]]
+name = "knot"
+version = "5.8.0"
+authors = ["heidi", "olivia"]
+license = "MPL-2.0"
+keywords = ["knot", "vortex"]
+edition = "2021"
+readme = true
+
+[[package]]
+name = "lagoon"
+version = "6.11.7"
+authors = ["ivan", "peggy"]
+license = "Unlicense"
+keywords = ["lagoon", "wharf", "heather"]
+edition = "2024"
+
+[package.metadata.lagoon]
+homepage = "https://example.invalid/lagoon"
+repository = "https://example.invalid/lagoon.git"
+documentation = "https://example.invalid/docs/lagoon"
+
+[[package]]
+name = "mooring"
+version = "7.1.14"
+authors = ["judy"]
+license = "ISC"
+keywords = ["mooring"]
+edition = "2018"
+
+[[package]]
+name = "nautilus"
+version = "8.4.4"
+authors = ["kate", "ruth"]
+license = "Zlib"
+keywords = ["nautilus", "yacht"]
+edition = "2021"
+description = "A synthetic crate named nautilus for benchmark purposes."
+
+[package.metadata.nautilus]
+homepage = "https://example.invalid/nautilus"
+repository = "https://example.invalid/nautilus.git"
+documentation = "https://example.invalid/docs/nautilus"
+
+[[package]]
+name = "ocean"
+version = "9.7.11"
+authors = ["leon", "sybil"]
+license = "CC0-1.0"
+keywords = ["ocean", "zephyr", "kyanite"]
+edition = "2024"
+
+[[package]]
+name = "port"
+version = "0.10.1"
+authors = ["mallory"]
+license = "MIT"
+keywords = ["port"]
+edition = "2018"
+readme = true
+
+[package.metadata.port]
+homepage = "https://example.invalid/port"
+repository = "https://example.invalid/port.git"
+documentation = "https://example.invalid/docs/port"
+
+[[package]]
+name = "quay"
+version = "1.0.8"
+authors = ["niaj", "uma"]
+license = "Apache-2.0"
+keywords = ["quay", "balsam"]
+edition = "2021"
+
+[[package]]
+name = "rift"
+version = "2.3.15"
+authors = ["olivia", "victor"]
+license = "MIT OR Apache-2.0"
+keywords = ["rift", "coral", "nectar"]
+edition = "2024"
+description = "A synthetic crate named rift for benchmark purposes."
+
+[package.metadata.rift]
+homepage = "https://example.invalid/rift"
+repository = "https://example.invalid/rift.git"
+documentation = "https://example.invalid/docs/rift"
+
+[[package]]
+name = "shore"
+version = "3.6.5"
+authors = ["peggy"]
+license = "BSD-3-Clause"
+keywords = ["shore"]
+edition = "2018"
+
+[[package]]
+name = "tidepool"
+version = "4.9.12"
+authors = ["quentin", "xavier"]
+license = "BSD-2-Clause"
+keywords = ["tidepool", "ether"]
+edition = "2021"
+
+[package.metadata.tidepool]
+homepage = "https://example.invalid/tidepool"
+repository = "https://example.invalid/tidepool.git"
+documentation = "https://example.invalid/docs/tidepool"
+
+[[package]]
+name = "upstream"
+version = "5.12.2"
+authors = ["ruth", "yvonne"]
+license = "MPL-2.0"
+keywords = ["upstream", "flint", "quartz"]
+edition = "2024"
+readme = true
+
+[[package]]
+name = "vortex"
+version = "6.2.9"
+authors = ["sybil"]
+license = "Unlicense"
+keywords = ["vortex"]
+edition = "2018"
+description = "A synthetic crate named vortex for benchmark purposes."
+
+[package.metadata.vortex]
+homepage = "https://example.invalid/vortex"
+repository = "https://example.invalid/vortex.git"
+documentation = "https://example.invalid/docs/vortex"
+
+[[package]]
+name = "wharf"
+version = "7.5.16"
+authors = ["trent", "alice"]
+license = "ISC"
+keywords = ["wharf", "heather"]
+edition = "2021"
+
+[[package]]
+name = "xyster"
+version = "8.8.6"
+authors = ["uma", "bob"]
+license = "Zlib"
+keywords = ["xyster", "iris", "topaz"]
+edition = "2024"
+
+[package.metadata.xyster]
+homepage = "https://example.invalid/xyster"
+repository = "https://example.invalid/xyster.git"
+documentation = "https://example.invalid/docs/xyster"
+
+[[package]]
+name = "yacht"
+version = "9.11.13"
+authors = ["victor"]
+license = "CC0-1.0"
+keywords = ["yacht"]
+edition = "2018"
+
+[[package]]
+name = "zephyr"
+version = "0.1.3"
+authors = ["wendy", "dave"]
+license = "MIT"
+keywords = ["zephyr", "kyanite"]
+edition = "2021"
+description = "A synthetic crate named zephyr for benchmark purposes."
+readme = true
+
+[package.metadata.zephyr]
+homepage = "https://example.invalid/zephyr"
+repository = "https://example.invalid/zephyr.git"
+documentation = "https://example.invalid/docs/zephyr"
+
+[[package]]
+name = "amber"
+version = "1.4.10"
+authors = ["xavier", "erin"]
+license = "Apache-2.0"
+keywords = ["amber", "lily", "whelk"]
+edition = "2024"
+
+[[package]]
+name = "balsam"
+version = "2.7.0"
+authors = ["yvonne"]
+license = "MIT OR Apache-2.0"
+keywords = ["balsam"]
+edition = "2018"
+
+[package.metadata.balsam]
+homepage = "https://example.invalid/balsam"
+repository = "https://example.invalid/balsam.git"
+documentation = "https://example.invalid/docs/balsam"
+
+[[package]]
+name = "coral"
+version = "3.10.7"
+authors = ["zack", "grace"]
+license = "BSD-3-Clause"
+keywords = ["coral", "nectar"]
+edition = "2021"
+
+[[package]]
+name = "dew"
+version = "4.0.14"
+authors = ["alice", "heidi"]
+license = "BSD-2-Clause"
+keywords = ["dew", "orchid", "zircon"]
+edition = "2024"
+description = "A synthetic crate named dew for benchmark purposes."
+
+[package.metadata.dew]
+homepage = "https://example.invalid/dew"
+repository = "https://example.invalid/dew.git"
+documentation = "https://example.invalid/docs/dew"
+
+[[package]]
+name = "ether"
+version = "5.3.4"
+authors = ["bob"]
+license = "MPL-2.0"
+keywords = ["ether"]
+edition = "2018"
+readme = true
+
+[[package]]
+name = "flint"
+version = "6.6.11"
+authors = ["carol", "judy"]
+license = "Unlicense"
+keywords = ["flint", "quartz"]
+edition = "2021"
+
+[package.metadata.flint]
+homepage = "https://example.invalid/flint"
+repository = "https://example.invalid/flint.git"
+documentation = "https://example.invalid/docs/flint"
+
+[[package]]
+name = "garnet"
+version = "7.9.1"
+authors = ["dave", "kate"]
+license = "ISC"
+keywords = ["garnet", "ruby", "daffodil"]
+edition = "2024"
+
+[[package]]
+name = "heather"
+version = "8.12.8"
+authors = ["erin"]
+license = "Zlib"
+keywords = ["heather"]
+edition = "2018"
+description = "A synthetic crate named heather for benchmark purposes."
+
+[package.metadata.heather]
+homepage = "https://example.invalid/heather"
+repository = "https://example.invalid/heather.git"
+documentation = "https://example.invalid/docs/heather"
+
+[[package]]
+name = "iris"
+version = "9.2.15"
+authors = ["frank", "mallory"]
+license = "CC0-1.0"
+keywords = ["iris", "topaz"]
+edition = "2021"
+
+[[package]]
+name = "jade"
+version = "0.5.5"
+authors = ["grace", "niaj"]
+license = "MIT"
+keywords = ["jade", "urchin", "gardenia"]
+edition = "2024"
+readme = true
+
+[package.metadata.jade]
+homepage = "https://example.invalid/jade"
+repository = "https://example.invalid/jade.git"
+documentation = "https://example.invalid/docs/jade"
+
+[[package]]
+name = "kyanite"
+version = "1.8.12"
+authors = ["heidi"]
+license = "Apache-2.0"
+keywords = ["kyanite"]
+edition = "2018"
+
+[[package]]
+name = "lily"
+version = "2.11.2"
+authors = ["ivan", "peggy"]
+license = "MIT OR Apache-2.0"
+keywords = ["lily", "whelk"]
+edition = "2021"
+description = "A synthetic crate named lily for benchmark purposes."
+
+[package.metadata.lily]
+homepage = "https://example.invalid/lily"
+repository = "https://example.invalid/lily.git"
+documentation = "https://example.invalid/docs/lily"
+
+[[package]]
+name = "magnolia"
+version = "3.1.9"
+authors = ["judy", "quentin"]
+license = "BSD-3-Clause"
+keywords = ["magnolia", "xenon", "jessamine"]
+edition = "2024"
+
+[[package]]
+name = "nectar"
+version = "4.4.16"
+authors = ["kate"]
+license = "BSD-2-Clause"
+keywords = ["nectar"]
+edition = "2018"
+
+[package.metadata.nectar]
+homepage = "https://example.invalid/nectar"
+repository = "https://example.invalid/nectar.git"
+documentation = "https://example.invalid/docs/nectar"
+
+[[package]]
+name = "orchid"
+version = "5.7.6"
+authors = ["leon", "sybil"]
+license = "MPL-2.0"
+keywords = ["orchid", "zircon"]
+edition = "2021"
+readme = true
+
+[[package]]
+name = "peony"
+version = "6.10.13"
+authors = ["mallory", "trent"]
+license = "Unlicense"
+keywords = ["peony", "bramble", "nasturtium"]
+edition = "2024"
+description = "A synthetic crate named peony for benchmark purposes."
+
+[package.metadata.peony]
+homepage = "https://example.invalid/peony"
+repository = "https://example.invalid/peony.git"
+documentation = "https://example.invalid/docs/peony"
+
+[[package]]
+name = "quartz"
+version = "7.0.3"
+authors = ["niaj"]
+license = "ISC"
+keywords = ["quartz"]
+edition = "2018"
+
+[[package]]
+name = "ruby"
+version = "8.3.10"
+authors = ["olivia", "victor"]
+license = "Zlib"
+keywords = ["ruby", "daffodil"]
+edition = "2021"
+
+[package.metadata.ruby]
+homepage = "https://example.invalid/ruby"
+repository = "https://example.invalid/ruby.git"
+documentation = "https://example.invalid/docs/ruby"
+
+[[package]]
+name = "sage"
+version = "9.6.0"
+authors = ["peggy", "wendy"]
+license = "CC0-1.0"
+keywords = ["sage", "edelweiss", "quercus"]
+edition = "2024"
+
+[[package]]
+name = "topaz"
+version = "0.9.7"
+authors = ["quentin"]
+license = "MIT"
+keywords = ["topaz"]
+edition = "2018"
+description = "A synthetic crate named topaz for benchmark purposes."
+readme = true
+
+[package.metadata.topaz]
+homepage = "https://example.invalid/topaz"
+repository = "https://example.invalid/topaz.git"
+documentation = "https://example.invalid/docs/topaz"
+
+[[package]]
+name = "urchin"
+version = "1.12.14"
+authors = ["ruth", "yvonne"]
+license = "Apache-2.0"
+keywords = ["urchin", "gardenia"]
+edition = "2021"
+
+[[package]]
+name = "violet"
+version = "2.2.4"
+authors = ["sybil", "zack"]
+license = "MIT OR Apache-2.0"
+keywords = ["violet", "hyacinth", "tulip"]
+edition = "2024"
+
+[package.metadata.violet]
+homepage = "https://example.invalid/violet"
+repository = "https://example.invalid/violet.git"
+documentation = "https://example.invalid/docs/violet"
+
+[[package]]
+name = "whelk"
+version = "3.5.11"
+authors = ["trent"]
+license = "BSD-3-Clause"
+keywords = ["whelk"]
+edition = "2018"
+
+[[package]]
+name = "xenon"
+version = "4.8.1"
+authors = ["uma", "bob"]
+license = "BSD-2-Clause"
+keywords = ["xenon", "jessamine"]
+edition = "2021"
+description = "A synthetic crate named xenon for benchmark purposes."
+
+[package.metadata.xenon]
+homepage = "https://example.invalid/xenon"
+repository = "https://example.invalid/xenon.git"
+documentation = "https://example.invalid/docs/xenon"
+
+[[package]]
+name = "yolk"
+version = "5.11.8"
+authors = ["victor", "carol"]
+license = "MPL-2.0"
+keywords = ["yolk", "larkspur", "wisteria"]
+edition = "2024"
+readme = true
+
+[[package]]
+name = "zircon"
+version = "6.1.15"
+authors = ["wendy"]
+license = "Unlicense"
+keywords = ["zircon"]
+edition = "2018"
+
+[package.metadata.zircon]
+homepage = "https://example.invalid/zircon"
+repository = "https://example.invalid/zircon.git"
+documentation = "https://example.invalid/docs/zircon"
+
+[[package]]
+name = "bramble"
+version = "7.4.5"
+authors = ["xavier", "erin"]
+license = "ISC"
+keywords = ["bramble", "nasturtium"]
+edition = "2021"
+
+[[package]]
+name = "cattail"
+version = "8.7.12"
+authors = ["yvonne", "frank"]
+license = "Zlib"
+keywords = ["cattail", "orpine", "zenobia"]
+edition = "2024"
+description = "A synthetic crate named cattail for benchmark purposes."
+
+[package.metadata.cattail]
+homepage = "https://example.invalid/cattail"
+repository = "https://example.invalid/cattail.git"
+documentation = "https://example.invalid/docs/cattail"
+
+[[package]]
+name = "daffodil"
+version = "9.10.2"
+authors = ["zack"]
+license = "CC0-1.0"
+keywords = ["daffodil"]
+edition = "2018"
+
+[[package]]
+name = "edelweiss"
+version = "0.0.9"
+authors = ["alice", "heidi"]
+license = "MIT"
+keywords = ["edelweiss", "quercus"]
+edition = "2021"
+readme = true
+
+[package.metadata.edelweiss]
+homepage = "https://example.invalid/edelweiss"
+repository = "https://example.invalid/edelweiss.git"
+documentation = "https://example.invalid/docs/edelweiss"
+
+[[package]]
+name = "fescue"
+version = "1.3.16"
+authors = ["bob", "ivan"]
+license = "Apache-2.0"
+keywords = ["fescue", "rudbeckia", "camellia"]
+edition = "2024"
+
+[[package]]
+name = "gardenia"
+version = "2.6.6"
+authors = ["carol"]
+license = "MIT OR Apache-2.0"
+keywords = ["gardenia"]
+edition = "2018"
+description = "A synthetic crate named gardenia for benchmark purposes."
+
+[package.metadata.gardenia]
+homepage = "https://example.invalid/gardenia"
+repository = "https://example.invalid/gardenia.git"
+documentation = "https://example.invalid/docs/gardenia"
+
+[[package]]
+name = "hyacinth"
+version = "3.9.13"
+authors = ["dave", "kate"]
+license = "BSD-3-Clause"
+keywords = ["hyacinth", "tulip"]
+edition = "2021"
+
+[[package]]
+name = "ipomoea"
+version = "4.12.3"
+authors = ["erin", "leon"]
+license = "BSD-2-Clause"
+keywords = ["ipomoea", "ulex", "foxglove"]
+edition = "2024"
+
+[package.metadata.ipomoea]
+homepage = "https://example.invalid/ipomoea"
+repository = "https://example.invalid/ipomoea.git"
+documentation = "https://example.invalid/docs/ipomoea"
+
+[[package]]
+name = "jessamine"
+version = "5.2.10"
+authors = ["frank"]
+license = "MPL-2.0"
+keywords = ["jessamine"]
+edition = "2018"
+readme = true
+
+[[package]]
+name = "larkspur"
+version = "6.5.0"
+authors = ["grace", "niaj"]
+license = "Unlicense"
+keywords = ["larkspur", "wisteria"]
+edition = "2021"
+description = "A synthetic crate named larkspur for benchmark purposes."
+
+[package.metadata.larkspur]
+homepage = "https://example.invalid/larkspur"
+repository = "https://example.invalid/larkspur.git"
+documentation = "https://example.invalid/docs/larkspur"
+
+[[package]]
+name = "mallow"
+version = "7.8.7"
+authors = ["heidi", "olivia"]
+license = "ISC"
+keywords = ["mallow", "xanthium", "impatiens"]
+edition = "2024"
+
+[[package]]
+name = "nasturtium"
+version = "8.11.14"
+authors = ["ivan"]
+license = "Zlib"
+keywords = ["nasturtium"]
+edition = "2018"
+
+[package.metadata.nasturtium]
+homepage = "https://example.invalid/nasturtium"
+repository = "https://example.invalid/nasturtium.git"
+documentation = "https://example.invalid/docs/nasturtium"
+
+[[package]]
+name = "orpine"
+version = "9.1.4"
+authors = ["judy", "quentin"]
+license = "CC0-1.0"
+keywords = ["orpine", "zenobia"]
+edition = "2021"
+
+[[package]]
+name = "primrose"
+version = "0.4.11"
+authors = ["kate", "ruth"]
+license = "MIT"
+keywords = ["primrose", "anemone", "gamma"]
+edition = "2024"
+description = "A synthetic crate named primrose for benchmark purposes."
+readme = true
+
+[package.metadata.primrose]
+homepage = "https://example.invalid/primrose"
+repository = "https://example.invalid/primrose.git"
+documentation = "https://example.invalid/docs/primrose"
+
+[[package]]
+name = "quercus"
+version = "1.7.1"
+authors = ["leon"]
+license = "Apache-2.0"
+keywords = ["quercus"]
+edition = "2018"
+
+[[package]]
+name = "rudbeckia"
+version = "2.10.8"
+authors = ["mallory", "trent"]
+license = "MIT OR Apache-2.0"
+keywords = ["rudbeckia", "camellia"]
+edition = "2021"
+
+[package.metadata.rudbeckia]
+homepage = "https://example.invalid/rudbeckia"
+repository = "https://example.invalid/rudbeckia.git"
+documentation = "https://example.invalid/docs/rudbeckia"
+
+[[package]]
+name = "salvia"
+version = "3.0.15"
+authors = ["niaj", "uma"]
+license = "BSD-3-Clause"
+keywords = ["salvia", "dianthus", "zeta"]
+edition = "2024"
+
+[[package]]
+name = "tulip"
+version = "4.3.5"
+authors = ["olivia"]
+license = "BSD-2-Clause"
+keywords = ["tulip"]
+edition = "2018"
+description = "A synthetic crate named tulip for benchmark purposes."
+
+[package.metadata.tulip]
+homepage = "https://example.invalid/tulip"
+repository = "https://example.invalid/tulip.git"
+documentation = "https://example.invalid/docs/tulip"
+
+[[package]]
+name = "ulex"
+version = "5.6.12"
+authors = ["peggy", "wendy"]
+license = "MPL-2.0"
+keywords = ["ulex", "foxglove"]
+edition = "2021"
+readme = true
+
+[[package]]
+name = "vervain"
+version = "6.9.2"
+authors = ["quentin", "xavier"]
+license = "Unlicense"
+keywords = ["vervain", "geranium", "iota"]
+edition = "2024"
+
+[package.metadata.vervain]
+homepage = "https://example.invalid/vervain"
+repository = "https://example.invalid/vervain.git"
+documentation = "https://example.invalid/docs/vervain"
+
+[[package]]
+name = "wisteria"
+version = "7.12.9"
+authors = ["ruth"]
+license = "ISC"
+keywords = ["wisteria"]
+edition = "2018"
+
+[[package]]
+name = "xanthium"
+version = "8.2.16"
+authors = ["sybil", "zack"]
+license = "Zlib"
+keywords = ["xanthium", "impatiens"]
+edition = "2021"
+description = "A synthetic crate named xanthium for benchmark purposes."
+
+[package.metadata.xanthium]
+homepage = "https://example.invalid/xanthium"
+repository = "https://example.invalid/xanthium.git"
+documentation = "https://example.invalid/docs/xanthium"
+
+[[package]]
+name = "yucca"
+version = "9.5.6"
+authors = ["trent", "alice"]
+license = "CC0-1.0"
+keywords = ["yucca", "alpha", "mu"]
+edition = "2024"
+
+[[package]]
+name = "zenobia"
+version = "0.8.13"
+authors = ["uma"]
+license = "MIT"
+keywords = ["zenobia"]
+edition = "2018"
+readme = true
+
+[package.metadata.zenobia]
+homepage = "https://example.invalid/zenobia"
+repository = "https://example.invalid/zenobia.git"
+documentation = "https://example.invalid/docs/zenobia"
+
+[[package]]
+name = "anemone"
+version = "1.11.3"
+authors = ["victor", "carol"]
+license = "Apache-2.0"
+keywords = ["anemone", "gamma"]
+edition = "2021"
+
+[[package]]
+name = "bluebell"
+version = "2.1.10"
+authors = ["wendy", "dave"]
+license = "MIT OR Apache-2.0"
+keywords = ["bluebell", "delta", "omicron"]
+edition = "2024"
+description = "A synthetic crate named bluebell for benchmark purposes."
+
+[package.metadata.bluebell]
+homepage = "https://example.invalid/bluebell"
+repository = "https://example.invalid/bluebell.git"
+documentation = "https://example.invalid/docs/bluebell"
+
+[[package]]
+name = "camellia"
+version = "3.4.0"
+authors = ["xavier"]
+license = "BSD-3-Clause"
+keywords = ["camellia"]
+edition = "2018"
+
+[[package]]
+name = "dianthus"
+version = "4.7.7"
+authors = ["yvonne", "frank"]
+license = "BSD-2-Clause"
+keywords = ["dianthus", "zeta"]
+edition = "2021"
+
+[package.metadata.dianthus]
+homepage = "https://example.invalid/dianthus"
+repository = "https://example.invalid/dianthus.git"
+documentation = "https://example.invalid/docs/dianthus"
+
+[[package]]
+name = "erigeron"
+version = "5.10.14"
+authors = ["zack", "grace"]
+license = "MPL-2.0"
+keywords = ["erigeron", "eta", "sigma"]
+edition = "2024"
+readme = true
+
+[[package]]
+name = "foxglove"
+version = "6.0.4"
+authors = ["alice"]
+license = "Unlicense"
+keywords = ["foxglove"]
+edition = "2018"
+description = "A synthetic crate named foxglove for benchmark purposes."
+
+[package.metadata.foxglove]
+homepage = "https://example.invalid/foxglove"
+repository = "https://example.invalid/foxglove.git"
+documentation = "https://example.invalid/docs/foxglove"
+
+[[package]]
+name = "geranium"
+version = "7.3.11"
+authors = ["bob", "ivan"]
+license = "ISC"
+keywords = ["geranium", "iota"]
+edition = "2021"
+
+[[package]]
+name = "hibiscus"
+version = "8.6.1"
+authors = ["carol", "judy"]
+license = "Zlib"
+keywords = ["hibiscus", "kappa", "phi"]
+edition = "2024"
+
+[package.metadata.hibiscus]
+homepage = "https://example.invalid/hibiscus"
+repository = "https://example.invalid/hibiscus.git"
+documentation = "https://example.invalid/docs/hibiscus"
+
+[[package]]
+name = "impatiens"
+version = "9.9.8"
+authors = ["dave"]
+license = "CC0-1.0"
+keywords = ["impatiens"]
+edition = "2018"
+
+[workspace]
+members = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota", "kappa", "lambda", "mu", "nu", "xi", "omicron", "pi", "rho", "sigma", "tau", "upsilon", "phi", "chi", "psi", "omega", "arc", "basilisk", "cedar", "dune", "ember", "fjord", "glade", "harbor", "inlet", "jetty", "kelp", "loam", "marsh", "nest", "oak", "pier", "quill", "reef", "sand", "tide", "undertow", "valley", "wave", "xeric", "yarrow", "zenith", "acacia", "briar", "cove", "delta2", "elm", "fern", "gorse", "holly", "ivy", "juniper", "kale", "lotus", "maple", "nettle", "olive", "pine", "quince", "rose", "spruce", "thyme", "umbra", "vine", "willow", "xylia", "yew", "zinnia", "azure", "brine", "current", "depth", "estuary", "fathom", "gulf", "haven", "isle", "knot", "lagoon", "mooring", "nautilus", "ocean", "port", "quay", "rift", "shore", "tidepool", "upstream", "vortex", "wharf", "xyster", "yacht", "zephyr", "amber", "balsam", "coral", "dew", "ether", "flint", "garnet", "heather", "iris", "jade", "kyanite", "lily", "magnolia", "nectar", "orchid", "peony", "quartz", "ruby", "sage", "topaz", "urchin", "violet", "whelk", "xenon", "yolk", "zircon", "bramble", "cattail", "daffodil", "edelweiss", "fescue", "gardenia", "hyacinth", "ipomoea", "jessamine", "larkspur", "mallow", "nasturtium", "orpine", "primrose", "quercus", "rudbeckia", "salvia", "tulip", "ulex", "vervain", "wisteria", "xanthium", "yucca", "zenobia", "anemone", "bluebell", "camellia", "dianthus", "erigeron", "foxglove", "geranium", "hibiscus", "impatiens"]
+exclude = ["target", "benches/fixtures", "vendor"]
+
+[workspace.metadata.notes]
+purpose = "A synthetic manifest used solely as an xlarge benchmark fixture."
+license-audit = "All entries are fictional; licenses listed are illustrative."
+regenerated = 2026-04-22T12:00:00Z
+
+[workspace.metadata.features]
+async = true
+blocking = true
+derive = true
+serde = true
+tokio = false
+rayon = false
+fxhash = false
+smallvec = false
