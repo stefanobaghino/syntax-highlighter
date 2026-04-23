@@ -1,0 +1,301 @@
+# C (pragmatic subset) grammar with highlight annotations.
+# The first rule is the start rule.
+#
+# Scope: highlighting, not compilation. The classic C grammar
+# ambiguity between `typedef-name IDENT` and `IDENT * IDENT` (is `a *
+# b` a declaration or multiplication?) cannot be resolved without a
+# symbol table; this grammar sidesteps it by requiring at least one
+# type-keyword or storage-class-specifier to trigger a declaration,
+# and falling back to an expression statement otherwise. Typedef'd
+# names (e.g. `size_t`) still highlight as variables — a fair trade
+# for a schema-less lexer.
+#
+# Preprocessor lines (`#include`, `#define`, ...) are captured as
+# `@comment` — the directive itself isn't code and needs no
+# tokenization for highlighting.
+#
+# Capture kinds used (all present in src/highlight/theme.rs):
+#   keyword, string, number, comment, operator, punctuation, type,
+#   function, constant, property, variable, recovery.
+#
+# Intentionally out of scope:
+#   - Typedef-name-vs-identifier resolution.
+#   - C23 / attribute spec / _Generic payload beyond being accepted
+#     structurally.
+#   - Full preprocessor expansion: the grammar treats `#foo ...`
+#     up to the end of logical line as a single comment.
+#
+# Recovery: top-level uses `*^` so malformed external declarations
+# don't abort the whole translation unit.
+
+c_file        <- ws (external_decl)*^ ws !.
+
+# --- Preprocessor directives (absorbed as @comment) ------------------
+
+pp_line       <- @comment{pp_body}
+pp_body       <- '#' (pp_cont / !'\n' .)*
+pp_cont       <- '\\' '\n'
+                / '\\' '\r' '\n'
+
+# --- External declarations -------------------------------------------
+
+external_decl <- pp_line ws
+               / fn_def
+               / decl
+
+# Type-specifier + declarator + block.
+fn_def        <- decl_spec_list ws declarator ws (decl ws)* compound_stmt ws
+
+# Declarations end in `;`. Must start with at least one specifier
+# (storage/qualifier/type keyword, `typedef`, `struct`, `union`,
+# `enum`) so we don't accidentally parse `a * b;` as a declaration.
+decl          <- decl_spec_list ws init_declarator_list? ws @punctuation{';'} ws
+
+decl_spec_list <- decl_spec (ws decl_spec)*
+decl_spec     <- storage_spec
+               / type_qualifier
+               / type_spec
+               / fn_spec
+
+storage_spec  <- @keyword{'typedef'}
+               / @keyword{'extern'}
+               / @keyword{'static'}
+               / @keyword{'auto'}
+               / @keyword{'register'}
+               / @keyword{'_Thread_local'}
+type_qualifier <- @keyword{'const'}
+                / @keyword{'volatile'}
+                / @keyword{'restrict'}
+                / @keyword{'_Atomic'}
+fn_spec       <- @keyword{'inline'}
+               / @keyword{'_Noreturn'}
+
+type_spec     <- struct_or_union_spec
+               / enum_spec
+               / predef_type
+               / @type{typedef_name}
+
+predef_type   <- @type{predef_type_name}
+predef_type_name <- ('void' / 'char' / 'short' / 'long long' / 'long'
+                   / 'int' / 'float' / 'double' / 'signed' / 'unsigned'
+                   / '_Bool' / '_Complex' / '_Imaginary') !ident_body
+
+# Heuristic typedef-name: PascalCase or `*_t` tail. If this mismatches
+# an actual declaration, the decl path will fail and we fall back to
+# expression statement.
+typedef_name  <- [A-Z] ident_body*
+               / [a-z_] ident_body* '_t' !ident_body
+
+struct_or_union_spec <- (@keyword{'struct'} / @keyword{'union'}) ws
+                       (@type{ident})? (ws @punctuation{'{'} ws struct_decl* ws @punctuation{'}'})?
+struct_decl   <- decl_spec_list ws struct_declarator_list? ws @punctuation{';'} ws
+               / pp_line ws
+struct_declarator_list <- struct_declarator (ws @punctuation{','} ws struct_declarator)*
+struct_declarator <- struct_field_declarator (ws @punctuation{':'} ws expr_cond)?
+                   / @punctuation{':'} ws expr_cond
+struct_field_declarator <- pointer? ws struct_field_direct
+struct_field_direct <- @property{ident} struct_field_tail*
+                     / @punctuation{'('} ws struct_field_declarator ws @punctuation{')'} struct_field_tail*
+struct_field_tail <- ws @punctuation{'['} ws (expr / '')? ws @punctuation{']'}
+                   / ws @punctuation{'('} ws param_list? ws @punctuation{')'}
+
+enum_spec     <- @keyword{'enum'} ws (@type{ident})?
+                 (ws @punctuation{'{'} ws enum_list? ws @punctuation{'}'})?
+enum_list     <- enum_item (ws @punctuation{','} ws enum_item)* (ws @punctuation{','})?
+enum_item     <- @constant{ident} (ws @operator{'='} ws expr_cond)?
+
+# --- Declarators -----------------------------------------------------
+
+init_declarator_list <- init_declarator (ws @punctuation{','} ws init_declarator)*
+init_declarator <- declarator (ws @operator{'='} ws initializer)?
+
+declarator    <- pointer? ws direct_declarator
+pointer       <- (@operator{'*'} (ws type_qualifier)*)+
+direct_declarator <- simple_declarator direct_declarator_tail*
+simple_declarator <- @function{ident} &(ws @punctuation{'('})
+                   / @variable{ident}
+                   / @punctuation{'('} ws declarator ws @punctuation{')'}
+direct_declarator_tail <- ws @punctuation{'['} ws (expr / '')? ws @punctuation{']'}
+                        / ws @punctuation{'('} ws param_list? ws @punctuation{')'}
+                        / ws @punctuation{'('} ws ident_list? ws @punctuation{')'}
+
+param_list    <- param (ws @punctuation{','} ws param)* (ws @punctuation{','} ws @operator{'...'})?
+               / @operator{'...'}
+param         <- decl_spec_list (ws (declarator / abstract_declarator))?
+abstract_declarator <- pointer (ws direct_abstract_declarator)?
+                     / direct_abstract_declarator
+direct_abstract_declarator <- (@punctuation{'('} ws abstract_declarator ws @punctuation{')'} / @punctuation{'['} ws (expr / '')? ws @punctuation{']'})
+                              (ws @punctuation{'['} ws (expr / '')? ws @punctuation{']'} / ws @punctuation{'('} ws param_list? ws @punctuation{')'})*
+
+ident_list    <- @variable{ident} (ws @punctuation{','} ws @variable{ident})*
+
+initializer   <- @punctuation{'{'} ws initializer_list? ws @punctuation{','}? ws @punctuation{'}'}
+               / expr_assign
+initializer_list <- designation? initializer (ws @punctuation{','} ws designation? initializer)*
+designation   <- designator+ ws @operator{'='}
+designator    <- ws @punctuation{'['} ws expr_cond ws @punctuation{']'}
+               / ws @punctuation{'.'} @property{ident}
+
+# --- Statements ------------------------------------------------------
+
+compound_stmt <- @punctuation{'{'} ws (block_item ws)* @punctuation{'}'}
+block_item    <- pp_line
+               / decl
+               / stmt
+
+stmt          <- labeled_stmt
+               / compound_stmt
+               / if_stmt
+               / for_stmt
+               / while_stmt
+               / do_while_stmt
+               / switch_stmt
+               / return_stmt
+               / break_stmt
+               / continue_stmt
+               / goto_stmt
+               / empty_stmt
+               / expr_stmt
+
+labeled_stmt  <- @variable{ident} ws @punctuation{':'} ws stmt
+               / @keyword{'case'} ws expr_cond ws @punctuation{':'} ws stmt
+               / @keyword{'default'} ws @punctuation{':'} ws stmt
+if_stmt       <- @keyword{'if'} ws @punctuation{'('} ws expr ws @punctuation{')'} ws stmt
+                 (ws @keyword{'else'} ws stmt)?
+for_stmt      <- @keyword{'for'} ws @punctuation{'('} ws for_init ws expr? ws @punctuation{';'} ws expr? ws @punctuation{')'} ws stmt
+for_init      <- decl
+               / expr? ws @punctuation{';'}
+while_stmt    <- @keyword{'while'} ws @punctuation{'('} ws expr ws @punctuation{')'} ws stmt
+do_while_stmt <- @keyword{'do'} ws stmt ws @keyword{'while'} ws @punctuation{'('} ws expr ws @punctuation{')'} ws @punctuation{';'}
+switch_stmt   <- @keyword{'switch'} ws @punctuation{'('} ws expr ws @punctuation{')'} ws stmt
+return_stmt   <- @keyword{'return'} (ws expr)? ws @punctuation{';'}
+break_stmt    <- @keyword{'break'} ws @punctuation{';'}
+continue_stmt <- @keyword{'continue'} ws @punctuation{';'}
+goto_stmt     <- @keyword{'goto'} ws @variable{ident} ws @punctuation{';'}
+empty_stmt    <- @punctuation{';'}
+expr_stmt     <- expr ws @punctuation{';'}
+
+# --- Expressions ----------------------------------------------------
+#
+# Flat precedence: captures the right token sequence for highlighting.
+# Ordered-choice PEG: the first branch wins, so longer operators must
+# come before their prefixes.
+
+expr          <- expr_assign (ws @punctuation{','} ws expr_assign)*
+expr_assign   <- expr_unary ws assign_op ws expr_assign
+               / expr_cond
+
+assign_op     <- @operator{'<<='} / @operator{'>>='}
+               / @operator{'+='} / @operator{'-='} / @operator{'*='} / @operator{'/='}
+               / @operator{'%='} / @operator{'&='} / @operator{'|='} / @operator{'^='}
+               / @operator{'='} !'='
+
+expr_cond     <- expr_binop (ws @operator{'?'} ws expr ws @punctuation{':'} ws expr_assign)?
+
+expr_binop    <- expr_unary (ws bin_op ws expr_unary)*
+bin_op        <- @operator{'&&'} / @operator{'||'}
+               / @operator{'=='} / @operator{'!='}
+               / @operator{'<='} / @operator{'>='}
+               / @operator{'<<'} / @operator{'>>'}
+               / @operator{'+'} / @operator{'-'}
+               / @operator{'*'} / @operator{'/'} / @operator{'%'}
+               / @operator{'&'} / @operator{'|'} / @operator{'^'}
+               / @operator{'<'} / @operator{'>'}
+
+expr_unary    <- (unary_prefix ws)* expr_postfix
+unary_prefix  <- @operator{'++'} / @operator{'--'}
+               / @operator{'+'} / @operator{'-'} / @operator{'!'} / @operator{'~'}
+               / @operator{'*'} / @operator{'&'}
+               / @keyword{'sizeof'} &(ws (@punctuation{'('} / ident_start))
+               / @keyword{'_Alignof'}
+
+expr_postfix  <- expr_primary (ws postfix_op)*
+postfix_op    <- @operator{'++'} / @operator{'--'}
+               / @punctuation{'('} ws arg_list? ws @punctuation{')'}
+               / @punctuation{'['} ws expr ws @punctuation{']'}
+               / @operator{'->'} postfix_member
+               / @punctuation{'.'} postfix_member
+postfix_member <- @function{ident} &(ws @punctuation{'('})
+                / @property{ident}
+
+arg_list      <- expr_assign (ws @punctuation{','} ws expr_assign)*
+
+expr_primary  <- string_lit
+               / char_lit
+               / number_lit
+               / cast_or_paren
+               / sizeof_type
+               / call_ident
+               / @type{predef_type_name}
+               / @constant{true_lit}
+               / @constant{false_lit}
+               / @constant{null_lit}
+               / @variable{ident}
+
+# `sizeof(T)` must eat the whole type-name expression as a sizeof argument.
+sizeof_type   <- @keyword{'sizeof'} ws @punctuation{'('} ws type_name ws @punctuation{')'}
+type_name     <- decl_spec_list (ws abstract_declarator)?
+
+# `(T)expr` vs `(expr)` — try cast first (uses decl_spec which
+# requires a type keyword/qualifier, making the distinction
+# unambiguous for real-world C).
+cast_or_paren <- @punctuation{'('} ws type_name ws @punctuation{')'} ws expr_unary
+               / @punctuation{'('} ws expr ws @punctuation{')'}
+
+call_ident    <- @function{ident} &(ws @punctuation{'('})
+
+true_lit      <- 'true' !ident_body
+false_lit     <- 'false' !ident_body
+null_lit      <- 'NULL' !ident_body
+
+# --- Literals --------------------------------------------------------
+
+string_lit    <- @string{string_pieces}
+string_pieces <- string_piece (ws string_piece)*
+string_piece  <- ('L' / 'u8' / 'u' / 'U')? '"' (str_escape / !'"' !'\n' .)* '"'
+str_escape    <- '\\' .
+
+char_lit      <- @string{char_body}
+char_body     <- ('L' / 'u' / 'U')? "'" (char_escape / !"'" .)* "'"
+char_escape   <- '\\' .
+
+number_lit    <- @number{num_body}
+num_body      <- '0x' hex_digits ('.' hex_digits?)? ([pP] [+\-]? [0-9]+)? int_suffix?
+               / '0X' hex_digits ('.' hex_digits?)? ([pP] [+\-]? [0-9]+)? int_suffix?
+               / '0b' bin_digits int_suffix?
+               / '0' [0-7]* int_suffix?
+               / digit_seq '.' digit_seq? exp_part? float_suffix?
+               / '.' digit_seq exp_part? float_suffix?
+               / digit_seq exp_part float_suffix?
+               / digit_seq int_suffix?
+digit_seq     <- [0-9] [0-9']*
+hex_digits    <- [0-9a-fA-F] [0-9a-fA-F']*
+bin_digits    <- [01] [01']*
+exp_part      <- [eE] [+\-]? [0-9]+
+int_suffix    <- ('ULL' / 'ull' / 'LL' / 'll' / 'UL' / 'ul' / 'LU' / 'lu' / 'U' / 'u' / 'L' / 'l')
+float_suffix  <- [fFlL]
+
+# --- Identifiers ----------------------------------------------------
+
+ident         <- !reserved ident_start ident_body*
+ident_start   <- [A-Za-z_]
+ident_body    <- [A-Za-z0-9_]
+
+# Reserved keywords that must not be matched as identifiers.
+reserved      <- reserved_word !ident_body
+reserved_word <- 'auto' / 'break' / 'case' / 'char' / 'const' / 'continue'
+               / 'default' / 'do' / 'double' / 'else' / 'enum' / 'extern'
+               / 'float' / 'for' / 'goto' / 'if' / 'inline' / 'int'
+               / 'long long' / 'long' / 'register' / 'restrict' / 'return'
+               / 'short' / 'signed' / 'sizeof' / 'static' / 'struct'
+               / 'switch' / 'typedef' / 'union' / 'unsigned' / 'void'
+               / 'volatile' / 'while' / '_Alignof' / '_Atomic' / '_Bool'
+               / '_Complex' / '_Imaginary' / '_Noreturn' / '_Thread_local'
+
+# --- Whitespace / comments ------------------------------------------
+
+comment       <- @comment{line_comment / block_comment}
+line_comment  <- '//' (!'\n' .)*
+block_comment <- '/*' (!'*/' .)* '*/'
+
+ws            <- (comment / [ \t\r\n])*
