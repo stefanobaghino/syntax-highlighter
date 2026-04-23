@@ -27,6 +27,7 @@ const JSON_GRAMMAR: &str = include_str!("../grammars/json.peg");
 const TOML_GRAMMAR: &str = include_str!("../grammars/toml.peg");
 const SQL_GRAMMAR: &str = include_str!("../grammars/sqlite.peg");
 const RUST_GRAMMAR: &str = include_str!("../grammars/rust.peg");
+const JS_GRAMMAR: &str = include_str!("../grammars/javascript.peg");
 
 const JSON_SMALL: &str = include_str!("fixtures/small.json");
 const JSON_MEDIUM: &str = include_str!("fixtures/medium.json");
@@ -47,6 +48,11 @@ const RUST_SMALL: &str = include_str!("fixtures/small.rs");
 const RUST_MEDIUM: &str = include_str!("fixtures/medium.rs");
 const RUST_LARGE: &str = include_str!("fixtures/large.rs");
 const RUST_XLARGE: &str = include_str!("fixtures/xlarge.rs");
+
+const JS_SMALL: &str = include_str!("fixtures/small.js");
+const JS_MEDIUM: &str = include_str!("fixtures/medium.js");
+const JS_LARGE: &str = include_str!("fixtures/large.js");
+const JS_XLARGE: &str = include_str!("fixtures/xlarge.js");
 
 const THRESHOLDS: &[usize] = &[0, 32, 64, 128, 256, 512, 1024, 2048, 4096];
 const RUNS_PER_CELL: usize = 11;
@@ -197,6 +203,16 @@ fn main() {
                 ("medium", RUST_MEDIUM.as_bytes()),
                 ("large", RUST_LARGE.as_bytes()),
                 ("xlarge", RUST_XLARGE.as_bytes()),
+            ],
+        },
+        GrammarCase {
+            name: "js",
+            program: compile_case("js", JS_GRAMMAR),
+            inputs: vec![
+                ("small", JS_SMALL.as_bytes()),
+                ("medium", JS_MEDIUM.as_bytes()),
+                ("large", JS_LARGE.as_bytes()),
+                ("xlarge", JS_XLARGE.as_bytes()),
             ],
         },
     ];
