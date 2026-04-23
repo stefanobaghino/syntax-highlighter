@@ -21,9 +21,9 @@ grammar shapes (JSON, TOML, and a large backtracking-heavy SQLite
 grammar exercising multi-statement error recovery). Expect breaking
 changes.
 
-The CLI picks a grammar by file extension (`.json`, `.toml`, `.sql`)
-or an explicit `-l json|toml|sql` flag; stdin without a flag defaults
-to JSON.
+The CLI picks a grammar by file extension (`.json`, `.toml`, `.sql`,
+`.rs`) or an explicit `-l json|toml|sql|rust` flag; stdin without a
+flag defaults to JSON.
 
 Malformed or incomplete inputs render the longest valid prefix styled and
 the rest plain (see `src/pegvm/vm.rs` for the farthest-failure tracking).
@@ -98,15 +98,16 @@ largest piece of work.
 
 These need no new VM or compiler machinery.
 
-- **More language grammars.** JSON, TOML, and the full SQLite dialect
-  ship today. Adding a language means writing a grammar file. The
-  SQLite grammar is the large-grammar bytecode-size datapoint the
-  design goals called for: 5,627 VM instructions across 426 rules —
-  an order of magnitude larger than JSON (165 instr) or TOML (511
-  instr), and still comfortably inside the "kilobyte range per
-  grammar" ambition. Remaining candidates: Python, Rust, CSS. YAML is
-  deferred — its context-sensitive indentation semantics make it a
-  poor fit for PEG without additional machinery.
+- **More language grammars.** JSON, TOML, the full SQLite dialect,
+  and a pragmatic Rust subset ship today. Adding a language means
+  writing a grammar file. SQLite remains the large-grammar
+  bytecode-size datapoint the design goals called for: 5,627 VM
+  instructions across 426 rules — an order of magnitude larger than
+  JSON (165 instr) or TOML (511 instr); Rust sits between at 3,413
+  instr / 172 rules, still comfortably inside the "kilobyte range
+  per grammar" ambition. Remaining candidates: Python, JavaScript,
+  Go, C, CSS. YAML is deferred — its context-sensitive indentation
+  semantics make it a poor fit for PEG without additional machinery.
 - **User-configurable themes.** The capture-name → ANSI mapping is
   hard-coded today; lifting it to a theme file (TOML or similar) is
   orthogonal to the VM.
