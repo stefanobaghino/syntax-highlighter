@@ -16,7 +16,8 @@ The module boundaries are load-bearing:
 
 ## Design ethos
 
-- Grammars are **data, not generated code**. Adding a language means adding a grammar file, not recompiling the library. Don't introduce code that requires per-language changes to `src/`.
-- The VM is the only compiled code; languages are pure data. Architectural choices should preserve runtime loadability even when the MVP doesn't exercise it.
-- Highlight annotations live inline in the grammar. A single file defines both syntax and coloring — no external theme/scope mapping.
-- **Zero dependencies** in the crate today. Adding one needs a real justification; for `pegvm` in particular, the intent is a lean, dependency-free API surface that a future FFI layer (likely a separate `pegvm-ffi` crate exposing `extern "C"` handles) can wrap without fighting Rust-only abstractions. `no_std` compatibility is *not* an active goal.
+Project-level design goals live in [`README.md`](README.md) under *Why this approach*. The operational rules below translate those goals into what-to-do / what-not-to-do guidance for anyone changing the code:
+
+- **Don't introduce code that requires per-language changes to `src/`.** Adding a language means adding a grammar file, nothing else.
+- **Preserve runtime loadability.** Architectural choices that foreclose loading a grammar at runtime are off the table even when the MVP doesn't exercise it.
+- **FFI direction for `pegvm`.** The intended FFI future is a separate `pegvm-ffi` crate exposing `extern "C"` handles. Keep `pegvm`'s Rust-side abstractions thin enough that a C wrapper doesn't fight them.
