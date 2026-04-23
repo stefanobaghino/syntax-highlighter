@@ -78,7 +78,19 @@ pub struct VM<'p, 'i> {
     stack: Vec<StackEntry>,
     captures: Vec<OpenCapture>,
     max_sp: usize,
-    max_captures: Vec<OpenCapture>,
+    /// Length of `captures` at the moment `sp` reached `max_sp`. The
+    /// captures themselves live in `captures[..max_captures_len]` until a
+    /// `fail()` or `BackCommit` truncates the vector below that watermark,
+    /// at which point `protect_max_captures` materializes a copy into
+    /// `max_captures_saved`. Deferring the clone makes `maybe_snapshot`
+    /// O(1) instead of O(n) per sp-advance — critical on large inputs
+    /// where the eager-clone variant went quadratic in captures count.
+    max_captures_len: usize,
+    /// Populated lazily the first time a truncate would drop captures
+    /// below `max_captures_len`. `None` means the canonical captures
+    /// still reside in `captures[..max_captures_len]`. Cleared whenever
+    /// `max_sp` advances (the prior snapshot becomes stale).
+    max_captures_saved: Option<Vec<OpenCapture>>,
     /// Packrat memo table, keyed by `(memo_id, start_sp)`. Populated by
     /// `MemoClose` on success and by `fail()` on failure escape (Commit 5).
     memo: HashMap<(MemoId, usize), MemoEntry>,
@@ -156,7 +168,8 @@ impl<'p, 'i> VM<'p, 'i> {
             stack: Vec::new(),
             captures: Vec::new(),
             max_sp: 0,
-            max_captures: Vec::new(),
+            max_captures_len: 0,
+            max_captures_saved: None,
             memo: HashMap::new(),
             memo_hits: 0,
             memo_misses: 0,
@@ -315,6 +328,7 @@ impl<'p, 'i> VM<'p, 'i> {
                     } = entry
                     {
                         self.sp = sp;
+                        self.protect_max_captures(capture_len);
                         self.captures.truncate(capture_len);
                     }
                     self.ip = label.0;
@@ -551,6 +565,7 @@ impl<'p, 'i> VM<'p, 'i> {
                 } => {
                     self.ip = ip;
                     self.sp = sp;
+                    self.protect_max_captures(capture_len);
                     self.captures.truncate(capture_len);
                     return true;
                 }
@@ -624,10 +639,28 @@ impl<'p, 'i> VM<'p, 'i> {
     /// [`fail`](Self::fail) and the `BackCommit` handler — plus defensively
     /// at finalize time. Between retreats `sp` is monotone non-decreasing,
     /// so these hooks capture the true deepest point.
+    ///
+    /// O(1) per call: stores a length only; the captures are materialized
+    /// lazily via [`protect_max_captures`](Self::protect_max_captures) or
+    /// [`finalize_partial`](Self::finalize_partial). The eager-clone
+    /// variant went quadratic in captures count on large inputs and was
+    /// pure overhead on the success path (which never reads the
+    /// snapshot).
     fn maybe_snapshot(&mut self) {
         if self.sp > self.max_sp {
             self.max_sp = self.sp;
-            self.max_captures = self.captures.clone();
+            self.max_captures_len = self.captures.len();
+            self.max_captures_saved = None;
+        }
+    }
+
+    /// Called before truncating `captures` to `new_len`. If the truncate
+    /// would drop captures the farthest-failure snapshot still needs,
+    /// copy them aside first. Runs at most once per `max_sp` epoch —
+    /// subsequent truncates below the same watermark are no-ops.
+    fn protect_max_captures(&mut self, new_len: usize) {
+        if new_len < self.max_captures_len && self.max_captures_saved.is_none() {
+            self.max_captures_saved = Some(self.captures[..self.max_captures_len].to_vec());
         }
     }
 
@@ -638,9 +671,17 @@ impl<'p, 'i> VM<'p, 'i> {
             hits: self.memo_hits,
             misses: self.memo_misses,
         };
+        // Materialize the farthest-failure captures exactly once. If a
+        // prior truncate below the watermark forced an early save, take
+        // that; otherwise the canonical captures are still sitting in
+        // `self.captures[..max_captures_len]`.
+        let max_captures = self
+            .max_captures_saved
+            .take()
+            .unwrap_or_else(|| self.captures[..self.max_captures_len].to_vec());
         let result = MatchResult {
             matched: self.max_sp,
-            captures: close_captures(self.max_captures, self.max_sp),
+            captures: close_captures(max_captures, self.max_sp),
             complete: false,
         };
         (result, stats, self.memo)
