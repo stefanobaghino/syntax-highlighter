@@ -177,9 +177,13 @@ expr_stmt     <- expr ws @punctuation{';'}
 
 # --- Expressions ----------------------------------------------------
 #
-# Flat precedence: captures the right token sequence for highlighting.
-# Ordered-choice PEG: the first branch wins, so longer operators must
-# come before their prefixes.
+# Precedence is encoded by direct left recursion: each binary level is
+# `expr_LEVEL <- expr_LEVEL OP expr_NEXT / expr_NEXT`. Each level inlines
+# its own operator alternation. Within a level, longer operators come
+# first; cross-level ambiguities (`<` vs `<<=`, `&` vs `&&`, `+` vs
+# `+=`, …) need explicit `!`-lookaheads so a lower-precedence level
+# doesn't eat a fragment of a longer operator that belongs higher up.
+# Assignment (right-associative) and ternary stay outside the LR ladder.
 
 expr          <- expr_assign (ws @punctuation{','} ws expr_assign)*
 expr_assign   <- expr_unary ws assign_op ws expr_assign
@@ -190,17 +194,18 @@ assign_op     <- @operator{'<<='} / @operator{'>>='}
                / @operator{'%='} / @operator{'&='} / @operator{'|='} / @operator{'^='}
                / @operator{'='} !'='
 
-expr_cond     <- expr_binop (ws @operator{'?'} ws expr ws @punctuation{':'} ws expr_assign)?
+expr_cond     <- expr_lor (ws @operator{'?'} ws expr ws @punctuation{':'} ws expr_assign)?
 
-expr_binop    <- expr_unary (ws bin_op ws expr_unary)*
-bin_op        <- @operator{'&&'} / @operator{'||'}
-               / @operator{'=='} / @operator{'!='}
-               / @operator{'<='} / @operator{'>='}
-               / @operator{'<<'} / @operator{'>>'}
-               / @operator{'+'} / @operator{'-'}
-               / @operator{'*'} / @operator{'/'} / @operator{'%'}
-               / @operator{'&'} / @operator{'|'} / @operator{'^'}
-               / @operator{'<'} / @operator{'>'}
+expr_lor      <- expr_lor ws @operator{'||'} ws expr_land / expr_land
+expr_land     <- expr_land ws @operator{'&&'} ws expr_bor / expr_bor
+expr_bor      <- expr_bor ws @operator{'|'} !'|' !'=' ws expr_bxor / expr_bxor
+expr_bxor     <- expr_bxor ws @operator{'^'} !'=' ws expr_band / expr_band
+expr_band     <- expr_band ws @operator{'&'} !'&' !'=' ws expr_eq / expr_eq
+expr_eq       <- expr_eq ws (@operator{'=='} / @operator{'!='}) ws expr_rel / expr_rel
+expr_rel      <- expr_rel ws (@operator{'<='} / @operator{'>='} / @operator{'<'} !'<' / @operator{'>'} !'>') ws expr_shift / expr_shift
+expr_shift    <- expr_shift ws (@operator{'<<'} !'=' / @operator{'>>'} !'=') ws expr_add / expr_add
+expr_add      <- expr_add ws (@operator{'+'} !'=' / @operator{'-'} !'=') ws expr_mul / expr_mul
+expr_mul      <- expr_mul ws (@operator{'*'} !'=' / @operator{'/'} !'=' / @operator{'%'} !'=') ws expr_unary / expr_unary
 
 expr_unary    <- (unary_prefix ws)* expr_postfix
 unary_prefix  <- @operator{'++'} / @operator{'--'}
