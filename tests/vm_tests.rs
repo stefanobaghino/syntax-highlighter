@@ -1,5 +1,5 @@
 use syntax_highlighter::pegvm::{
-    Capture, CaptureKind, CharSet, Instruction, Label, MatchResult, VM,
+    Capture, CaptureKind, CharSet, Instruction, Label, MatchResult, MemoId, VM,
 };
 
 fn run(program: &[Instruction], input: &[u8]) -> MatchResult {
@@ -461,4 +461,129 @@ fn partial_match_captures_survive_backtrack_below_watermark() {
     assert!(!r.complete);
     assert_eq!(r.matched, 2);
     assert_eq!(r.captures, vec![cap(0, 0, 2)]);
+}
+
+// Hand-built bytecode for direct left-recursion. The compiler doesn't yet
+// emit `LRBody` / `LRTail`; these tests pin the VM-level semantics so the
+// compiler milestone can be layered on with confidence. Equivalent grammar:
+//
+//     expr <- expr "+" "n" / "n"
+//
+// Code layout:
+//
+//      0: Call(2)              ; bootstrap → expr
+//      1: End
+//      2: LRBody(0, 14)        ; LR prologue (return_label = 14, the Return)
+//      3: Choice(11)           ; body: try first alternative
+//      4: Call(2)              ;   recursive call (LRBody hit replays seed
+//                              ;   or fails when seed is None)
+//      5: Char('+')
+//      6: CaptureBegin(0)      ;   tag the right operand as kind=0
+//      7: Char('n')
+//      8: CaptureEnd
+//      9: Commit(13)
+//     10: -- (unused; padding)
+//     11: CaptureBegin(0)      ; second alternative: leaf
+//     12: Char('n')
+//     13: -- end-of-body marker (LRTail follows)
+//     14: -- this is the Return target; we lay LRTail at 13 below
+//
+// The actual instruction stream is simpler than the comment suggests; see
+// the array literals below. The constants are: body_start=3, lrtail=13,
+// return_addr=14.
+fn lr_expr_program() -> Vec<Instruction> {
+    let body_start = 3usize;
+    vec![
+        // 0: bootstrap
+        Instruction::Call(Label(2)),
+        Instruction::End,
+        // 2: LRBody (return_addr = 14)
+        Instruction::LRBody(MemoId(0), Label(14)),
+        // 3 (body_start): Choice → 11 (second alternative)
+        Instruction::Choice(Label(10)),
+        // 4: Call(expr)  -- recursive
+        Instruction::Call(Label(2)),
+        // 5: '+'
+        Instruction::Char(b'+'),
+        // 6: CaptureBegin
+        Instruction::CaptureBegin(CaptureKind(0)),
+        // 7: 'n'
+        Instruction::Char(b'n'),
+        // 8: CaptureEnd
+        Instruction::CaptureEnd,
+        // 9: Commit → 13 (LRTail)
+        Instruction::Commit(Label(13)),
+        // 10: second alt — CaptureBegin
+        Instruction::CaptureBegin(CaptureKind(0)),
+        // 11: 'n'
+        Instruction::Char(b'n'),
+        // 12: CaptureEnd
+        Instruction::CaptureEnd,
+        // 13: LRTail (body_start = 3)
+        Instruction::LRTail(MemoId(0), Label(body_start)),
+        // 14: Return
+        Instruction::Return,
+    ]
+}
+
+#[test]
+fn lr_single_atom_no_growth_returns_seed() {
+    // Input "n": first iteration matches via the second alternative. The
+    // recursive call inside the first alternative fails (seed=None), so
+    // the body falls through to the leaf, sp advances 0→1. LRTail sees
+    // growth (0→1), updates seed, and re-iterates from sp=0. Second
+    // iteration: recursive call now hits the seed (sp=1), returns to
+    // LRTail's caller's continuation. The body tries to match '+', but
+    // input ends — fails. fail() encounters the LFrame with seed=Some,
+    // accepts the seed, returns true at return_addr (14). Final result:
+    // matched=1, one capture for the leaf 'n'.
+    let prog = lr_expr_program();
+    let r = run(&prog, b"n");
+    assert_eq!(r.matched, 1);
+    assert!(r.complete);
+    assert_eq!(r.captures, vec![cap(0, 0, 1)]);
+}
+
+#[test]
+fn lr_left_associative_chain() {
+    // Input "n+n+n": the seed-and-grow loop must produce the
+    // left-associative parse. Captures should emit in input order:
+    // leaf at 0..1, leaf at 2..3, leaf at 4..5.
+    let prog = lr_expr_program();
+    let r = run(&prog, b"n+n+n");
+    assert_eq!(r.matched, 5);
+    assert!(r.complete);
+    assert_eq!(r.captures, vec![cap(0, 0, 1), cap(0, 2, 3), cap(0, 4, 5)]);
+}
+
+#[test]
+fn lr_partial_match_when_input_ends_mid_chain() {
+    // Input "n+n+": after consuming "n+n", the next iteration tries
+    // "n+n + n" but the trailing 'n' is missing. fail() should rescue
+    // with the prior seed (sp=3) and the parse succeeds at matched=3.
+    let prog = lr_expr_program();
+    let r = run(&prog, b"n+n+");
+    assert_eq!(r.matched, 3);
+    assert!(r.complete);
+    assert_eq!(r.captures, vec![cap(0, 0, 1), cap(0, 2, 3)]);
+}
+
+#[test]
+fn lr_no_match_returns_partial() {
+    // Input "x": the leaf 'n' fails on first iteration with no seed.
+    // The LR rule fails (no rescue possible), the parse is partial.
+    let prog = lr_expr_program();
+    let r = run(&prog, b"x");
+    assert!(!r.complete);
+    assert_eq!(r.matched, 0);
+    assert_eq!(r.captures, vec![]);
+}
+
+#[test]
+fn lr_empty_input_returns_partial() {
+    let prog = lr_expr_program();
+    let r = run(&prog, b"");
+    assert!(!r.complete);
+    assert_eq!(r.matched, 0);
+    assert_eq!(r.captures, vec![]);
 }

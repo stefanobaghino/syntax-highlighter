@@ -30,6 +30,30 @@ enum StackEntry {
         start_sp: usize,
         capture_start_len: usize,
     },
+    /// Frame for an in-flight left-recursive rule invocation. Pushed by
+    /// `LRBody` on the first entry at a given `sp`; popped by `LRTail` when
+    /// the seed-and-grow loop converges, or by `fail()` (which uses the
+    /// `seed` to decide between rescuing the rule with the prior seed or
+    /// continuing to unwind). LR rules are not packrat-cached in v1, so
+    /// nothing is written to `self.memo` when this frame is dropped.
+    LFrame {
+        memo_id: MemoId,
+        start_sp: usize,
+        capture_start_len: usize,
+        return_addr: usize,
+        seed: Option<LSeed>,
+    },
+}
+
+/// Successful seed of a left-recursive rule's prior iteration: the `sp` the
+/// body matched up to, and the closed captures it produced past the
+/// `LFrame`'s `capture_start_len`. Replayed verbatim on recursive entries
+/// (where the recursive call must appear to have returned this seed) and on
+/// the convergence step (where the rule itself exits with this match).
+#[derive(Debug, Clone)]
+struct LSeed {
+    end_sp: usize,
+    captures: Vec<Capture>,
 }
 
 /// Outcome of running a compiled [`Program`](super::Program) against an input.
@@ -507,6 +531,148 @@ impl<'p, 'i> VM<'p, 'i> {
                     }
                     self.ip += 1;
                 }
+                Instruction::LRBody(memo_id, return_label) => {
+                    // Walk the stack top-down for an LFrame at the same
+                    // (memo_id, sp) — that signals recursive re-entry. For
+                    // direct LR the cycle has length 1, so any matching
+                    // LFrame is this rule's own.
+                    let lookup: Option<Option<LSeed>> = self.stack.iter().rev().find_map(|e| {
+                        if let StackEntry::LFrame {
+                            memo_id: id,
+                            start_sp,
+                            seed,
+                            ..
+                        } = e
+                        {
+                            if *id == *memo_id && *start_sp == self.sp {
+                                return Some(seed.clone());
+                            }
+                        }
+                        None
+                    });
+                    match lookup {
+                        Some(Some(found)) => {
+                            // Recursive entry with a seed: replay captures
+                            // already-closed (mirrors `MemoOpen`'s hit
+                            // path), set sp to seed end, and jump to the
+                            // rule's Return so the caller's `Call`-pushed
+                            // Return frame fires normally.
+                            for c in &found.captures {
+                                self.captures.push(OpenCapture {
+                                    kind: c.kind,
+                                    start: c.start,
+                                    end: Some(c.end),
+                                });
+                            }
+                            self.bump_top_memo_examined(found.end_sp);
+                            self.sp = found.end_sp;
+                            self.ip = return_label.0;
+                            self.maybe_snapshot();
+                        }
+                        Some(None) => {
+                            // Recursive entry with no seed yet — the rule
+                            // has not succeeded once at this position, so
+                            // the recursive call must fail (bound 0).
+                            if !self.fail() {
+                                return self.finalize_partial();
+                            }
+                        }
+                        None => {
+                            // First entry at this sp — push an LFrame and
+                            // a paired memo_examined watermark, then fall
+                            // through to the body.
+                            self.stack.push(StackEntry::LFrame {
+                                memo_id: *memo_id,
+                                start_sp: self.sp,
+                                capture_start_len: self.captures.len(),
+                                return_addr: return_label.0,
+                                seed: None,
+                            });
+                            self.memo_examined.push(self.sp);
+                            self.ip += 1;
+                        }
+                    }
+                }
+                Instruction::LRTail(memo_id, body_start) => {
+                    // Peek the topmost LFrame. The body just succeeded; we
+                    // must decide between growing (re-iterate) and
+                    // accepting (commit and fall through to Return).
+                    let top_idx = self
+                        .stack
+                        .iter()
+                        .rposition(|e| matches!(e, StackEntry::LFrame { .. }))
+                        .expect("LRTail without an enclosing LFrame");
+                    let StackEntry::LFrame {
+                        memo_id: top_id,
+                        start_sp,
+                        capture_start_len,
+                        return_addr: _,
+                        seed,
+                    } = &mut self.stack[top_idx]
+                    else {
+                        unreachable!("rposition matched LFrame")
+                    };
+                    debug_assert_eq!(
+                        *top_id, *memo_id,
+                        "LRTail id mismatch: expected {:?}, found {:?}",
+                        memo_id, top_id,
+                    );
+                    let start_sp = *start_sp;
+                    let capture_start_len = *capture_start_len;
+                    let body_end_sp = self.sp;
+                    let grew = match seed {
+                        None => body_end_sp > start_sp,
+                        Some(prev) => body_end_sp > prev.end_sp,
+                    };
+                    if grew {
+                        // Snapshot the iteration's captures (closed at
+                        // body_end_sp where any still-open ones land) and
+                        // store as the new seed; rewind for re-iteration.
+                        let new_caps: Vec<Capture> = self.captures[capture_start_len..]
+                            .iter()
+                            .map(|c| Capture {
+                                kind: c.kind,
+                                start: c.start,
+                                end: c.end.unwrap_or(body_end_sp),
+                            })
+                            .collect();
+                        *seed = Some(LSeed {
+                            end_sp: body_end_sp,
+                            captures: new_caps,
+                        });
+                        self.captures.truncate(capture_start_len);
+                        self.sp = start_sp;
+                        self.ip = body_start.0;
+                    } else {
+                        // No growth — accept the prior seed. If the seed
+                        // is still None here (body matched empty on first
+                        // try), the rule succeeds with an empty match.
+                        let final_seed = seed.take();
+                        // Pop the LFrame and the paired memo_examined.
+                        let _frame = self.stack.remove(top_idx);
+                        let examined = self
+                            .memo_examined
+                            .pop()
+                            .expect("LRTail: memo_examined underflow");
+                        self.bump_top_memo_examined(examined);
+                        // Replay seed captures (if any), restore sp.
+                        self.captures.truncate(capture_start_len);
+                        if let Some(s) = final_seed {
+                            for c in &s.captures {
+                                self.captures.push(OpenCapture {
+                                    kind: c.kind,
+                                    start: c.start,
+                                    end: Some(c.end),
+                                });
+                            }
+                            self.sp = s.end_sp;
+                        } else {
+                            self.sp = start_sp;
+                        }
+                        self.maybe_snapshot();
+                        self.ip += 1;
+                    }
+                }
                 Instruction::CaptureBegin(kind) => {
                     self.captures.push(OpenCapture {
                         kind: *kind,
@@ -605,6 +771,54 @@ impl<'p, 'i> VM<'p, 'i> {
                     // Rule-call frame unwinding past its caller. The caller's
                     // Backtrack (if any) is deeper on the stack and will be
                     // found by continued popping.
+                }
+                StackEntry::LFrame {
+                    memo_id: _,
+                    start_sp: _,
+                    capture_start_len,
+                    return_addr,
+                    seed,
+                } => {
+                    // Pop the paired examined watermark. LR rules don't
+                    // packrat-cache in v1, so nothing is written to
+                    // self.memo here — the watermark just needs to flow
+                    // up to the parent rule's frame.
+                    let examined_max = self
+                        .memo_examined
+                        .pop()
+                        .expect("fail(): memo_examined underflow on LFrame");
+                    self.bump_top_memo_examined(examined_max);
+                    if let Some(s) = seed {
+                        // Body failed on a re-iteration after the seed
+                        // already grew at least once. Bounded LR
+                        // semantics: accept the prior seed as the rule's
+                        // match. Restore captures to the LFrame baseline,
+                        // replay the seed's closed captures, set sp to
+                        // seed.end_sp, and jump to the rule's Return.
+                        // Returning `true` from `fail()` resumes execution
+                        // at `self.ip` — the Return frame the caller's
+                        // `Call` pushed is still on the stack and will
+                        // pop normally.
+                        self.protect_max_captures(capture_start_len);
+                        self.captures.truncate(capture_start_len);
+                        for c in &s.captures {
+                            self.captures.push(OpenCapture {
+                                kind: c.kind,
+                                start: c.start,
+                                end: Some(c.end),
+                            });
+                        }
+                        self.sp = s.end_sp;
+                        self.ip = return_addr;
+                        self.maybe_snapshot();
+                        return true;
+                    }
+                    // No seed yet — the LR rule has failed without ever
+                    // growing past bound 0. Continue unwinding past this
+                    // frame; the captures-truncate happens at whichever
+                    // Backtrack ultimately catches the unwind (its
+                    // capture_len was snapshotted before LRBody pushed
+                    // this frame).
                 }
             }
         }

@@ -71,6 +71,8 @@ impl Compiler {
             Instruction::TestSet(s, _) => Instruction::TestSet(*s, target),
             Instruction::Call(_) => Instruction::Call(target),
             Instruction::MemoOpen(id, _) => Instruction::MemoOpen(*id, target),
+            Instruction::LRBody(id, _) => Instruction::LRBody(*id, target),
+            Instruction::LRTail(id, _) => Instruction::LRTail(*id, target),
             other => panic!("patch_jump: not a jump instruction: {:?}", other),
         };
         self.code[idx] = new;
