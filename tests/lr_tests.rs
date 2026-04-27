@@ -185,6 +185,48 @@ fn right_recursive_grammar_is_not_marked_lr() {
 }
 
 #[test]
+fn indirect_lr_cycle_of_2_runs() {
+    // SCC {a, b}; both rules are wrapped as LR. Input "y" matches via
+    // a's base alternative on the first iteration; no growth occurs.
+    let src = r#"
+        a <- b 'x' / 'y'
+        b <- a 'z' / 'w'
+    "#;
+    let r = run(src, b"y");
+    assert!(r.complete);
+    assert_eq!(r.matched, 1);
+}
+
+#[test]
+fn indirect_lr_cycle_of_2_grows_through_chain() {
+    // Same SCC. Input "yzx" exercises one full seed-and-grow round
+    // through the indirect cycle: a's seed grows from {y at sp=1} to
+    // {b'x' at sp=3} where b in turn used a's seed to match "yz".
+    let src = r#"
+        a <- b 'x' / 'y'
+        b <- a 'z' / 'w'
+    "#;
+    let r = run(src, b"yzx");
+    assert!(r.complete);
+    assert_eq!(r.matched, 3);
+}
+
+#[test]
+fn indirect_lr_cycle_of_3_runs() {
+    // Length-3 first-call cycle a → b → c → a; all three rules are
+    // wrapped as LR. Input "p" matches via a's base alt; the test
+    // confirms that cycles longer than 2 compile and run.
+    let src = r#"
+        a <- b 'x' / 'p'
+        b <- c 'y' / 'q'
+        c <- a 'z' / 'r'
+    "#;
+    let r = run(src, b"p");
+    assert!(r.complete);
+    assert_eq!(r.matched, 1);
+}
+
+#[test]
 fn lr_inside_recover_repeat_resyncs_cleanly() {
     // top <- (expr ';')*^ !.
     // expr <- expr @op{'+'} @num{[0-9]+} / @num{[0-9]+}
