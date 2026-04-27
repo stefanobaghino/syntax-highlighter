@@ -82,7 +82,7 @@ Each `Pattern` variant maps to a small fixed sequence of `Instruction`s. The ins
 | Control flow | `Jump`, `Choice`, `Commit`, `PartialCommit`, `BackCommit`, `FailTwice`, `Fail` | Express ordered choice, repetition, and predicates in terms of pushing and popping backtrack records. |
 | Calls | `Call`, `Return` | Invoke a named rule and return from it — the `NonTerminal` variant compiles to `Call(address)`. |
 | Memoization | `MemoOpen`, `MemoClose` | Rule-level packrat cache. The compiler wraps every rule body with a pair; on a hit `MemoOpen` replays cached captures and jumps to the rule's `Return`; on a miss it pushes a `Memo` frame that `MemoClose` commits as a success entry or `fail()` commits as a failure entry. |
-| Left recursion | `LRBody`, `LRTail` | Replace `MemoOpen` / `MemoClose` for rules the compiler detected as directly left-recursive. `LRBody` walks the stack for an in-flight `LFrame` at `(memo_id, sp)`: a hit replays the seed (`None` ⇒ fail, `Some` ⇒ jump to Return), a miss pushes a fresh `LFrame`. `LRTail` is the seed-and-grow controller — growth re-iterates from `start_sp`, no growth commits the seed and falls through. LR rules are not packrat-cached in v1. |
+| Left recursion | `LRBody`, `LRTail` | Replace `MemoOpen` / `MemoClose` for rules the compiler detected as left-recursive. `LRBody` first probes the packrat memo at `(memo_id, sp)` (mirrors `MemoOpen`'s hit path: replay captures, jump to Return on success; `fail()` on cached failure); on a miss it walks the stack for an in-flight `LFrame` (recursive entry replays the seed — `None` ⇒ fail, `Some` ⇒ jump to Return) and pushes a fresh `LFrame` if no match. `LRTail` is the seed-and-grow controller — growth re-iterates from `start_sp`; no growth commits the seed, writes a memo entry whose `examined_max` is the high-water mark across every iteration, and falls through. LR-rule **failure** caching is not yet implemented. |
 | Captures | `CaptureBegin`, `CaptureEnd` | Bracket a matched span with a kind tag so the VM can record it. |
 | Termination | `End` | Mark the end of a successful match. |
 
@@ -200,12 +200,13 @@ return_addr:  Return
 
 The runtime algorithm is **bounded left recursion** (Medeiros, Mascarenhas & Ierusalimschy 2014, §3.2 / §5):
 
+0. **Cache check**: `LRBody` first probes `self.memo.get(&(memo_id, sp))`. A hit replays the cached captures and jumps to `return_addr` (success) or enters `fail()` (failure) — same shape as `MemoOpen`'s hit path. The L-frame walk in step 1/2 is only reached on a cache miss.
 1. **First entry at `sp`**: `LRBody` pushes `StackEntry::LFrame { memo_id, start_sp, capture_start_len, return_addr, seed: None }`. Body executes.
 2. **Recursive entry at the same `sp`**: `LRBody` finds the existing `LFrame` on the stack. `seed: None` ⇒ `fail()`. `seed: Some(end_sp, captures)` ⇒ replay captures, set `sp = end_sp`, jump to `return_addr` so the recursive call appears to return the seed.
-3. **Body succeeds**: `LRTail` decides. Growth (`sp > seed.end_sp`, or first success with `seed: None`) updates the seed and re-iterates from `start_sp`. No growth commits the seed and falls through to `Return`.
-4. **Body fails**: `fail()`'s `LFrame` arm rescues with the prior seed when `seed.is_some()` (returns `true`, resumes at `return_addr`); when `seed.is_none()` it continues unwinding (the LR rule failed without ever growing).
+3. **Body succeeds**: `LRTail` decides. Growth (`sp > seed.end_sp`, or first success with `seed: None`) updates the seed and re-iterates from `start_sp`. No growth commits the seed, writes a memo entry (subject to `memo_threshold`), and falls through to `Return`.
+4. **Body fails**: `fail()`'s `LFrame` arm rescues with the prior seed when `seed.is_some()` (returns `true`, resumes at `return_addr`); when `seed.is_none()` it continues unwinding (the LR rule failed without ever growing). LR-rule failure caching is not yet implemented — symmetric with `fail()`'s `Memo` arm but deferred until profiling motivates it.
 
-The L table is stack-structured and lives only on `self.stack`; nothing is written to `self.memo` for an LR rule in v1. The `memo_examined` watermark is pushed/popped in lockstep with `LFrame`, so an enclosing rule's `examined_max` correctly subsumes positions the LR body looked at.
+The L table is stack-structured and lives on `self.stack`; converged seeds also flow into `self.memo` so subsequent runs (or subsequent calls within the same run) at the same `sp` short-circuit. The `examined_max` recorded with the entry is the value popped from `memo_examined` at `LRTail`'s commit branch — the high-water mark across every iteration of the seed-and-grow loop, since `LRBody`'s miss path pushes one watermark slot at frame entry and only the commit branch (or `fail()`'s `LFrame` arm) pops it. That bound feeds `MemoCache::apply_edit`'s invalidation predicate verbatim.
 
 ## Error types
 

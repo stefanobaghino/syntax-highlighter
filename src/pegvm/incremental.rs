@@ -41,12 +41,12 @@
 //! working set sizes we care about; a position-indexed structure (e.g.
 //! `BTreeMap<usize, ...>`) is a future optimization if cache size grows.
 //!
-//! Left recursion: the LR table is **transient per run** — `LFrame`s live
-//! on the execution stack only and never enter [`MemoCache`], so this
-//! invalidation pass is unaffected. A future extension that caches
-//! converged LR seeds in the packrat memo would need a separate decision
-//! about what `examined_max` means across iterations of the seed-and-grow
-//! loop; tracked alongside `#40`.
+//! Left recursion: `LFrame`s themselves stay on the execution stack, but
+//! converged LR seeds are written to [`MemoCache`] at `LRTail`'s commit
+//! branch (see `pegvm/README.md` §"Left recursion"). Their `examined_max`
+//! is the high-water mark across every iteration of the seed-and-grow
+//! loop — feeding the same `invalidates()` predicate without special
+//! casing. LR-rule failure caching is not yet implemented.
 
 use std::collections::HashMap;
 

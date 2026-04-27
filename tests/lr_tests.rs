@@ -267,3 +267,38 @@ fn lr_inside_recover_repeat_resyncs_cleanly() {
         "the BAD region must produce recovery captures"
     );
 }
+
+#[test]
+fn cached_lr_seed_matches_uncached_run() {
+    // The new packrat cache for converged LR seeds (#48) must be purely
+    // additive: enabling it (threshold=0) must produce the same
+    // MatchResult as disabling it (threshold=usize::MAX).
+    let src = r#"
+        expr <- expr @op{'+'} @num{[0-9]+} / @num{[0-9]+}
+    "#;
+    let prog = pegc::compile(src).expect("compile");
+    let cached = VM::new(&prog.code, b"1+2+3").with_memo_threshold(0).run();
+    let uncached = VM::new(&prog.code, b"1+2+3")
+        .with_memo_threshold(usize::MAX)
+        .run();
+    assert_eq!(cached, uncached);
+}
+
+#[test]
+fn lr_inside_outer_repetition_matches_uncached_run() {
+    // The LR rule sits under an outer repetition that calls it at
+    // distinct sps; the new cache write at LRTail must not perturb the
+    // surrounding pattern.
+    let src = r#"
+        top  <- (expr ',')* expr
+        expr <- expr @op{'+'} @num{[0-9]+} / @num{[0-9]+}
+    "#;
+    let prog = pegc::compile(src).expect("compile");
+    let cached = VM::new(&prog.code, b"1+2,3+4,5")
+        .with_memo_threshold(0)
+        .run();
+    let uncached = VM::new(&prog.code, b"1+2,3+4,5")
+        .with_memo_threshold(usize::MAX)
+        .run();
+    assert_eq!(cached, uncached);
+}

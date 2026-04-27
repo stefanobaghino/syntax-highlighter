@@ -34,8 +34,9 @@ enum StackEntry {
     /// `LRBody` on the first entry at a given `sp`; popped by `LRTail` when
     /// the seed-and-grow loop converges, or by `fail()` (which uses the
     /// `seed` to decide between rescuing the rule with the prior seed or
-    /// continuing to unwind). LR rules are not packrat-cached in v1, so
-    /// nothing is written to `self.memo` when this frame is dropped.
+    /// continuing to unwind). On convergence `LRTail` writes the seed to
+    /// `self.memo` (subject to the threshold filter); failure entries
+    /// for LR rules are not cached yet (#48 scoped to converged seeds).
     LFrame {
         memo_id: MemoId,
         start_sp: usize,
@@ -532,6 +533,38 @@ impl<'p, 'i> VM<'p, 'i> {
                     self.ip += 1;
                 }
                 Instruction::LRBody(memo_id, return_label) => {
+                    // Packrat cache check first — mirrors MemoOpen's hit
+                    // path. A cached entry at this (memo_id, sp) was
+                    // committed by a previous outer invocation that already
+                    // popped its LFrame; a current in-flight LFrame for the
+                    // same key cannot coexist, so the live-stack walk
+                    // below is only reached on a cache miss.
+                    if let Some(entry) = self.memo.get(&(*memo_id, self.sp)) {
+                        self.memo_hits += 1;
+                        let hit_examined = entry.examined_max;
+                        match entry.end_sp {
+                            Some(end_sp) => {
+                                for c in &entry.captures {
+                                    self.captures.push(OpenCapture {
+                                        kind: c.kind,
+                                        start: c.start,
+                                        end: Some(c.end),
+                                    });
+                                }
+                                self.bump_top_memo_examined(hit_examined);
+                                self.sp = end_sp;
+                                self.ip = return_label.0;
+                                self.maybe_snapshot();
+                            }
+                            None => {
+                                self.bump_top_memo_examined(hit_examined);
+                                if !self.fail() {
+                                    return self.finalize_partial();
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     // Walk the stack top-down for an LFrame at the same
                     // (memo_id, sp) — that signals recursive re-entry. For
                     // direct LR the cycle has length 1, so any matching
@@ -655,19 +688,42 @@ impl<'p, 'i> VM<'p, 'i> {
                             .pop()
                             .expect("LRTail: memo_examined underflow");
                         self.bump_top_memo_examined(examined);
-                        // Replay seed captures (if any), restore sp.
+                        // Replay seed captures (if any), restore sp, and
+                        // extract the captures vec for the cache write so
+                        // we don't have to re-clone from the live buffer.
                         self.captures.truncate(capture_start_len);
-                        if let Some(s) = final_seed {
-                            for c in &s.captures {
-                                self.captures.push(OpenCapture {
-                                    kind: c.kind,
-                                    start: c.start,
-                                    end: Some(c.end),
-                                });
+                        let (final_sp, seed_captures) = match final_seed {
+                            Some(s) => {
+                                for c in &s.captures {
+                                    self.captures.push(OpenCapture {
+                                        kind: c.kind,
+                                        start: c.start,
+                                        end: Some(c.end),
+                                    });
+                                }
+                                (s.end_sp, s.captures)
                             }
-                            self.sp = s.end_sp;
-                        } else {
-                            self.sp = start_sp;
+                            None => (start_sp, Vec::new()),
+                        };
+                        self.sp = final_sp;
+                        // Cache the converged seed under the same threshold
+                        // filter MemoClose uses. examined is the high-water
+                        // mark across every iteration of the seed-and-grow
+                        // loop (LRBody pushed one memo_examined slot at
+                        // entry; growth iterations don't pop it, only this
+                        // commit does), so it is the correct invalidation
+                        // bound for MemoCache::apply_edit. Failure caching
+                        // for LR rules is not yet implemented (#48 scoped
+                        // to converged seeds only).
+                        if final_sp - start_sp >= self.memo_threshold {
+                            self.memo.insert(
+                                (*memo_id, start_sp),
+                                MemoEntry {
+                                    end_sp: Some(final_sp),
+                                    examined_max: examined,
+                                    captures: seed_captures,
+                                },
+                            );
                         }
                         self.maybe_snapshot();
                         self.ip += 1;
@@ -779,10 +835,12 @@ impl<'p, 'i> VM<'p, 'i> {
                     return_addr,
                     seed,
                 } => {
-                    // Pop the paired examined watermark. LR rules don't
-                    // packrat-cache in v1, so nothing is written to
-                    // self.memo here — the watermark just needs to flow
-                    // up to the parent rule's frame.
+                    // Pop the paired examined watermark. Successful LR
+                    // converged seeds are cached at LRTail; LR-rule
+                    // failures (this arm with seed=None) are not cached
+                    // yet — symmetric with `fail()`'s `Memo` arm but
+                    // deferred per #48's scoping. The watermark still
+                    // flows up to the parent rule's frame.
                     let examined_max = self
                         .memo_examined
                         .pop()
