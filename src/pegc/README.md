@@ -152,9 +152,12 @@ this; grammar authors must ensure `p` consumes input on success.
   is tried only if `p1` fails.
 - **Predicates consume no input.** `!p` and `&p` rewind any `sp`
   advance `p` would have made, and emit no captures.
-- **No left recursion.** `A <- A ...` infinite-loops. Rewrite as
-  right recursion or an iterative form; left-recursion support is
-  tracked in #40.
+- **Direct left recursion is supported.** `A <- A α / β` and similar
+  shapes parse left-associatively via bounded LR (Medeiros et al.
+  2014 §5; see [`src/pegvm/README.md`](../pegvm/README.md#left-recursion)).
+  **Indirect** left recursion (`A <- B …; B <- A …`) is rejected
+  with `CompileError::IndirectLeftRecursion`; tracked as a
+  follow-up to #40.
 - **Byte-oriented.** Character classes are sets of `u8`; UTF-8 is
   never decoded. Direction for Unicode support is under evaluation
   in #45.
