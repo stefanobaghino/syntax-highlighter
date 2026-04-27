@@ -12,7 +12,7 @@ Requires Rust 1.78 or newer (the MSRV declared in `Cargo.toml`).
 
 `cargo bench --bench memo` sweeps the memoization threshold across the
 shipped grammars. Re-run it after adding a new grammar, or after any
-change to `MemoOpen` / `MemoClose` / memo-replay semantics — a new
+change to `RuleEnter` / `MemoClose` / memo-replay semantics — a new
 grammar's shape can push the knee past the shipping
 `VM::DEFAULT_MEMO_THRESHOLD`, and VM changes that alter memo-table
 access patterns can invalidate the current tuning. The `memo-bench`

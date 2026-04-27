@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use syntax_highlighter::pegc::{compile_pattern, Grammar, Pattern};
 use syntax_highlighter::pegvm::{
-    Capture, CaptureKind, CharSet, Instruction, Label, MatchResult, MemoId, VM,
+    Capture, CaptureKind, CharSet, Instruction, Label, MatchResult, MemoId, RuleKind, VM,
 };
 
 fn run_pattern(pat: &Pattern, input: &[u8]) -> MatchResult {
@@ -517,11 +517,11 @@ fn grammar_rules_are_wrapped_in_memo_open_close() {
     // Layout:
     //   0: Call(start)
     //   1: End
-    //   2: MemoOpen(0, L5)   ; start's Return is at 5
+    //   2: RuleEnter(0, Memo, L5)   ; start's Return is at 5
     //   3: Char 'a'
     //   4: MemoClose(0)
     //   5: Return
-    //   6: MemoOpen(1, L9)   ; other's Return is at 9
+    //   6: RuleEnter(1, Memo, L9)   ; other's Return is at 9
     //   7: Char 'b'
     //   8: MemoClose(1)
     //   9: Return
@@ -535,11 +535,11 @@ fn grammar_rules_are_wrapped_in_memo_open_close() {
         vec![
             Instruction::Call(Label(2)),
             Instruction::End,
-            Instruction::MemoOpen(MemoId(0), Label(5)),
+            Instruction::RuleEnter(MemoId(0), RuleKind::Memo, Label(5)),
             Instruction::Char(b'a'),
             Instruction::MemoClose(MemoId(0)),
             Instruction::Return,
-            Instruction::MemoOpen(MemoId(1), Label(9)),
+            Instruction::RuleEnter(MemoId(1), RuleKind::Memo, Label(9)),
             Instruction::Char(b'b'),
             Instruction::MemoClose(MemoId(1)),
             Instruction::Return,
@@ -550,10 +550,10 @@ fn grammar_rules_are_wrapped_in_memo_open_close() {
 #[test]
 fn direct_lr_rule_emits_lrbody_lrtail_skeleton() {
     // start <- start "+" "n" / "n"
-    // Layout (no MemoOpen / MemoClose for an LR rule):
+    // Layout (no MemoClose for an LR rule — LRTail closes the body):
     //   0: Call(2)
     //   1: End
-    //   2: LRBody(0, <ret>)
+    //   2: RuleEnter(0, Lr, <ret>)
     //   3 (body_start): Choice(7)
     //   4: Call(2)
     //   5: Char '+'
@@ -579,7 +579,10 @@ fn direct_lr_rule_emits_lrbody_lrtail_skeleton() {
     // Prologue is at code[2]; the bootstrap is the usual Call/End pair.
     assert!(matches!(prog.code[0], Instruction::Call(Label(2))));
     assert!(matches!(prog.code[1], Instruction::End));
-    assert!(matches!(prog.code[2], Instruction::LRBody(MemoId(0), _)));
+    assert!(matches!(
+        prog.code[2],
+        Instruction::RuleEnter(MemoId(0), RuleKind::Lr, _)
+    ));
     // Last three instructions: LRTail, then the final Return for the rule.
     let n = prog.code.len();
     assert!(matches!(
@@ -587,19 +590,23 @@ fn direct_lr_rule_emits_lrbody_lrtail_skeleton() {
         Instruction::LRTail(MemoId(0), _)
     ));
     assert!(matches!(prog.code[n - 1], Instruction::Return));
-    // No MemoOpen / MemoClose anywhere — LR rules are not packrat-cached.
+    // No Memo-kind RuleEnter / MemoClose anywhere — LR rules use the
+    // LR prologue/epilogue exclusively.
     for ins in &prog.code {
         assert!(
-            !matches!(ins, Instruction::MemoOpen(..) | Instruction::MemoClose(..)),
-            "LR rule must not emit MemoOpen/MemoClose: {:?}",
+            !matches!(
+                ins,
+                Instruction::RuleEnter(_, RuleKind::Memo, _) | Instruction::MemoClose(..)
+            ),
+            "LR rule must not emit Memo-kind RuleEnter/MemoClose: {:?}",
             ins
         );
     }
-    // LRBody's return label points at the rule's Return (last instruction).
-    if let Instruction::LRBody(_, Label(ret)) = prog.code[2] {
+    // RuleEnter's return label points at the rule's Return (last instruction).
+    if let Instruction::RuleEnter(_, RuleKind::Lr, Label(ret)) = prog.code[2] {
         assert_eq!(ret, n - 1);
     }
-    // LRTail's body-start label points at the instruction after LRBody.
+    // LRTail's body-start label points at the instruction after RuleEnter.
     if let Instruction::LRTail(_, Label(body_start)) = prog.code[n - 2] {
         assert_eq!(body_start, 3);
     }
@@ -609,7 +616,8 @@ fn direct_lr_rule_emits_lrbody_lrtail_skeleton() {
 fn right_recursive_rule_is_not_marked_lr() {
     // start <- "n" "+" start / "n"
     // The recursive call is not in first-call position — "n" consumes
-    // input first. Compile must use the standard MemoOpen / MemoClose.
+    // input first. Compile must use the standard Memo-kind RuleEnter
+    // and MemoClose.
     let mut rules = HashMap::new();
     rules.insert(
         "start".into(),
@@ -626,12 +634,17 @@ fn right_recursive_rule_is_not_marked_lr() {
     let has_memo_open = prog
         .code
         .iter()
-        .any(|i| matches!(i, Instruction::MemoOpen(..)));
-    let has_lr = prog
-        .code
-        .iter()
-        .any(|i| matches!(i, Instruction::LRBody(..) | Instruction::LRTail(..)));
-    assert!(has_memo_open, "right-recursive rule must use MemoOpen");
+        .any(|i| matches!(i, Instruction::RuleEnter(_, RuleKind::Memo, _)));
+    let has_lr = prog.code.iter().any(|i| {
+        matches!(
+            i,
+            Instruction::RuleEnter(_, RuleKind::Lr, _) | Instruction::LRTail(..)
+        )
+    });
+    assert!(
+        has_memo_open,
+        "right-recursive rule must use Memo-kind RuleEnter"
+    );
     assert!(!has_lr, "right-recursive rule must not emit LR opcodes");
 }
 
@@ -665,19 +678,22 @@ fn indirect_lr_cycle_of_2_emits_lrbody_lrtail() {
     let lr_bodies = prog
         .code
         .iter()
-        .filter(|i| matches!(i, Instruction::LRBody(..)))
+        .filter(|i| matches!(i, Instruction::RuleEnter(_, RuleKind::Lr, _)))
         .count();
     let lr_tails = prog
         .code
         .iter()
         .filter(|i| matches!(i, Instruction::LRTail(..)))
         .count();
-    assert_eq!(lr_bodies, 2, "both SCC members must emit LRBody");
+    assert_eq!(lr_bodies, 2, "both SCC members must emit Lr-kind RuleEnter");
     assert_eq!(lr_tails, 2, "both SCC members must emit LRTail");
     for ins in &prog.code {
         assert!(
-            !matches!(ins, Instruction::MemoOpen(..) | Instruction::MemoClose(..)),
-            "indirect-LR rules must not emit MemoOpen/MemoClose: {:?}",
+            !matches!(
+                ins,
+                Instruction::RuleEnter(_, RuleKind::Memo, _) | Instruction::MemoClose(..)
+            ),
+            "indirect-LR rules must not emit Memo-kind RuleEnter/MemoClose: {:?}",
             ins
         );
     }
@@ -724,19 +740,25 @@ fn indirect_lr_cycle_of_3_emits_lrbody_lrtail() {
     let lr_bodies = prog
         .code
         .iter()
-        .filter(|i| matches!(i, Instruction::LRBody(..)))
+        .filter(|i| matches!(i, Instruction::RuleEnter(_, RuleKind::Lr, _)))
         .count();
     let lr_tails = prog
         .code
         .iter()
         .filter(|i| matches!(i, Instruction::LRTail(..)))
         .count();
-    assert_eq!(lr_bodies, 3, "all three SCC members must emit LRBody");
+    assert_eq!(
+        lr_bodies, 3,
+        "all three SCC members must emit Lr-kind RuleEnter"
+    );
     assert_eq!(lr_tails, 3, "all three SCC members must emit LRTail");
     for ins in &prog.code {
         assert!(
-            !matches!(ins, Instruction::MemoOpen(..) | Instruction::MemoClose(..)),
-            "indirect-LR rules must not emit MemoOpen/MemoClose: {:?}",
+            !matches!(
+                ins,
+                Instruction::RuleEnter(_, RuleKind::Memo, _) | Instruction::MemoClose(..)
+            ),
+            "indirect-LR rules must not emit Memo-kind RuleEnter/MemoClose: {:?}",
             ins
         );
     }
@@ -771,16 +793,18 @@ fn right_recursive_two_rule_grammar_is_not_marked_lr() {
         ]),
     );
     let prog = Grammar::new(rules, "a").compile().unwrap();
-    let has_lr = prog
-        .code
-        .iter()
-        .any(|i| matches!(i, Instruction::LRBody(..) | Instruction::LRTail(..)));
+    let has_lr = prog.code.iter().any(|i| {
+        matches!(
+            i,
+            Instruction::RuleEnter(_, RuleKind::Lr, _) | Instruction::LRTail(..)
+        )
+    });
     assert!(!has_lr, "non-first-call mutual recursion must not emit LR");
     let has_memo_open = prog
         .code
         .iter()
-        .any(|i| matches!(i, Instruction::MemoOpen(..)));
-    assert!(has_memo_open, "non-LR rules must use MemoOpen");
+        .any(|i| matches!(i, Instruction::RuleEnter(_, RuleKind::Memo, _)));
+    assert!(has_memo_open, "non-LR rules must use Memo-kind RuleEnter");
 }
 
 #[test]
@@ -810,5 +834,5 @@ fn lr_through_nullable_prefix_is_detected() {
     assert!(prog
         .code
         .iter()
-        .any(|i| matches!(i, Instruction::LRBody(MemoId(0), _))));
+        .any(|i| matches!(i, Instruction::RuleEnter(MemoId(0), RuleKind::Lr, _))));
 }

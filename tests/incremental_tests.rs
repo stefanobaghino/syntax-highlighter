@@ -63,7 +63,7 @@ fn second_parse_with_seeded_cache_hits_every_cached_rule() {
     assert!(cold_stats.misses > 0, "cold run must produce entries");
     assert_eq!(cache.len(), cold_stats.misses);
 
-    // Warm parse with the same input: every MemoOpen for a rule
+    // Warm parse with the same input: every RuleEnter for a rule
     // already in the cache should hit. Misses drop to zero when the
     // seeded cache covers every rule invocation.
     let (warm_result, warm_stats, _warm_cache) =

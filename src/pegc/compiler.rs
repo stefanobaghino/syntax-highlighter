@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::pattern::Pattern;
-use crate::pegvm::{CaptureKind, Instruction, Label, MemoId, Program};
+use crate::pegvm::{CaptureKind, Instruction, Label, MemoId, Program, RuleKind};
 
 #[derive(Debug)]
 pub enum CompileError {
@@ -70,8 +70,7 @@ impl Compiler {
             Instruction::TestChar(b, _) => Instruction::TestChar(*b, target),
             Instruction::TestSet(s, _) => Instruction::TestSet(*s, target),
             Instruction::Call(_) => Instruction::Call(target),
-            Instruction::MemoOpen(id, _) => Instruction::MemoOpen(*id, target),
-            Instruction::LRBody(id, _) => Instruction::LRBody(*id, target),
+            Instruction::RuleEnter(id, kind, _) => Instruction::RuleEnter(*id, *kind, target),
             Instruction::LRTail(id, _) => Instruction::LRTail(*id, target),
             other => panic!("patch_jump: not a jump instruction: {:?}", other),
         };
@@ -285,28 +284,29 @@ pub(crate) fn compile_rules(
         rule_addrs.insert(name.clone(), c.pos());
         let memo_id = MemoId(memo_count);
         memo_count += 1;
-        if lr_rules.contains(name.as_str()) {
-            // LR rule (direct or indirect): LRBody … body … LRTail ;
-            // Return. No MemoOpen / MemoClose — the L-frame replaces
-            // packrat caching for this rule (LR rules are not memoized
-            // in v1).
-            let lr_body = c.emit(Instruction::LRBody(memo_id, Label(0)));
-            let body_start = c.pos();
-            c.compile_pat(&rules[name]);
-            c.emit(Instruction::LRTail(memo_id, Label(body_start)));
-            let return_addr = c.pos();
-            c.emit(Instruction::Return);
-            c.patch_jump(lr_body, return_addr);
+        let kind = if lr_rules.contains(name.as_str()) {
+            RuleKind::Lr
         } else {
-            // MemoOpen's Label is patched to the Return address below so a cache
-            // hit can skip straight past the body to the rule's Return.
-            let memo_open = c.emit(Instruction::MemoOpen(memo_id, Label(0)));
-            c.compile_pat(&rules[name]);
-            c.emit(Instruction::MemoClose(memo_id));
-            let return_addr = c.pos();
-            c.emit(Instruction::Return);
-            c.patch_jump(memo_open, return_addr);
+            RuleKind::Memo
+        };
+        // RuleEnter's Label is patched to the Return address below so a cache
+        // hit can skip straight past the body. LR rules close the body with
+        // LRTail (the seed-and-grow controller); non-LR rules close with
+        // MemoClose (the success-entry committer).
+        let enter = c.emit(Instruction::RuleEnter(memo_id, kind, Label(0)));
+        let body_start = c.pos();
+        c.compile_pat(&rules[name]);
+        match kind {
+            RuleKind::Lr => {
+                c.emit(Instruction::LRTail(memo_id, Label(body_start)));
+            }
+            RuleKind::Memo => {
+                c.emit(Instruction::MemoClose(memo_id));
+            }
         }
+        let return_addr = c.pos();
+        c.emit(Instruction::Return);
+        c.patch_jump(enter, return_addr);
     }
 
     // Patch the bootstrap Call.
@@ -364,10 +364,10 @@ fn check_refs(
 
 /// Returns the set of rule names that are left-recursive — both direct
 /// (`A <- A α / β`) and indirect (`A <- B …; B <- A …`). Each such rule
-/// must use the LR prologue/epilogue (`LRBody` / `LRTail`) instead of
-/// the standard `MemoOpen` / `MemoClose`, so its packrat slot isn't
-/// written with a value that depends on an in-progress LR seed of a
-/// sibling in the same cycle.
+/// is emitted with `RuleEnter(_, RuleKind::Lr, _)` and closed with
+/// `LRTail` instead of `MemoClose`, so its packrat slot isn't written
+/// with a value that depends on an in-progress LR seed of a sibling in
+/// the same cycle.
 ///
 /// Algorithm:
 /// 1. Compute may-match-empty (nullability) per rule via a fixpoint.

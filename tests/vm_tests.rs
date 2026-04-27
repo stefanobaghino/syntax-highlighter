@@ -1,5 +1,5 @@
 use syntax_highlighter::pegvm::{
-    Capture, CaptureKind, CharSet, Instruction, Label, MatchResult, MemoId, VM,
+    Capture, CaptureKind, CharSet, Instruction, Label, MatchResult, MemoId, RuleKind, VM,
 };
 
 fn run(program: &[Instruction], input: &[u8]) -> MatchResult {
@@ -463,9 +463,9 @@ fn partial_match_captures_survive_backtrack_below_watermark() {
     assert_eq!(r.captures, vec![cap(0, 0, 2)]);
 }
 
-// Hand-built bytecode for direct left-recursion. The compiler doesn't yet
-// emit `LRBody` / `LRTail`; these tests pin the VM-level semantics so the
-// compiler milestone can be layered on with confidence. Equivalent grammar:
+// Hand-built bytecode for direct left-recursion. These tests pin the
+// VM-level semantics on a raw program so VM changes can be validated
+// without going through the compiler. Equivalent grammar:
 //
 //     expr <- expr "+" "n" / "n"
 //
@@ -473,9 +473,9 @@ fn partial_match_captures_survive_backtrack_below_watermark() {
 //
 //      0: Call(2)              ; bootstrap → expr
 //      1: End
-//      2: LRBody(0, 14)        ; LR prologue (return_label = 14, the Return)
+//      2: RuleEnter(0, Lr, 14) ; LR prologue (return_label = 14, the Return)
 //      3: Choice(11)           ; body: try first alternative
-//      4: Call(2)              ;   recursive call (LRBody hit replays seed
+//      4: Call(2)              ;   recursive call (RuleEnter hit replays seed
 //                              ;   or fails when seed is None)
 //      5: Char('+')
 //      6: CaptureBegin(0)      ;   tag the right operand as kind=0
@@ -497,8 +497,8 @@ fn lr_expr_program() -> Vec<Instruction> {
         // 0: bootstrap
         Instruction::Call(Label(2)),
         Instruction::End,
-        // 2: LRBody (return_addr = 14)
-        Instruction::LRBody(MemoId(0), Label(14)),
+        // 2: RuleEnter (return_addr = 14)
+        Instruction::RuleEnter(MemoId(0), RuleKind::Lr, Label(14)),
         // 3 (body_start): Choice → 11 (second alternative)
         Instruction::Choice(Label(10)),
         // 4: Call(expr)  -- recursive
