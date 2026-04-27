@@ -107,6 +107,62 @@ fn empty_cache_behaves_like_fresh_vm() {
     assert_eq!(fresh, seeded);
 }
 
+#[test]
+fn lr_cache_entry_invalidated_by_edit_inside_examined_range() {
+    // The LR cache write at LRTail (#48) records examined_max as the
+    // high-water mark across every iteration. apply_edit's invalidation
+    // predicate (`start_sp < old_end && examined_max > start`) must
+    // therefore drop the entry on any edit that touches what the
+    // seed-and-grow loop looked at.
+    use syntax_highlighter::pegc;
+    use syntax_highlighter::pegvm::Edit;
+    let prog = pegc::compile("expr <- expr '+' [0-9]+ / [0-9]+").unwrap();
+
+    let (_, _, mut cache) = VM::new(&prog.code, b"1+2+3")
+        .with_memo_threshold(0)
+        .run_with_cache();
+    let entries_before = cache.len();
+    assert!(
+        entries_before >= 1,
+        "cold LR parse should populate the cache, got {entries_before}"
+    );
+
+    // Replace byte 0 ('1' → '9'). start_sp=0 < old_end=1 and the
+    // entry's examined_max covers byte 0, so the entry must be dropped.
+    cache.apply_edit(Edit::replacement(0, 1, 1));
+    assert!(
+        cache.len() < entries_before,
+        "edit in examined range should invalidate the LR entry (before: {}, after: {})",
+        entries_before,
+        cache.len(),
+    );
+}
+
+#[test]
+fn lr_cache_round_trip_after_edit_matches_fresh_parse() {
+    // End-to-end: cold parse + edit + re-parse via the edited cache
+    // must produce the same MatchResult as a fresh parse of the new
+    // input. This validates that the LR entry's examined_max bound is
+    // correct: too small and a stale entry would be reused; too large
+    // and an irrelevant edit would invalidate too aggressively
+    // (correctness preserved either way, but only the right bound
+    // gives an equivalent fresh-parse result on every edit).
+    use syntax_highlighter::pegc;
+    use syntax_highlighter::pegvm::Edit;
+    let prog = pegc::compile("expr <- expr '+' [0-9]+ / [0-9]+").unwrap();
+
+    let (_, _, mut cache) = VM::new(&prog.code, b"1+2+3")
+        .with_memo_threshold(0)
+        .run_with_cache();
+    cache.apply_edit(Edit::replacement(0, 1, 1));
+
+    let (incremental, _, _) = VM::new_with_cache(&prog.code, b"9+2+3", cache)
+        .with_memo_threshold(0)
+        .run_with_cache();
+    let fresh = VM::new(&prog.code, b"9+2+3").with_memo_threshold(0).run();
+    assert_eq!(incremental, fresh);
+}
+
 const JSON_GRAMMAR: &str = include_str!("../grammars/json.peg");
 const TOML_GRAMMAR: &str = include_str!("../grammars/toml.peg");
 const SQL_GRAMMAR: &str = include_str!("../grammars/sqlite.peg");

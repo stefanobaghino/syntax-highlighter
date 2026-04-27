@@ -284,6 +284,51 @@ fn and_predicate_with_memoized_rule() {
     assert!(stats.hits >= 1, "expected a hit, got {}", stats.hits);
 }
 
+/// LR-specific cache write (#48): a converged seed must land in the memo
+/// so a re-parse of the same input at the same sp short-circuits via a
+/// cache hit instead of re-running the seed-and-grow loop.
+#[test]
+fn lr_converged_seed_persists_across_parses() {
+    use syntax_highlighter::pegc;
+    use syntax_highlighter::pegvm::MemoCache;
+    let src = r#"
+        expr <- expr '+' [0-9]+ / [0-9]+
+    "#;
+    let prog = pegc::compile(src).expect("compile");
+    let input = b"1+2+3";
+
+    // Cold parse populates the memo with the LR rule's converged seed.
+    let (cold, cold_stats, memo) = VM::new(&prog.code, input)
+        .with_memo_threshold(0)
+        .run_with_cache();
+    assert!(cold.complete);
+    assert_eq!(cold.matched, 5);
+    assert_eq!(cold_stats.hits, 0, "cold run starts empty");
+    let cold_entries = memo.len();
+    assert!(
+        cold_entries >= 1,
+        "expected ≥1 memo entry after cold LR parse, got {cold_entries}"
+    );
+
+    // Warm parse with the same input: LRBody at sp=0 must hit the cache.
+    let (warm, warm_stats, _) = VM::new_with_cache(&prog.code, input, memo)
+        .with_memo_threshold(0)
+        .run_with_cache();
+    assert_eq!(warm, cold);
+    assert!(
+        warm_stats.hits >= 1,
+        "expected ≥1 cache hit on warm LR parse, got {}",
+        warm_stats.hits
+    );
+
+    // Sanity check: an empty cache reproduces the cold-run misses,
+    // confirming the warm hit came from the seeded cache.
+    let (_, fresh_stats, _) = VM::new_with_cache(&prog.code, input, MemoCache::new())
+        .with_memo_threshold(0)
+        .run_with_cache();
+    assert_eq!(fresh_stats.hits, 0);
+}
+
 /// A grammar that's memoized-by-default produces byte-identical results on
 /// a "happy path" input with no backtracking — the cache has no effect on
 /// correctness, only on work done.
