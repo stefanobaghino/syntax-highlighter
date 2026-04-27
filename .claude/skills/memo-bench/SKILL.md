@@ -44,8 +44,8 @@ compare cells.
 | `thresh` | bytes | The `memo_threshold` value in effect. `MemoClose` only writes back entries whose matched span is `≥ thresh`. |
 | `time(us)` | µs | Median of `RUNS_PER_CELL` (default 11) wall-clock runs. |
 | `entries` | count | `MemoStats.entries` — distinct `(memo_id, start_sp)` slots in the memo table at end of run. Includes failure entries (which are not threshold-filtered). |
-| `hits` | count | `MemoStats.hits` — `MemoOpen` invocations that resolved via cache. |
-| `misses` | count | `MemoStats.misses` — `MemoOpen` invocations that had to execute the rule body. `hits + misses` = total lookups. |
+| `hits` | count | `MemoStats.hits` — `RuleEnter` invocations that resolved via cache (both `Memo` and `Lr` kinds). |
+| `misses` | count | `MemoStats.misses` — `RuleEnter` cache misses on `RuleKind::Memo` rules. LR-rule misses aren't counted (they may resolve via a live `LFrame` rather than executing the body). |
 | `hit_rate` | % | `hits / (hits + misses)`. Use this, not `hits / entries` — they differ once `thresh > 0`. |
 
 ## Reading the sweep
@@ -83,9 +83,9 @@ Typical healthy shape for one grammar/input pair:
   maintenance trigger — the roadmap entry for "More language grammars"
   (`README.md`) calls it out.
 - **After significant VM changes** that alter memo-table access patterns
-  (new instructions, changes to `MemoOpen`/`MemoClose`, memo replay
-  semantics). The correctness guard catches breakage; the sweep shape
-  tells you whether the tuning is still right.
+  (new instructions, changes to `RuleEnter`/`MemoClose`/`LRTail`, memo
+  replay semantics). The correctness guard catches breakage; the sweep
+  shape tells you whether the tuning is still right.
 - **Not after plain VM changes** that don't touch memoization — the
   bench is opinionated about what it measures, not a general
   regression check.

@@ -21,7 +21,7 @@
 //!   byte has changed) and entries that started before but peeked into
 //!   it (their outcome might have depended on the changed bytes).
 //! - Any **failure** entry is dropped unconditionally on every edit.
-//!   Failure entries short-circuit `MemoOpen` to `fail()` on re-entry
+//!   Failure entries short-circuit `RuleEnter`'s prologue to `fail()` on re-entry
 //!   without carrying the farthest-sp capture snapshot that a real
 //!   `fail()` along the slow path would write to `max_captures`; if a
 //!   warm parse hits such an entry and the overall parse then fails,
@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn failure_entries_are_dropped_on_any_edit() {
-        // Failure entries carry no capture snapshot, so a warm `MemoOpen`
+        // Failure entries carry no capture snapshot, so a warm `RuleEnter`
         // hit that goes to `fail()` cannot update `max_sp`/`max_captures`
         // the way a slow-path fail would. Rather than teach the VM to
         // reconstruct that snapshot, we drop every failure entry on every

@@ -310,7 +310,7 @@ fn lr_converged_seed_persists_across_parses() {
         "expected ≥1 memo entry after cold LR parse, got {cold_entries}"
     );
 
-    // Warm parse with the same input: LRBody at sp=0 must hit the cache.
+    // Warm parse with the same input: RuleEnter at sp=0 must hit the cache.
     let (warm, warm_stats, _) = VM::new_with_cache(&prog.code, input, memo)
         .with_memo_threshold(0)
         .run_with_cache();

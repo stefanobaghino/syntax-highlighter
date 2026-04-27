@@ -30,6 +30,24 @@ pub struct CaptureKind(pub u16);
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
 pub struct MemoId(pub u32);
 
+/// Discriminator on a [`Instruction::RuleEnter`] selecting the post-cache-miss
+/// behavior. The cache-hit prologue is identical for both kinds; only the
+/// miss path differs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuleKind {
+    /// Plain packrat memoization. On a cache miss the VM pushes a
+    /// `StackEntry::Memo` frame and falls through to the rule body;
+    /// `MemoClose` commits a success entry, `fail()`'s `Memo` arm
+    /// commits a failure entry on escape.
+    Memo,
+    /// Bounded left recursion. On a cache miss the VM walks the live
+    /// stack for an in-flight `LFrame` at the same `(memo_id, sp)`;
+    /// a recursive re-entry replays the prior seed (or `fail()`s if no
+    /// seed exists yet). First entry pushes a fresh `LFrame`; `LRTail`
+    /// commits the converged seed.
+    Lr,
+}
+
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct CharSet([u8; 32]);
@@ -158,27 +176,23 @@ pub enum Instruction {
     Call(Label),
     Return,
 
-    /// Rule-level memoization prologue. On a cache hit the VM advances `sp`
-    /// to the cached end and jumps to the `Label` (the rule's `Return`
-    /// address); on a miss it pushes a `StackEntry::Memo` frame and falls
-    /// through to the rule body.
-    MemoOpen(MemoId, Label),
+    /// Rule-entry prologue. Probes the packrat cache at `(memo_id, sp)`:
+    /// on a hit replays the cached captures, advances `sp` to the cached
+    /// end, and jumps to the `Label` (the rule's `Return` address); on a
+    /// miss the post-cache behavior depends on the [`RuleKind`]:
+    /// - [`RuleKind::Memo`]: pushes a `StackEntry::Memo` frame and falls
+    ///   through to the rule body. `MemoClose` commits the entry on
+    ///   success; `fail()`'s `Memo` arm commits a failure entry on escape.
+    /// - [`RuleKind::Lr`]: walks the stack for an in-flight `LFrame` at
+    ///   `(memo_id, sp)`. A recursive re-entry replays the prior seed
+    ///   (`seed: None` ⇒ `fail()`; `seed: Some` ⇒ jump to `Label`); first
+    ///   entry pushes a fresh `LFrame { seed: None, return_addr: Label }`
+    ///   and falls through. `LRTail` commits the converged seed.
+    RuleEnter(MemoId, RuleKind, Label),
     /// Rule-level memoization epilogue. Pops the matching `StackEntry::Memo`
     /// frame and records a success entry for this rule at the frame's
-    /// `start_sp`.
+    /// `start_sp` (subject to the memo-threshold filter).
     MemoClose(MemoId),
-
-    /// Left-recursion prologue. Replaces `MemoOpen` at the head of rules the
-    /// compiler detected as directly left-recursive. On entry, walks the
-    /// stack for an `LFrame { memo_id, start_sp }` matching `(memo_id, sp)`:
-    /// - **Hit** (recursive re-entry): apply the seed. `seed: None` enters
-    ///   `fail()`; `seed: Some(end_sp, captures)` replays captures, sets
-    ///   `sp = end_sp`, and jumps to the `Label` — the rule's `Return`
-    ///   address — so the recursive call appears to have returned the seed.
-    /// - **Miss** (first invocation at this `sp`): push an `LFrame` with
-    ///   `seed: None` and the `Label` stored as `return_addr`; fall through
-    ///   to the rule body.
-    LRBody(MemoId, Label),
     /// Left-recursion iteration controller. Sits between the body and the
     /// rule's `Return`. Peeks the topmost `LFrame` (must match `MemoId`).
     /// Decision:
@@ -187,7 +201,8 @@ pub enum Instruction {
     ///   `start_sp`, truncate captures to the baseline, jump to the `Label`
     ///   (body start) to re-run.
     /// - No growth: apply the seed (replay captures, set `sp = seed.end_sp`),
-    ///   pop the `LFrame`, fall through to `Return`.
+    ///   pop the `LFrame`, write the converged seed to the packrat cache
+    ///   (subject to the threshold filter), and fall through to `Return`.
     LRTail(MemoId, Label),
 
     CaptureBegin(CaptureKind),

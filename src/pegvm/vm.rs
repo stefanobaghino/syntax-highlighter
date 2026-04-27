@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::instruction::{CaptureKind, Instruction, MemoId};
+use super::instruction::{CaptureKind, Instruction, MemoId, RuleKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Capture {
@@ -19,24 +19,25 @@ enum StackEntry {
     Return {
         ip: usize,
     },
-    /// Frame for an in-flight memoized rule call. Pushed by `MemoOpen` on a
-    /// cache miss, popped by `MemoClose` on success (which records the entry)
-    /// or by `fail()` when the rule escapes via failure (which records a
-    /// failure entry). Holds enough state to locate the cache slot
-    /// (`memo_id`, `start_sp`) and to slice the captures produced inside the
-    /// rule (`capture_start_len`).
+    /// Frame for an in-flight memoized rule call. Pushed by `RuleEnter`'s
+    /// `RuleKind::Memo` miss path, popped by `MemoClose` on success (which
+    /// records the entry) or by `fail()` when the rule escapes via failure
+    /// (which records a failure entry). Holds enough state to locate the
+    /// cache slot (`memo_id`, `start_sp`) and to slice the captures
+    /// produced inside the rule (`capture_start_len`).
     Memo {
         memo_id: MemoId,
         start_sp: usize,
         capture_start_len: usize,
     },
     /// Frame for an in-flight left-recursive rule invocation. Pushed by
-    /// `LRBody` on the first entry at a given `sp`; popped by `LRTail` when
-    /// the seed-and-grow loop converges, or by `fail()` (which uses the
-    /// `seed` to decide between rescuing the rule with the prior seed or
-    /// continuing to unwind). On convergence `LRTail` writes the seed to
-    /// `self.memo` (subject to the threshold filter); failure entries
-    /// for LR rules are not cached yet (#48 scoped to converged seeds).
+    /// `RuleEnter`'s `RuleKind::Lr` miss path on the first entry at a
+    /// given `sp`; popped by `LRTail` when the seed-and-grow loop
+    /// converges, or by `fail()` (which uses the `seed` to decide between
+    /// rescuing the rule with the prior seed or continuing to unwind).
+    /// On convergence `LRTail` writes the seed to `self.memo` (subject to
+    /// the threshold filter); failure entries for LR rules are not
+    /// cached yet (#48 scoped to converged seeds).
     LFrame {
         memo_id: MemoId,
         start_sp: usize,
@@ -83,15 +84,17 @@ pub struct MemoStats {
     /// end of the run. Each entry represents one cached rule outcome
     /// (success or failure).
     pub entries: usize,
-    /// Number of times `MemoOpen` resolved via a cached entry instead of
-    /// re-executing the rule body.
+    /// Number of times `RuleEnter`'s shared cache-hit prologue resolved
+    /// via a cached entry instead of re-executing the rule body. Counts
+    /// hits for both `RuleKind::Memo` and `RuleKind::Lr` rules.
     pub hits: usize,
-    /// Number of `MemoOpen` invocations that did *not* find a cached entry
-    /// and had to execute the rule body. With the memo threshold at 0,
-    /// every miss produces an entry; with a non-zero threshold, successful
-    /// miss bodies shorter than the threshold are not written back, so
-    /// `entries` and `misses` diverge. `hits + misses` is the total
-    /// lookup count.
+    /// Number of `RuleEnter` cache misses on `RuleKind::Memo` rules — i.e.
+    /// non-LR rules that had to execute the body. LR-rule misses are not
+    /// counted here because the LR miss path may resolve via a live
+    /// `LFrame` (recursive entry) rather than executing the body. With
+    /// the memo threshold at 0, every Memo miss produces an entry; with
+    /// a non-zero threshold, successful miss bodies shorter than the
+    /// threshold are not written back, so `entries` and `misses` diverge.
     pub misses: usize,
 }
 
@@ -121,7 +124,8 @@ pub struct VM<'p, 'i> {
     memo: HashMap<(MemoId, usize), MemoEntry>,
     /// Running count of resolved cache hits, exposed via `MemoStats`.
     memo_hits: usize,
-    /// Running count of `MemoOpen` cache misses, exposed via `MemoStats`.
+    /// Running count of `RuleEnter` cache misses on `RuleKind::Memo`
+    /// rules, exposed via `MemoStats`. See [`MemoStats::misses`].
     memo_misses: usize,
     /// Minimum successful-span length (in bytes) for which `MemoClose` will
     /// write the outcome back to the cache. Default is
@@ -383,27 +387,21 @@ impl<'p, 'i> VM<'p, 'i> {
                     };
                     self.ip = ret_ip;
                 }
-                Instruction::MemoOpen(memo_id, return_label) => {
+                Instruction::RuleEnter(memo_id, kind, return_label) => {
+                    // Shared cache-hit prologue. Both kinds probe the same
+                    // packrat slot; only the post-miss frame layout differs.
+                    // The `entry` borrow lives across the capture-replay loop
+                    // and is released by NLL before the kind branch below,
+                    // so the miss path can mutate `self` freely.
                     if let Some(entry) = self.memo.get(&(*memo_id, self.sp)) {
                         self.memo_hits += 1;
-                        // Cache hit substitutes for executing the rule body;
-                        // propagate its examined watermark to the enclosing
-                        // rule (if any) so an outer rule's `examined_max`
-                        // subsumes everything this call would have looked at.
-                        // The bump is deferred past the `entry` borrow
-                        // below (`self.bump_top_memo_examined` is `&mut
-                        // self` and would conflict with it).
                         let hit_examined = entry.examined_max;
                         match entry.end_sp {
                             Some(end_sp) => {
-                                // Success hit: replay captures into the live
-                                // buffer. They are keyed by absolute offsets
-                                // and valid iff this hit fires at the same
-                                // start_sp — which is exactly the key we just
-                                // matched on. Insert as already-closed so the
-                                // enclosing `CaptureEnd`'s `rposition` search
-                                // (which binds to the innermost still-open
-                                // capture) skips over them.
+                                // Success hit: replay captures already-closed
+                                // (the enclosing `CaptureEnd`'s `rposition`
+                                // search binds to the innermost still-open
+                                // capture and skips over them).
                                 for c in &entry.captures {
                                     self.captures.push(OpenCapture {
                                         kind: c.kind,
@@ -411,41 +409,105 @@ impl<'p, 'i> VM<'p, 'i> {
                                         end: Some(c.end),
                                     });
                                 }
-                                // `entry` is no longer used past this point;
-                                // the immutable borrow of `self.memo` ends
-                                // by NLL, releasing `&mut self` for the
-                                // bump and maybe_snapshot below.
                                 self.bump_top_memo_examined(hit_examined);
                                 self.sp = end_sp;
                                 self.ip = return_label.0;
-                                // Applying a hit advances `sp` past code that
-                                // did not execute; the farthest-failure
-                                // bookkeeping must see the advance.
+                                // Hit advances sp past code that didn't run;
+                                // farthest-failure bookkeeping must see it.
                                 self.maybe_snapshot();
                             }
                             None => {
                                 // Cached failure: enter fail() immediately
-                                // without re-executing the rule body. Do not
-                                // push a Memo frame.
+                                // without re-executing the rule body or
+                                // pushing any frame.
                                 self.bump_top_memo_examined(hit_examined);
                                 if !self.fail() {
                                     return self.finalize_partial();
                                 }
                             }
                         }
-                    } else {
-                        self.memo_misses += 1;
-                        self.stack.push(StackEntry::Memo {
-                            memo_id: *memo_id,
-                            start_sp: self.sp,
-                            capture_start_len: self.captures.len(),
-                        });
-                        // Parallel watermark for this frame. Starts at the
-                        // rule's entry sp; read sites bump it as the body
-                        // executes. Popped together with the `Memo` frame
-                        // at `MemoClose` or in `fail()`'s `Memo` arm.
-                        self.memo_examined.push(self.sp);
-                        self.ip += 1;
+                        continue;
+                    }
+                    // Cache miss — frame layout depends on the kind.
+                    match kind {
+                        RuleKind::Memo => {
+                            self.memo_misses += 1;
+                            self.stack.push(StackEntry::Memo {
+                                memo_id: *memo_id,
+                                start_sp: self.sp,
+                                capture_start_len: self.captures.len(),
+                            });
+                            // Parallel watermark for this frame. Starts at the
+                            // rule's entry sp; read sites bump it as the body
+                            // executes. Popped together with the `Memo` frame
+                            // at `MemoClose` or in `fail()`'s `Memo` arm.
+                            self.memo_examined.push(self.sp);
+                            self.ip += 1;
+                        }
+                        RuleKind::Lr => {
+                            // Walk the stack top-down for an in-flight LFrame
+                            // at the same (memo_id, sp). The packrat probe
+                            // above has already returned None, so any matching
+                            // LFrame is a current recursive re-entry rather
+                            // than a stale converged seed.
+                            let lookup: Option<Option<LSeed>> =
+                                self.stack.iter().rev().find_map(|e| {
+                                    if let StackEntry::LFrame {
+                                        memo_id: id,
+                                        start_sp,
+                                        seed,
+                                        ..
+                                    } = e
+                                    {
+                                        if *id == *memo_id && *start_sp == self.sp {
+                                            return Some(seed.clone());
+                                        }
+                                    }
+                                    None
+                                });
+                            match lookup {
+                                Some(Some(found)) => {
+                                    // Recursive entry with a seed: replay
+                                    // captures and jump to the rule's Return
+                                    // so the caller's `Call`-pushed Return
+                                    // frame fires normally.
+                                    for c in &found.captures {
+                                        self.captures.push(OpenCapture {
+                                            kind: c.kind,
+                                            start: c.start,
+                                            end: Some(c.end),
+                                        });
+                                    }
+                                    self.bump_top_memo_examined(found.end_sp);
+                                    self.sp = found.end_sp;
+                                    self.ip = return_label.0;
+                                    self.maybe_snapshot();
+                                }
+                                Some(None) => {
+                                    // Recursive entry with no seed yet — the
+                                    // rule has not succeeded once at this
+                                    // position, so the recursive call must
+                                    // fail (bound 0).
+                                    if !self.fail() {
+                                        return self.finalize_partial();
+                                    }
+                                }
+                                None => {
+                                    // First entry at this sp — push an LFrame
+                                    // and a paired memo_examined watermark,
+                                    // then fall through to the body.
+                                    self.stack.push(StackEntry::LFrame {
+                                        memo_id: *memo_id,
+                                        start_sp: self.sp,
+                                        capture_start_len: self.captures.len(),
+                                        return_addr: return_label.0,
+                                        seed: None,
+                                    });
+                                    self.memo_examined.push(self.sp);
+                                    self.ip += 1;
+                                }
+                            }
+                        }
                     }
                 }
                 Instruction::MemoClose(memo_id) => {
@@ -477,9 +539,10 @@ impl<'p, 'i> VM<'p, 'i> {
                         self.captures.len(),
                     );
                     // Pop this frame's examined watermark. Every `Memo`
-                    // frame push (in `MemoOpen` miss) is paired with a
-                    // `memo_examined` push, and this is the only
-                    // non-failure pop site, so the stacks must align.
+                    // frame push (in `RuleEnter`'s Memo-kind miss path)
+                    // is paired with a `memo_examined` push, and this is
+                    // the only non-failure pop site, so the stacks must
+                    // align.
                     let examined_max = self
                         .memo_examined
                         .pop()
@@ -493,138 +556,27 @@ impl<'p, 'i> VM<'p, 'i> {
                     // Propagate up so the parent rule's watermark covers
                     // everything this one examined.
                     self.bump_top_memo_examined(examined_max);
-                    // Threshold filter: skip caching if the matched span is
-                    // smaller than `memo_threshold`. Tiny leaf rules pay the
-                    // lookup cost without a meaningful storage win — see
-                    // GPeg's 512-byte default and Yedidia §5.2.4. Captures
-                    // produced inside the rule remain in the live buffer
-                    // (they are the caller's captures now); only the memo
-                    // entry is dropped.
-                    if self.sp - start_sp >= self.memo_threshold {
-                        // Snapshot the captures produced inside the rule.
-                        // All of them must be closed at this point — PEG
-                        // captures are lexically scoped to `@name{...}` and
-                        // cannot straddle a rule boundary, so any
-                        // `OpenCapture` with `end.is_none()` would be a
-                        // compiler bug.
-                        let rule_captures: Vec<Capture> = self.captures[capture_start_len..]
-                            .iter()
-                            .map(|c| {
-                                debug_assert!(
-                                    c.end.is_some(),
-                                    "MemoClose: open capture straddles rule boundary"
-                                );
-                                Capture {
-                                    kind: c.kind,
-                                    start: c.start,
-                                    end: c.end.unwrap_or(self.sp),
-                                }
-                            })
-                            .collect();
-                        self.memo.insert(
-                            (*memo_id, start_sp),
-                            MemoEntry {
-                                end_sp: Some(self.sp),
-                                examined_max,
-                                captures: rule_captures,
-                            },
-                        );
-                    }
+                    // Snapshot the captures produced inside the rule. All of
+                    // them must be closed at this point — PEG captures are
+                    // lexically scoped to `@name{...}` and cannot straddle a
+                    // rule boundary, so any `OpenCapture` with `end.is_none()`
+                    // would be a compiler bug.
+                    let rule_captures: Vec<Capture> = self.captures[capture_start_len..]
+                        .iter()
+                        .map(|c| {
+                            debug_assert!(
+                                c.end.is_some(),
+                                "MemoClose: open capture straddles rule boundary"
+                            );
+                            Capture {
+                                kind: c.kind,
+                                start: c.start,
+                                end: c.end.unwrap_or(self.sp),
+                            }
+                        })
+                        .collect();
+                    self.cache_success(*memo_id, start_sp, self.sp, examined_max, rule_captures);
                     self.ip += 1;
-                }
-                Instruction::LRBody(memo_id, return_label) => {
-                    // Packrat cache check first — mirrors MemoOpen's hit
-                    // path. A cached entry at this (memo_id, sp) was
-                    // committed by a previous outer invocation that already
-                    // popped its LFrame; a current in-flight LFrame for the
-                    // same key cannot coexist, so the live-stack walk
-                    // below is only reached on a cache miss.
-                    if let Some(entry) = self.memo.get(&(*memo_id, self.sp)) {
-                        self.memo_hits += 1;
-                        let hit_examined = entry.examined_max;
-                        match entry.end_sp {
-                            Some(end_sp) => {
-                                for c in &entry.captures {
-                                    self.captures.push(OpenCapture {
-                                        kind: c.kind,
-                                        start: c.start,
-                                        end: Some(c.end),
-                                    });
-                                }
-                                self.bump_top_memo_examined(hit_examined);
-                                self.sp = end_sp;
-                                self.ip = return_label.0;
-                                self.maybe_snapshot();
-                            }
-                            None => {
-                                self.bump_top_memo_examined(hit_examined);
-                                if !self.fail() {
-                                    return self.finalize_partial();
-                                }
-                            }
-                        }
-                        continue;
-                    }
-                    // Walk the stack top-down for an LFrame at the same
-                    // (memo_id, sp) — that signals recursive re-entry. For
-                    // direct LR the cycle has length 1, so any matching
-                    // LFrame is this rule's own.
-                    let lookup: Option<Option<LSeed>> = self.stack.iter().rev().find_map(|e| {
-                        if let StackEntry::LFrame {
-                            memo_id: id,
-                            start_sp,
-                            seed,
-                            ..
-                        } = e
-                        {
-                            if *id == *memo_id && *start_sp == self.sp {
-                                return Some(seed.clone());
-                            }
-                        }
-                        None
-                    });
-                    match lookup {
-                        Some(Some(found)) => {
-                            // Recursive entry with a seed: replay captures
-                            // already-closed (mirrors `MemoOpen`'s hit
-                            // path), set sp to seed end, and jump to the
-                            // rule's Return so the caller's `Call`-pushed
-                            // Return frame fires normally.
-                            for c in &found.captures {
-                                self.captures.push(OpenCapture {
-                                    kind: c.kind,
-                                    start: c.start,
-                                    end: Some(c.end),
-                                });
-                            }
-                            self.bump_top_memo_examined(found.end_sp);
-                            self.sp = found.end_sp;
-                            self.ip = return_label.0;
-                            self.maybe_snapshot();
-                        }
-                        Some(None) => {
-                            // Recursive entry with no seed yet — the rule
-                            // has not succeeded once at this position, so
-                            // the recursive call must fail (bound 0).
-                            if !self.fail() {
-                                return self.finalize_partial();
-                            }
-                        }
-                        None => {
-                            // First entry at this sp — push an LFrame and
-                            // a paired memo_examined watermark, then fall
-                            // through to the body.
-                            self.stack.push(StackEntry::LFrame {
-                                memo_id: *memo_id,
-                                start_sp: self.sp,
-                                capture_start_len: self.captures.len(),
-                                return_addr: return_label.0,
-                                seed: None,
-                            });
-                            self.memo_examined.push(self.sp);
-                            self.ip += 1;
-                        }
-                    }
                 }
                 Instruction::LRTail(memo_id, body_start) => {
                     // Peek the topmost LFrame. The body just succeeded; we
@@ -706,25 +658,16 @@ impl<'p, 'i> VM<'p, 'i> {
                             None => (start_sp, Vec::new()),
                         };
                         self.sp = final_sp;
-                        // Cache the converged seed under the same threshold
-                        // filter MemoClose uses. examined is the high-water
-                        // mark across every iteration of the seed-and-grow
-                        // loop (LRBody pushed one memo_examined slot at
-                        // entry; growth iterations don't pop it, only this
-                        // commit does), so it is the correct invalidation
-                        // bound for MemoCache::apply_edit. Failure caching
-                        // for LR rules is not yet implemented (#48 scoped
-                        // to converged seeds only).
-                        if final_sp - start_sp >= self.memo_threshold {
-                            self.memo.insert(
-                                (*memo_id, start_sp),
-                                MemoEntry {
-                                    end_sp: Some(final_sp),
-                                    examined_max: examined,
-                                    captures: seed_captures,
-                                },
-                            );
-                        }
+                        // Cache the converged seed. `examined` is the
+                        // high-water mark across every iteration of the
+                        // seed-and-grow loop (RuleEnter's miss path pushed
+                        // one memo_examined slot at entry; growth iterations
+                        // don't pop it, only this commit does), so it is the
+                        // correct invalidation bound for
+                        // `MemoCache::apply_edit`. Failure caching for LR
+                        // rules is not yet implemented (#48 scoped to
+                        // converged seeds only).
+                        self.cache_success(*memo_id, start_sp, final_sp, examined, seed_captures);
                         self.maybe_snapshot();
                         self.ip += 1;
                     }
@@ -796,9 +739,10 @@ impl<'p, 'i> VM<'p, 'i> {
                     start_sp,
                     capture_start_len: _,
                 } => {
-                    // Pop the paired examined watermark. See `MemoOpen`
-                    // miss path — every `StackEntry::Memo` push is twinned
-                    // with a `memo_examined` push.
+                    // Pop the paired examined watermark. See
+                    // `RuleEnter`'s Memo-kind miss path — every
+                    // `StackEntry::Memo` push is twinned with a
+                    // `memo_examined` push.
                     let examined_max = self
                         .memo_examined
                         .pop()
@@ -808,7 +752,7 @@ impl<'p, 'i> VM<'p, 'i> {
                     // body. Captures produced inside the rule will be
                     // truncated by whichever `Backtrack` ultimately catches
                     // this unwind (its `capture_len` was snapshotted *before*
-                    // MemoOpen pushed this frame).
+                    // `RuleEnter`'s Memo-kind miss path pushed this frame).
                     self.memo.insert(
                         (memo_id, start_sp),
                         MemoEntry {
@@ -875,12 +819,40 @@ impl<'p, 'i> VM<'p, 'i> {
                     // growing past bound 0. Continue unwinding past this
                     // frame; the captures-truncate happens at whichever
                     // Backtrack ultimately catches the unwind (its
-                    // capture_len was snapshotted before LRBody pushed
-                    // this frame).
+                    // capture_len was snapshotted before `RuleEnter`'s
+                    // Lr-kind miss path pushed this frame).
                 }
             }
         }
         false
+    }
+
+    /// Threshold-filtered success-entry insert. Both `MemoClose` and
+    /// `LRTail`'s no-growth branch route through this helper so the
+    /// memo-threshold policy (skip caching when the matched span is
+    /// shorter than `memo_threshold` — see GPeg's 512-byte default and
+    /// Yedidia §5.2.4) lives in one place. The captures source differs
+    /// between callers (live buffer at `MemoClose`; already-closed
+    /// `LSeed::captures` at `LRTail`); both pre-process to a closed
+    /// `Vec<Capture>` before calling this.
+    fn cache_success(
+        &mut self,
+        memo_id: MemoId,
+        start_sp: usize,
+        end_sp: usize,
+        examined_max: usize,
+        captures: Vec<Capture>,
+    ) {
+        if end_sp - start_sp >= self.memo_threshold {
+            self.memo.insert(
+                (memo_id, start_sp),
+                MemoEntry {
+                    end_sp: Some(end_sp),
+                    examined_max,
+                    captures,
+                },
+            );
+        }
     }
 
     /// Bump the in-flight rule's examined watermark to at least `pos`.

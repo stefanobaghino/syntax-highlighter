@@ -193,7 +193,7 @@ mod tests {
 
     /// Regression pin: renaming a TOML section to something malformed
     /// leaves a top-level failure entry in the cache. A subsequent
-    /// delete must not short-circuit `MemoOpen` to `fail()` without
+    /// delete must not short-circuit `RuleEnter` to `fail()` without
     /// updating `max_sp` / `max_captures`, otherwise the incremental
     /// parse reports `matched == 0` while a fresh parse on the same
     /// input reaches the end of the valid prefix. Fix:

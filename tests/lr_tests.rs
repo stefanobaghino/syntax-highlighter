@@ -173,7 +173,7 @@ fn nullable_lr_on_empty_input_terminates() {
 #[test]
 fn right_recursive_grammar_is_not_marked_lr() {
     // Sanity: a right-recursive grammar must still compile and run
-    // (with the standard MemoOpen/MemoClose path). The compiler-level
+    // (with the standard Memo-kind RuleEnter/MemoClose path). The compiler-level
     // assertion is in compiler_tests; here we just confirm runtime
     // behavior is unchanged.
     let src = r#"
