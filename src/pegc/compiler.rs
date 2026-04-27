@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::pattern::Pattern;
 use crate::pegvm::{CaptureKind, Instruction, Label, MemoId, Program};
@@ -7,6 +7,11 @@ use crate::pegvm::{CaptureKind, Instruction, Label, MemoId, Program};
 pub enum CompileError {
     UndefinedRule(String),
     UnknownStartRule(String),
+    /// One or more rules participate in a left-recursive cycle longer
+    /// than length 1 (e.g. `A <- B …; B <- A …`). v1 of LR support
+    /// handles direct LR only; the cycle's rules are listed for the
+    /// grammar author. Tracked as a follow-up to #40.
+    IndirectLeftRecursion(Vec<String>),
 }
 
 impl std::fmt::Display for CompileError {
@@ -14,6 +19,11 @@ impl std::fmt::Display for CompileError {
         match self {
             CompileError::UndefinedRule(name) => write!(f, "undefined rule: {}", name),
             CompileError::UnknownStartRule(name) => write!(f, "unknown start rule: {}", name),
+            CompileError::IndirectLeftRecursion(cycle) => write!(
+                f,
+                "indirect left recursion across rules [{}] (only direct left recursion is supported)",
+                cycle.join(", ")
+            ),
         }
     }
 }
@@ -71,6 +81,8 @@ impl Compiler {
             Instruction::TestSet(s, _) => Instruction::TestSet(*s, target),
             Instruction::Call(_) => Instruction::Call(target),
             Instruction::MemoOpen(id, _) => Instruction::MemoOpen(*id, target),
+            Instruction::LRBody(id, _) => Instruction::LRBody(*id, target),
+            Instruction::LRTail(id, _) => Instruction::LRTail(*id, target),
             other => panic!("patch_jump: not a jump instruction: {:?}", other),
         };
         self.code[idx] = new;
@@ -254,6 +266,15 @@ pub(crate) fn compile_rules(
         return Err(CompileError::UnknownStartRule(start.to_string()));
     }
 
+    // Detect undefined NonTerminal references up front so the LR analysis
+    // doesn't have to defend against missing rules in the call graph.
+    for (rule_name, body) in rules {
+        check_refs(rule_name, body, rules)?;
+    }
+
+    // Identify directly left-recursive rules; reject indirect LR.
+    let direct_lr = analyze_left_recursion(rules)?;
+
     let mut c = Compiler::new();
     c.emit(Instruction::Call(Label(0))); // patched below
     c.emit(Instruction::End);
@@ -274,14 +295,27 @@ pub(crate) fn compile_rules(
         rule_addrs.insert(name.clone(), c.pos());
         let memo_id = MemoId(memo_count);
         memo_count += 1;
-        // MemoOpen's Label is patched to the Return address below so a cache
-        // hit can skip straight past the body to the rule's Return.
-        let memo_open = c.emit(Instruction::MemoOpen(memo_id, Label(0)));
-        c.compile_pat(&rules[name]);
-        c.emit(Instruction::MemoClose(memo_id));
-        let return_addr = c.pos();
-        c.emit(Instruction::Return);
-        c.patch_jump(memo_open, return_addr);
+        if direct_lr.contains(name.as_str()) {
+            // LR rule: LRBody … body … LRTail ; Return. No MemoOpen /
+            // MemoClose — the L-frame replaces packrat caching for this
+            // rule (LR rules are not memoized in v1).
+            let lr_body = c.emit(Instruction::LRBody(memo_id, Label(0)));
+            let body_start = c.pos();
+            c.compile_pat(&rules[name]);
+            c.emit(Instruction::LRTail(memo_id, Label(body_start)));
+            let return_addr = c.pos();
+            c.emit(Instruction::Return);
+            c.patch_jump(lr_body, return_addr);
+        } else {
+            // MemoOpen's Label is patched to the Return address below so a cache
+            // hit can skip straight past the body to the rule's Return.
+            let memo_open = c.emit(Instruction::MemoOpen(memo_id, Label(0)));
+            c.compile_pat(&rules[name]);
+            c.emit(Instruction::MemoClose(memo_id));
+            let return_addr = c.pos();
+            c.emit(Instruction::Return);
+            c.patch_jump(memo_open, return_addr);
+        }
     }
 
     // Patch the bootstrap Call.
@@ -302,4 +336,228 @@ pub(crate) fn compile_rules(
         capture_kinds: c.capture_names,
         memo_count: memo_count as usize,
     })
+}
+
+/// Walk a pattern reporting any `NonTerminal(name)` whose name isn't in
+/// `rules`. Splits the undefined-rule check out of the bytecode-emit pass
+/// so the LR analysis can assume every reference resolves.
+fn check_refs(
+    _rule: &str,
+    pat: &Pattern,
+    rules: &HashMap<String, Pattern>,
+) -> Result<(), CompileError> {
+    match pat {
+        Pattern::Literal(_) | Pattern::CharClass(_) | Pattern::AnyChar => Ok(()),
+        Pattern::Sequence(items) | Pattern::OrderedChoice(items) => {
+            for it in items {
+                check_refs(_rule, it, rules)?;
+            }
+            Ok(())
+        }
+        Pattern::Repeat(inner)
+        | Pattern::RepeatOne(inner)
+        | Pattern::Optional(inner)
+        | Pattern::NotPredicate(inner)
+        | Pattern::AndPredicate(inner)
+        | Pattern::Capture(_, inner) => check_refs(_rule, inner, rules),
+        Pattern::RecoverRepeat { inner, .. } => check_refs(_rule, inner, rules),
+        Pattern::NonTerminal(name) => {
+            if rules.contains_key(name) {
+                Ok(())
+            } else {
+                Err(CompileError::UndefinedRule(name.clone()))
+            }
+        }
+    }
+}
+
+/// Returns the set of rule names that are *directly* left-recursive
+/// (`A <- A α / β` and equivalent shapes). Indirect left recursion
+/// (cycle length > 1) is rejected with `CompileError::IndirectLeftRecursion`.
+///
+/// Algorithm:
+/// 1. Compute may-match-empty (nullability) per rule via a fixpoint.
+/// 2. Build the "first-call" graph: edge `A → B` iff `A`'s body can call
+///    `B` before consuming any input.
+/// 3. Find strongly connected components in that graph (Tarjan's). An SCC
+///    of size > 1 is indirect LR (rejected). An SCC of size 1 is direct
+///    LR iff the rule has a self-edge in the first-call graph.
+fn analyze_left_recursion(
+    rules: &HashMap<String, Pattern>,
+) -> Result<HashSet<String>, CompileError> {
+    let nullable = compute_nullable(rules);
+    let first_calls = compute_first_calls(rules, &nullable);
+
+    let sccs = tarjan_sccs(rules, &first_calls);
+    let mut direct_lr = HashSet::new();
+    for scc in &sccs {
+        if scc.len() > 1 {
+            let mut cycle = scc.clone();
+            cycle.sort();
+            return Err(CompileError::IndirectLeftRecursion(cycle));
+        }
+        let only = &scc[0];
+        if first_calls
+            .get(only)
+            .map(|s| s.contains(only))
+            .unwrap_or(false)
+        {
+            direct_lr.insert(only.clone());
+        }
+    }
+    Ok(direct_lr)
+}
+
+/// Per-rule nullability via fixpoint over the Pattern AST. A rule is
+/// nullable iff its body can match the empty string.
+fn compute_nullable(rules: &HashMap<String, Pattern>) -> HashSet<String> {
+    let mut nullable: HashSet<String> = HashSet::new();
+    loop {
+        let mut changed = false;
+        for (name, body) in rules {
+            if !nullable.contains(name) && pattern_nullable(body, &nullable) {
+                nullable.insert(name.clone());
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    nullable
+}
+
+fn pattern_nullable(pat: &Pattern, nullable: &HashSet<String>) -> bool {
+    match pat {
+        Pattern::Literal(bytes) => bytes.is_empty(),
+        Pattern::CharClass(_) | Pattern::AnyChar => false,
+        Pattern::Sequence(items) => items.iter().all(|p| pattern_nullable(p, nullable)),
+        Pattern::OrderedChoice(items) => items.iter().any(|p| pattern_nullable(p, nullable)),
+        Pattern::Repeat(_) | Pattern::Optional(_) => true,
+        Pattern::RepeatOne(inner) => pattern_nullable(inner, nullable),
+        // Predicates consume no input, so they always succeed-or-fail
+        // without advancing — treated as nullable for sequence
+        // propagation. They can still left-recurse: !A α matches only
+        // if A would fail at sp, and A's evaluation can left-recurse
+        // through itself just like a direct call.
+        Pattern::NotPredicate(_) | Pattern::AndPredicate(_) => true,
+        Pattern::Capture(_, inner) => pattern_nullable(inner, nullable),
+        Pattern::RecoverRepeat { .. } => true,
+        Pattern::NonTerminal(name) => nullable.contains(name),
+    }
+}
+
+/// First-call graph: `first_calls[A]` is the set of rules `A`'s body can
+/// invoke before consuming any input. Used to find left-recursive cycles.
+fn compute_first_calls(
+    rules: &HashMap<String, Pattern>,
+    nullable: &HashSet<String>,
+) -> HashMap<String, HashSet<String>> {
+    let mut out = HashMap::new();
+    for (name, body) in rules {
+        let mut s = HashSet::new();
+        collect_first_calls(body, nullable, &mut s);
+        out.insert(name.clone(), s);
+    }
+    out
+}
+
+fn collect_first_calls(pat: &Pattern, nullable: &HashSet<String>, out: &mut HashSet<String>) {
+    match pat {
+        Pattern::Literal(_) | Pattern::CharClass(_) | Pattern::AnyChar => {}
+        Pattern::Sequence(items) => {
+            for it in items {
+                collect_first_calls(it, nullable, out);
+                if !pattern_nullable(it, nullable) {
+                    break;
+                }
+            }
+        }
+        Pattern::OrderedChoice(items) => {
+            for it in items {
+                collect_first_calls(it, nullable, out);
+            }
+        }
+        Pattern::Repeat(inner)
+        | Pattern::RepeatOne(inner)
+        | Pattern::Optional(inner)
+        | Pattern::NotPredicate(inner)
+        | Pattern::AndPredicate(inner)
+        | Pattern::Capture(_, inner) => collect_first_calls(inner, nullable, out),
+        Pattern::RecoverRepeat { inner, .. } => collect_first_calls(inner, nullable, out),
+        Pattern::NonTerminal(name) => {
+            out.insert(name.clone());
+        }
+    }
+}
+
+/// Tarjan's strongly-connected-components on the first-call graph.
+/// Returned SCCs are non-empty; their internal order is not specified.
+fn tarjan_sccs(
+    rules: &HashMap<String, Pattern>,
+    edges: &HashMap<String, HashSet<String>>,
+) -> Vec<Vec<String>> {
+    struct State<'a> {
+        edges: &'a HashMap<String, HashSet<String>>,
+        index: usize,
+        indices: HashMap<String, usize>,
+        lowlink: HashMap<String, usize>,
+        on_stack: HashSet<String>,
+        stack: Vec<String>,
+        sccs: Vec<Vec<String>>,
+    }
+    let mut st = State {
+        edges,
+        index: 0,
+        indices: HashMap::new(),
+        lowlink: HashMap::new(),
+        on_stack: HashSet::new(),
+        stack: Vec::new(),
+        sccs: Vec::new(),
+    };
+    fn strongconnect(st: &mut State<'_>, v: &str) {
+        st.indices.insert(v.to_string(), st.index);
+        st.lowlink.insert(v.to_string(), st.index);
+        st.index += 1;
+        st.stack.push(v.to_string());
+        st.on_stack.insert(v.to_string());
+        let succs: Vec<String> = st
+            .edges
+            .get(v)
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default();
+        for w in succs {
+            if !st.indices.contains_key(&w) {
+                strongconnect(st, &w);
+                let wl = st.lowlink[&w];
+                let vl = st.lowlink[v];
+                st.lowlink.insert(v.to_string(), vl.min(wl));
+            } else if st.on_stack.contains(&w) {
+                let wi = st.indices[&w];
+                let vl = st.lowlink[v];
+                st.lowlink.insert(v.to_string(), vl.min(wi));
+            }
+        }
+        if st.lowlink[v] == st.indices[v] {
+            let mut scc = Vec::new();
+            loop {
+                let w = st.stack.pop().expect("tarjan: stack underflow");
+                st.on_stack.remove(&w);
+                let done = w == v;
+                scc.push(w);
+                if done {
+                    break;
+                }
+            }
+            st.sccs.push(scc);
+        }
+    }
+    let mut keys: Vec<&String> = rules.keys().collect();
+    keys.sort();
+    for k in keys {
+        if !st.indices.contains_key(k) {
+            strongconnect(&mut st, k);
+        }
+    }
+    st.sccs
 }

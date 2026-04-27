@@ -41,8 +41,12 @@
 //! working set sizes we care about; a position-indexed structure (e.g.
 //! `BTreeMap<usize, ...>`) is a future optimization if cache size grows.
 //!
-//! Note for future work: when left-recursion support lands, its L-table
-//! will need its own invalidation pass in parallel with this one.
+//! Left recursion: the LR table is **transient per run** — `LFrame`s live
+//! on the execution stack only and never enter [`MemoCache`], so this
+//! invalidation pass is unaffected. A future extension that caches
+//! converged LR seeds in the packrat memo would need a separate decision
+//! about what `examined_max` means across iterations of the seed-and-grow
+//! loop; tracked alongside `#40`.
 
 use std::collections::HashMap;
 

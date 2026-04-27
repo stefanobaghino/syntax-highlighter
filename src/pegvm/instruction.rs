@@ -168,6 +168,28 @@ pub enum Instruction {
     /// `start_sp`.
     MemoClose(MemoId),
 
+    /// Left-recursion prologue. Replaces `MemoOpen` at the head of rules the
+    /// compiler detected as directly left-recursive. On entry, walks the
+    /// stack for an `LFrame { memo_id, start_sp }` matching `(memo_id, sp)`:
+    /// - **Hit** (recursive re-entry): apply the seed. `seed: None` enters
+    ///   `fail()`; `seed: Some(end_sp, captures)` replays captures, sets
+    ///   `sp = end_sp`, and jumps to the `Label` — the rule's `Return`
+    ///   address — so the recursive call appears to have returned the seed.
+    /// - **Miss** (first invocation at this `sp`): push an `LFrame` with
+    ///   `seed: None` and the `Label` stored as `return_addr`; fall through
+    ///   to the rule body.
+    LRBody(MemoId, Label),
+    /// Left-recursion iteration controller. Sits between the body and the
+    /// rule's `Return`. Peeks the topmost `LFrame` (must match `MemoId`).
+    /// Decision:
+    /// - Body grew (`sp > seed.end_sp`, or first success with seed `None`):
+    ///   update seed to `Some(sp, captures-since-baseline)`, rewind to
+    ///   `start_sp`, truncate captures to the baseline, jump to the `Label`
+    ///   (body start) to re-run.
+    /// - No growth: apply the seed (replay captures, set `sp = seed.end_sp`),
+    ///   pop the `LFrame`, fall through to `Return`.
+    LRTail(MemoId, Label),
+
     CaptureBegin(CaptureKind),
     CaptureEnd,
 

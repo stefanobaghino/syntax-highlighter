@@ -82,6 +82,7 @@ Each `Pattern` variant maps to a small fixed sequence of `Instruction`s. The ins
 | Control flow | `Jump`, `Choice`, `Commit`, `PartialCommit`, `BackCommit`, `FailTwice`, `Fail` | Express ordered choice, repetition, and predicates in terms of pushing and popping backtrack records. |
 | Calls | `Call`, `Return` | Invoke a named rule and return from it — the `NonTerminal` variant compiles to `Call(address)`. |
 | Memoization | `MemoOpen`, `MemoClose` | Rule-level packrat cache. The compiler wraps every rule body with a pair; on a hit `MemoOpen` replays cached captures and jumps to the rule's `Return`; on a miss it pushes a `Memo` frame that `MemoClose` commits as a success entry or `fail()` commits as a failure entry. |
+| Left recursion | `LRBody`, `LRTail` | Replace `MemoOpen` / `MemoClose` for rules the compiler detected as directly left-recursive. `LRBody` walks the stack for an in-flight `LFrame` at `(memo_id, sp)`: a hit replays the seed (`None` ⇒ fail, `Some` ⇒ jump to Return), a miss pushes a fresh `LFrame`. `LRTail` is the seed-and-grow controller — growth re-iterates from `start_sp`, no growth commits the seed and falls through. LR rules are not packrat-cached in v1. |
 | Captures | `CaptureBegin`, `CaptureEnd` | Bracket a matched span with a kind tag so the VM can record it. |
 | Termination | `End` | Mark the end of a successful match. |
 
@@ -184,6 +185,28 @@ This partial result is what lets the highlighter render a styled prefix and a pl
 
 A grammar that opts into the `*^` recovery operator on a top-level repetition can flip a parse that would otherwise be partial into `complete: true`: the loop emits `recovery_kind`-tagged captures over the bytes it skipped past inner failures and exits cleanly at end of input. Captures returned in that case interleave the successful `inner` captures with the recovery captures in input order.
 
+## Left recursion
+
+The compiler detects directly-left-recursive rules (`A <- A α / β` and equivalent shapes; see `analyze_left_recursion` in `src/pegc/compiler.rs`) and emits `LRBody` / `LRTail` in place of `MemoOpen` / `MemoClose`. Indirect left recursion (cycles longer than 1) is rejected at compile time — see `CompileError::IndirectLeftRecursion`.
+
+Bytecode shape for an LR rule:
+
+```
+rule_addr:    LRBody(memo_id, return_addr)
+body_start:   <body>
+              LRTail(memo_id, body_start)
+return_addr:  Return
+```
+
+The runtime algorithm is **bounded left recursion** (Medeiros, Mascarenhas & Ierusalimschy 2014, §3.2 / §5):
+
+1. **First entry at `sp`**: `LRBody` pushes `StackEntry::LFrame { memo_id, start_sp, capture_start_len, return_addr, seed: None }`. Body executes.
+2. **Recursive entry at the same `sp`**: `LRBody` finds the existing `LFrame` on the stack. `seed: None` ⇒ `fail()`. `seed: Some(end_sp, captures)` ⇒ replay captures, set `sp = end_sp`, jump to `return_addr` so the recursive call appears to return the seed.
+3. **Body succeeds**: `LRTail` decides. Growth (`sp > seed.end_sp`, or first success with `seed: None`) updates the seed and re-iterates from `start_sp`. No growth commits the seed and falls through to `Return`.
+4. **Body fails**: `fail()`'s `LFrame` arm rescues with the prior seed when `seed.is_some()` (returns `true`, resumes at `return_addr`); when `seed.is_none()` it continues unwinding (the LR rule failed without ever growing).
+
+The L table is stack-structured and lives only on `self.stack`; nothing is written to `self.memo` for an LR rule in v1. The `memo_examined` watermark is pushed/popped in lockstep with `LFrame`, so an enclosing rule's `examined_max` correctly subsumes positions the LR body looked at.
+
 ## Error types
 
 Grammar-source errors (`ParseError`, `CompileError`, unified `Error`) belong to the compiler — see [`src/pegc/README.md`](../pegc/README.md#errors). The VM's contract is simpler: `VM::run` always returns a `MatchResult`; its `complete` flag distinguishes a successful match from a non-match. A non-match is not an error — the distinction is between *author bugs* (grammar) and *data bugs* (input).
@@ -200,6 +223,8 @@ Some properties the module relies on can't be encoded in the Rust type system. T
 6. **`VM::fail` records every `Memo` frame it traverses.** When unwinding to find a `Backtrack`, each `Memo` frame encountered is committed as a failure entry before being discarded. Silently dropping a frame would leak re-executions on future calls at the same sp. The loop is an exhaustive `match` over `StackEntry` specifically to make omissions a compiler error.
 7. **`MemoOpen` calls `maybe_snapshot` after applying a success hit.** The hit advances `sp` past code that didn't execute; without the snapshot call the farthest-failure bookkeeping would miss the advance and `MatchResult.complete == false` would report a stale deepest point.
 8. **`RecoverRepeat` emits a fresh `Choice`/`Commit` pair per iteration, never `PartialCommit`.** The loop's retry baseline must sit at the *advanced* `sp` after each successful iteration; `PartialCommit`'s in-place mutation of a stale backtrack frame would corrupt that baseline and re-trigger invariant 1's hazard. See `compile_pat`'s `RecoverRepeat` arm in `src/pegc/compiler.rs`.
+9. **`LRTail`'s `Label` payload targets the instruction after `LRBody`, not `LRBody` itself.** The seed-and-grow loop must re-execute the body, not re-push the `LFrame` — re-pushing would lose the prior seed and turn growth into an infinite loop. See `compile_rules`' LR-rule branch in `src/pegc/compiler.rs`.
+10. **`fail()`'s `LFrame` arm pops `memo_examined` before any rescue branch.** The watermark stack and `LFrame` push/pop in lockstep; if the rescue path took the early `return true` without popping, the next `MemoClose` / `LRTail` would underflow `memo_examined`. See `VM::fail`'s `StackEntry::LFrame` arm.
 
 ## References
 
@@ -209,12 +234,12 @@ Some properties the module relies on can't be encoded in the Rust type system. T
 - Sérgio Medeiros and Roberto Ierusalimschy, [*A Parsing Machine for PEGs*](https://www.inf.puc-rio.br/~roberto/docs/ry08-4.pdf). DLS 2008.
 - Roberto Ierusalimschy, [*A Text Pattern-Matching Tool based on Parsing Expression Grammars*](https://www.inf.puc-rio.br/~roberto/docs/peg.pdf). Software: Practice and Experience, 39(3):221–258, 2009.
 - Zachary Yedidia, [*Incremental PEG Parsing*](https://zyedidia.github.io/notes/yedidia_thesis.pdf). Ph.D. thesis, 2021. Chapter 3 ("A PEG Parsing Machine") is the clearest modern presentation of the instruction set used here and the reference to read first.
+- Sérgio Medeiros, Fabio Mascarenhas, and Roberto Ierusalimschy, [*Left recursion in parsing expression grammars*](https://arxiv.org/pdf/1207.0443.pdf). Science of Computer Programming 96:177–190, 2014. "Bounded left recursion" semantics with §5 giving the parsing-machine extension implemented as `LRBody` / `LRTail`; L table stack-structured and separate from the packrat memo. Fixes nullable-LR bugs that Warth 2008's algorithm exhibits.
 
-Left recursion (roadmap-adjacent; not implemented):
+Left recursion (historical context; alternative algorithms not implemented):
 
 - Alessandro Warth, James R. Douglass, and Todd Millstein, [*Packrat Parsers Can Support Left Recursion*](https://web.cs.ucla.edu/~todd/research/pepm08.pdf). PEPM 2008. Seminal seed-and-grow algorithm; couples left-recursion handling to the packrat memo table.
 - Laurence Tratt, [*Direct Left-Recursive Parsing Expression Grammars*](http://tratt.net/laurie/research/pubs/papers/tratt__direct_left_recursive_parsing_expression_grammars.pdf). Middlesex University Technical Report EIS-10-01, 2010. Adapts Warth's idea to PEGs without packrat memoization; direct left recursion only.
-- Sérgio Medeiros, Fabio Mascarenhas, and Roberto Ierusalimschy, [*Left recursion in parsing expression grammars*](https://arxiv.org/pdf/1207.0443.pdf). Science of Computer Programming 96:177–190, 2014. "Bounded left recursion" semantics with §5 giving a parsing-machine extension matching ours; L table is stack-structured and separate from the packrat memo. Fixes nullable-LR bugs that Warth's algorithm has.
 
 ### Reference implementations
 
