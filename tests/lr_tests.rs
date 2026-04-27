@@ -1,10 +1,11 @@
-//! End-to-end tests for direct left recursion: grammar source → compile
-//! → run, asserting both parse outcomes and capture forests reflect
-//! left-associative matching. Pairs with `compiler_tests.rs` (which
-//! pins the bytecode skeleton) and `vm_tests.rs` (which pins the
-//! VM-level bytecode semantics on hand-built programs).
+//! End-to-end tests for left recursion (direct and indirect): grammar
+//! source → compile → run, asserting both parse outcomes and capture
+//! forests reflect left-associative matching. Pairs with
+//! `compiler_tests.rs` (which pins the bytecode skeleton) and
+//! `vm_tests.rs` (which pins the VM-level bytecode semantics on
+//! hand-built programs).
 
-use syntax_highlighter::pegc::{self, CompileError};
+use syntax_highlighter::pegc;
 use syntax_highlighter::pegvm::{Capture, CaptureKind, MatchResult, VM};
 
 fn run(src: &str, input: &[u8]) -> MatchResult {
@@ -184,18 +185,45 @@ fn right_recursive_grammar_is_not_marked_lr() {
 }
 
 #[test]
-fn indirect_lr_in_source_returns_compile_error() {
+fn indirect_lr_cycle_of_2_runs() {
+    // SCC {a, b}; both rules are wrapped as LR. Input "y" matches via
+    // a's base alternative on the first iteration; no growth occurs.
     let src = r#"
         a <- b 'x' / 'y'
         b <- a 'z' / 'w'
     "#;
-    match pegc::compile(src) {
-        Err(pegc::Error::Compile(CompileError::IndirectLeftRecursion(cycle))) => {
-            assert!(cycle.contains(&"a".to_string()));
-            assert!(cycle.contains(&"b".to_string()));
-        }
-        other => panic!("expected IndirectLeftRecursion, got {:?}", other),
-    }
+    let r = run(src, b"y");
+    assert!(r.complete);
+    assert_eq!(r.matched, 1);
+}
+
+#[test]
+fn indirect_lr_cycle_of_2_grows_through_chain() {
+    // Same SCC. Input "yzx" exercises one full seed-and-grow round
+    // through the indirect cycle: a's seed grows from {y at sp=1} to
+    // {b'x' at sp=3} where b in turn used a's seed to match "yz".
+    let src = r#"
+        a <- b 'x' / 'y'
+        b <- a 'z' / 'w'
+    "#;
+    let r = run(src, b"yzx");
+    assert!(r.complete);
+    assert_eq!(r.matched, 3);
+}
+
+#[test]
+fn indirect_lr_cycle_of_3_runs() {
+    // Length-3 first-call cycle a → b → c → a; all three rules are
+    // wrapped as LR. Input "p" matches via a's base alt; the test
+    // confirms that cycles longer than 2 compile and run.
+    let src = r#"
+        a <- b 'x' / 'p'
+        b <- c 'y' / 'q'
+        c <- a 'z' / 'r'
+    "#;
+    let r = run(src, b"p");
+    assert!(r.complete);
+    assert_eq!(r.matched, 1);
 }
 
 #[test]

@@ -187,7 +187,7 @@ A grammar that opts into the `*^` recovery operator on a top-level repetition ca
 
 ## Left recursion
 
-The compiler detects directly-left-recursive rules (`A <- A α / β` and equivalent shapes; see `analyze_left_recursion` in `src/pegc/compiler.rs`) and emits `LRBody` / `LRTail` in place of `MemoOpen` / `MemoClose`. Indirect left recursion (cycles longer than 1) is rejected at compile time — see `CompileError::IndirectLeftRecursion`.
+The compiler detects left-recursive rules — both direct (`A <- A α / β`) and indirect (`A <- B …; B <- A …`) — by finding strongly connected components in the first-call graph (see `analyze_left_recursion` in `src/pegc/compiler.rs`). Every member of any non-trivial SCC, plus any size-1 SCC with a self-edge, emits `LRBody` / `LRTail` in place of `MemoOpen` / `MemoClose`. Cross-rule cycles need no extra runtime support: `LRBody`'s `(memo_id, sp)` lookup walks the stack and finds the right `LFrame` regardless of how many other rules sit between the call site and the frame.
 
 Bytecode shape for an LR rule:
 

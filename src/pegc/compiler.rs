@@ -7,11 +7,6 @@ use crate::pegvm::{CaptureKind, Instruction, Label, MemoId, Program};
 pub enum CompileError {
     UndefinedRule(String),
     UnknownStartRule(String),
-    /// One or more rules participate in a left-recursive cycle longer
-    /// than length 1 (e.g. `A <- B …; B <- A …`). v1 of LR support
-    /// handles direct LR only; the cycle's rules are listed for the
-    /// grammar author. Tracked as a follow-up to #40.
-    IndirectLeftRecursion(Vec<String>),
 }
 
 impl std::fmt::Display for CompileError {
@@ -19,11 +14,6 @@ impl std::fmt::Display for CompileError {
         match self {
             CompileError::UndefinedRule(name) => write!(f, "undefined rule: {}", name),
             CompileError::UnknownStartRule(name) => write!(f, "unknown start rule: {}", name),
-            CompileError::IndirectLeftRecursion(cycle) => write!(
-                f,
-                "indirect left recursion across rules [{}] (only direct left recursion is supported)",
-                cycle.join(", ")
-            ),
         }
     }
 }
@@ -272,8 +262,8 @@ pub(crate) fn compile_rules(
         check_refs(rule_name, body, rules)?;
     }
 
-    // Identify directly left-recursive rules; reject indirect LR.
-    let direct_lr = analyze_left_recursion(rules)?;
+    // Identify left-recursive rules (direct and indirect).
+    let lr_rules = analyze_left_recursion(rules)?;
 
     let mut c = Compiler::new();
     c.emit(Instruction::Call(Label(0))); // patched below
@@ -295,10 +285,11 @@ pub(crate) fn compile_rules(
         rule_addrs.insert(name.clone(), c.pos());
         let memo_id = MemoId(memo_count);
         memo_count += 1;
-        if direct_lr.contains(name.as_str()) {
-            // LR rule: LRBody … body … LRTail ; Return. No MemoOpen /
-            // MemoClose — the L-frame replaces packrat caching for this
-            // rule (LR rules are not memoized in v1).
+        if lr_rules.contains(name.as_str()) {
+            // LR rule (direct or indirect): LRBody … body … LRTail ;
+            // Return. No MemoOpen / MemoClose — the L-frame replaces
+            // packrat caching for this rule (LR rules are not memoized
+            // in v1).
             let lr_body = c.emit(Instruction::LRBody(memo_id, Label(0)));
             let body_start = c.pos();
             c.compile_pat(&rules[name]);
@@ -371,17 +362,21 @@ fn check_refs(
     }
 }
 
-/// Returns the set of rule names that are *directly* left-recursive
-/// (`A <- A α / β` and equivalent shapes). Indirect left recursion
-/// (cycle length > 1) is rejected with `CompileError::IndirectLeftRecursion`.
+/// Returns the set of rule names that are left-recursive — both direct
+/// (`A <- A α / β`) and indirect (`A <- B …; B <- A …`). Each such rule
+/// must use the LR prologue/epilogue (`LRBody` / `LRTail`) instead of
+/// the standard `MemoOpen` / `MemoClose`, so its packrat slot isn't
+/// written with a value that depends on an in-progress LR seed of a
+/// sibling in the same cycle.
 ///
 /// Algorithm:
 /// 1. Compute may-match-empty (nullability) per rule via a fixpoint.
 /// 2. Build the "first-call" graph: edge `A → B` iff `A`'s body can call
 ///    `B` before consuming any input.
-/// 3. Find strongly connected components in that graph (Tarjan's). An SCC
-///    of size > 1 is indirect LR (rejected). An SCC of size 1 is direct
-///    LR iff the rule has a self-edge in the first-call graph.
+/// 3. Find strongly connected components in that graph (Tarjan's). Any
+///    SCC of size > 1 is an indirect-LR cycle — every member is wrapped.
+///    A size-1 SCC is direct LR iff the rule has a self-edge in the
+///    first-call graph.
 fn analyze_left_recursion(
     rules: &HashMap<String, Pattern>,
 ) -> Result<HashSet<String>, CompileError> {
@@ -389,23 +384,24 @@ fn analyze_left_recursion(
     let first_calls = compute_first_calls(rules, &nullable);
 
     let sccs = tarjan_sccs(rules, &first_calls);
-    let mut direct_lr = HashSet::new();
+    let mut lr_rules = HashSet::new();
     for scc in &sccs {
         if scc.len() > 1 {
-            let mut cycle = scc.clone();
-            cycle.sort();
-            return Err(CompileError::IndirectLeftRecursion(cycle));
-        }
-        let only = &scc[0];
-        if first_calls
-            .get(only)
-            .map(|s| s.contains(only))
-            .unwrap_or(false)
-        {
-            direct_lr.insert(only.clone());
+            for r in scc {
+                lr_rules.insert(r.clone());
+            }
+        } else {
+            let only = &scc[0];
+            if first_calls
+                .get(only)
+                .map(|s| s.contains(only))
+                .unwrap_or(false)
+            {
+                lr_rules.insert(only.clone());
+            }
         }
     }
-    Ok(direct_lr)
+    Ok(lr_rules)
 }
 
 /// Per-rule nullability via fixpoint over the Pattern AST. A rule is

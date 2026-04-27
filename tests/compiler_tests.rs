@@ -636,10 +636,10 @@ fn right_recursive_rule_is_not_marked_lr() {
 }
 
 #[test]
-fn indirect_left_recursion_is_rejected() {
+fn indirect_lr_cycle_of_2_emits_lrbody_lrtail() {
     // a <- b "x" / "y"
     // b <- a "z" / "w"
-    // SCC {a, b} of size 2 — must be rejected.
+    // First-call SCC {a, b}; both rules must be wrapped as LR.
     let mut rules = HashMap::new();
     rules.insert(
         "a".into(),
@@ -661,10 +661,126 @@ fn indirect_left_recursion_is_rejected() {
             Pattern::literal("w"),
         ]),
     );
-    let err = Grammar::new(rules, "a").compile().unwrap_err();
-    let msg = format!("{}", err);
-    assert!(msg.contains("indirect left recursion"), "got: {}", msg);
-    assert!(msg.contains("a") && msg.contains("b"), "got: {}", msg);
+    let prog = Grammar::new(rules, "a").compile().unwrap();
+    let lr_bodies = prog
+        .code
+        .iter()
+        .filter(|i| matches!(i, Instruction::LRBody(..)))
+        .count();
+    let lr_tails = prog
+        .code
+        .iter()
+        .filter(|i| matches!(i, Instruction::LRTail(..)))
+        .count();
+    assert_eq!(lr_bodies, 2, "both SCC members must emit LRBody");
+    assert_eq!(lr_tails, 2, "both SCC members must emit LRTail");
+    for ins in &prog.code {
+        assert!(
+            !matches!(ins, Instruction::MemoOpen(..) | Instruction::MemoClose(..)),
+            "indirect-LR rules must not emit MemoOpen/MemoClose: {:?}",
+            ins
+        );
+    }
+}
+
+#[test]
+fn indirect_lr_cycle_of_3_emits_lrbody_lrtail() {
+    // a <- b "x" / "p"
+    // b <- c "y" / "q"
+    // c <- a "z" / "r"
+    // First-call SCC {a, b, c}; all three rules must be wrapped as LR.
+    let mut rules = HashMap::new();
+    rules.insert(
+        "a".into(),
+        Pattern::choice(vec![
+            Pattern::seq(vec![
+                Pattern::NonTerminal("b".into()),
+                Pattern::literal("x"),
+            ]),
+            Pattern::literal("p"),
+        ]),
+    );
+    rules.insert(
+        "b".into(),
+        Pattern::choice(vec![
+            Pattern::seq(vec![
+                Pattern::NonTerminal("c".into()),
+                Pattern::literal("y"),
+            ]),
+            Pattern::literal("q"),
+        ]),
+    );
+    rules.insert(
+        "c".into(),
+        Pattern::choice(vec![
+            Pattern::seq(vec![
+                Pattern::NonTerminal("a".into()),
+                Pattern::literal("z"),
+            ]),
+            Pattern::literal("r"),
+        ]),
+    );
+    let prog = Grammar::new(rules, "a").compile().unwrap();
+    let lr_bodies = prog
+        .code
+        .iter()
+        .filter(|i| matches!(i, Instruction::LRBody(..)))
+        .count();
+    let lr_tails = prog
+        .code
+        .iter()
+        .filter(|i| matches!(i, Instruction::LRTail(..)))
+        .count();
+    assert_eq!(lr_bodies, 3, "all three SCC members must emit LRBody");
+    assert_eq!(lr_tails, 3, "all three SCC members must emit LRTail");
+    for ins in &prog.code {
+        assert!(
+            !matches!(ins, Instruction::MemoOpen(..) | Instruction::MemoClose(..)),
+            "indirect-LR rules must not emit MemoOpen/MemoClose: {:?}",
+            ins
+        );
+    }
+}
+
+#[test]
+fn right_recursive_two_rule_grammar_is_not_marked_lr() {
+    // a <- "x" b / "y"
+    // b <- "z" a / "w"
+    // Each call site is preceded by a literal — no first-call edges, so
+    // no SCC and no LR wrapping. Sanity check that the analysis isn't
+    // over-eager about cross-rule recursion.
+    let mut rules = HashMap::new();
+    rules.insert(
+        "a".into(),
+        Pattern::choice(vec![
+            Pattern::seq(vec![
+                Pattern::literal("x"),
+                Pattern::NonTerminal("b".into()),
+            ]),
+            Pattern::literal("y"),
+        ]),
+    );
+    rules.insert(
+        "b".into(),
+        Pattern::choice(vec![
+            Pattern::seq(vec![
+                Pattern::literal("z"),
+                Pattern::NonTerminal("a".into()),
+            ]),
+            Pattern::literal("w"),
+        ]),
+    );
+    let prog = Grammar::new(rules, "a").compile().unwrap();
+    let has_lr = prog
+        .code
+        .iter()
+        .any(|i| matches!(i, Instruction::LRBody(..) | Instruction::LRTail(..)));
+    assert!(!has_lr, "non-first-call mutual recursion must not emit LR");
+    let has_memo_open = prog
+        .code
+        .iter()
+        .any(|i| matches!(i, Instruction::MemoOpen(..)));
+    assert!(has_memo_open, "non-LR rules must use MemoOpen");
 }
 
 #[test]
