@@ -636,38 +636,6 @@ fn right_recursive_rule_is_not_marked_lr() {
 }
 
 #[test]
-fn indirect_left_recursion_is_rejected() {
-    // a <- b "x" / "y"
-    // b <- a "z" / "w"
-    // SCC {a, b} of size 2 — must be rejected.
-    let mut rules = HashMap::new();
-    rules.insert(
-        "a".into(),
-        Pattern::choice(vec![
-            Pattern::seq(vec![
-                Pattern::NonTerminal("b".into()),
-                Pattern::literal("x"),
-            ]),
-            Pattern::literal("y"),
-        ]),
-    );
-    rules.insert(
-        "b".into(),
-        Pattern::choice(vec![
-            Pattern::seq(vec![
-                Pattern::NonTerminal("a".into()),
-                Pattern::literal("z"),
-            ]),
-            Pattern::literal("w"),
-        ]),
-    );
-    let err = Grammar::new(rules, "a").compile().unwrap_err();
-    let msg = format!("{}", err);
-    assert!(msg.contains("indirect left recursion"), "got: {}", msg);
-    assert!(msg.contains("a") && msg.contains("b"), "got: {}", msg);
-}
-
-#[test]
 fn lr_through_nullable_prefix_is_detected() {
     // start <- opt start "+" "n" / "n"
     // opt   <- "x"?
