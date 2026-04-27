@@ -546,3 +546,153 @@ fn grammar_rules_are_wrapped_in_memo_open_close() {
         ]
     );
 }
+
+#[test]
+fn direct_lr_rule_emits_lrbody_lrtail_skeleton() {
+    // start <- start "+" "n" / "n"
+    // Layout (no MemoOpen / MemoClose for an LR rule):
+    //   0: Call(2)
+    //   1: End
+    //   2: LRBody(0, <ret>)
+    //   3 (body_start): Choice(7)
+    //   4: Call(2)
+    //   5: Char '+'
+    //   6: Char 'n'
+    //   7: Commit(8)        ; first-alt commit lands at the leaf 'n'
+    //   ...
+    // Exact target labels are validated by running the program; here we
+    // only assert the prologue/epilogue shape.
+    let mut rules = HashMap::new();
+    rules.insert(
+        "start".into(),
+        Pattern::choice(vec![
+            Pattern::seq(vec![
+                Pattern::NonTerminal("start".into()),
+                Pattern::literal("+"),
+                Pattern::literal("n"),
+            ]),
+            Pattern::literal("n"),
+        ]),
+    );
+    let prog = Grammar::new(rules, "start").compile().unwrap();
+    assert_eq!(prog.memo_count, 1);
+    // Prologue is at code[2]; the bootstrap is the usual Call/End pair.
+    assert!(matches!(prog.code[0], Instruction::Call(Label(2))));
+    assert!(matches!(prog.code[1], Instruction::End));
+    assert!(matches!(prog.code[2], Instruction::LRBody(MemoId(0), _)));
+    // Last three instructions: LRTail, then the final Return for the rule.
+    let n = prog.code.len();
+    assert!(matches!(
+        prog.code[n - 2],
+        Instruction::LRTail(MemoId(0), _)
+    ));
+    assert!(matches!(prog.code[n - 1], Instruction::Return));
+    // No MemoOpen / MemoClose anywhere — LR rules are not packrat-cached.
+    for ins in &prog.code {
+        assert!(
+            !matches!(ins, Instruction::MemoOpen(..) | Instruction::MemoClose(..)),
+            "LR rule must not emit MemoOpen/MemoClose: {:?}",
+            ins
+        );
+    }
+    // LRBody's return label points at the rule's Return (last instruction).
+    if let Instruction::LRBody(_, Label(ret)) = prog.code[2] {
+        assert_eq!(ret, n - 1);
+    }
+    // LRTail's body-start label points at the instruction after LRBody.
+    if let Instruction::LRTail(_, Label(body_start)) = prog.code[n - 2] {
+        assert_eq!(body_start, 3);
+    }
+}
+
+#[test]
+fn right_recursive_rule_is_not_marked_lr() {
+    // start <- "n" "+" start / "n"
+    // The recursive call is not in first-call position — "n" consumes
+    // input first. Compile must use the standard MemoOpen / MemoClose.
+    let mut rules = HashMap::new();
+    rules.insert(
+        "start".into(),
+        Pattern::choice(vec![
+            Pattern::seq(vec![
+                Pattern::literal("n"),
+                Pattern::literal("+"),
+                Pattern::NonTerminal("start".into()),
+            ]),
+            Pattern::literal("n"),
+        ]),
+    );
+    let prog = Grammar::new(rules, "start").compile().unwrap();
+    let has_memo_open = prog
+        .code
+        .iter()
+        .any(|i| matches!(i, Instruction::MemoOpen(..)));
+    let has_lr = prog
+        .code
+        .iter()
+        .any(|i| matches!(i, Instruction::LRBody(..) | Instruction::LRTail(..)));
+    assert!(has_memo_open, "right-recursive rule must use MemoOpen");
+    assert!(!has_lr, "right-recursive rule must not emit LR opcodes");
+}
+
+#[test]
+fn indirect_left_recursion_is_rejected() {
+    // a <- b "x" / "y"
+    // b <- a "z" / "w"
+    // SCC {a, b} of size 2 — must be rejected.
+    let mut rules = HashMap::new();
+    rules.insert(
+        "a".into(),
+        Pattern::choice(vec![
+            Pattern::seq(vec![
+                Pattern::NonTerminal("b".into()),
+                Pattern::literal("x"),
+            ]),
+            Pattern::literal("y"),
+        ]),
+    );
+    rules.insert(
+        "b".into(),
+        Pattern::choice(vec![
+            Pattern::seq(vec![
+                Pattern::NonTerminal("a".into()),
+                Pattern::literal("z"),
+            ]),
+            Pattern::literal("w"),
+        ]),
+    );
+    let err = Grammar::new(rules, "a").compile().unwrap_err();
+    let msg = format!("{}", err);
+    assert!(msg.contains("indirect left recursion"), "got: {}", msg);
+    assert!(msg.contains("a") && msg.contains("b"), "got: {}", msg);
+}
+
+#[test]
+fn lr_through_nullable_prefix_is_detected() {
+    // start <- opt start "+" "n" / "n"
+    // opt   <- "x"?
+    // The recursive call is gated by an optional prefix; nullability
+    // analysis must propagate the first-call through `opt`.
+    let mut rules = HashMap::new();
+    rules.insert(
+        "start".into(),
+        Pattern::choice(vec![
+            Pattern::seq(vec![
+                Pattern::NonTerminal("opt".into()),
+                Pattern::NonTerminal("start".into()),
+                Pattern::literal("+"),
+                Pattern::literal("n"),
+            ]),
+            Pattern::literal("n"),
+        ]),
+    );
+    rules.insert(
+        "opt".into(),
+        Pattern::Optional(Box::new(Pattern::literal("x"))),
+    );
+    let prog = Grammar::new(rules, "start").compile().unwrap();
+    assert!(prog
+        .code
+        .iter()
+        .any(|i| matches!(i, Instruction::LRBody(MemoId(0), _))));
+}
