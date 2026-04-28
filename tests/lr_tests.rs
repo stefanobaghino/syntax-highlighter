@@ -285,6 +285,30 @@ fn cached_lr_seed_matches_uncached_run() {
 }
 
 #[test]
+fn lr_seed_caches_below_memo_threshold() {
+    // Issue #55: short-span LR seeds must be cached regardless of the
+    // memo_threshold filter. The threshold filter applies to non-LR
+    // memo (`MemoClose`) only — `LRTail` always commits the converged
+    // seed, otherwise deep LR cascades go quadratic-or-worse on iter-2
+    // second-alt fallback.
+    //
+    // For input `1` the LR rule's converged seed spans 1 byte. With
+    // a generous threshold (1024), a `Memo`-kind rule of the same
+    // shape would not cache, but the LR rule must.
+    let src = r#"
+        expr <- expr @op{'+'} @num{[0-9]+} / @num{[0-9]+}
+    "#;
+    let prog = pegc::compile(src).expect("compile");
+    let (_, stats) = VM::new(&prog.code, b"1")
+        .with_memo_threshold(1024)
+        .run_with_memo_stats();
+    assert_eq!(
+        stats.entries, 1,
+        "single converged 1-byte LR seed must be cached even at threshold=1024 (got {stats:?})"
+    );
+}
+
+#[test]
 fn lr_inside_outer_repetition_matches_uncached_run() {
     // The LR rule sits under an outer repetition that calls it at
     // distinct sps; the new cache write at LRTail must not perturb the

@@ -127,13 +127,17 @@ pub struct VM<'p, 'i> {
     /// Running count of `RuleEnter` cache misses on `RuleKind::Memo`
     /// rules, exposed via `MemoStats`. See [`MemoStats::misses`].
     memo_misses: usize,
-    /// Minimum successful-span length (in bytes) for which `MemoClose` will
-    /// write the outcome back to the cache. Default is
-    /// [`Self::DEFAULT_MEMO_THRESHOLD`]; `0` disables the filter and
-    /// restores pure packrat behavior. Non-zero values skip tiny leaf-rule
-    /// entries that pay lookup cost without a meaningful storage win — see
-    /// GPeg (default 512) and Yedidia §5.2.4 (knee near 4096). Failure
-    /// entries in `fail()` are not filtered; their value is short-circuiting.
+    /// Minimum successful-span length (in bytes) for which `MemoClose` (i.e.
+    /// `RuleKind::Memo` rules) will write the outcome back to the cache.
+    /// Default is [`Self::DEFAULT_MEMO_THRESHOLD`]; `0` disables the filter
+    /// and restores pure packrat behavior. Non-zero values skip tiny
+    /// leaf-rule entries that pay lookup cost without a meaningful storage
+    /// win — see GPeg (default 512) and Yedidia §5.2.4 (knee near 4096).
+    /// `LRTail` (`RuleKind::Lr` seed commit) ignores this filter — the
+    /// seed-and-grow loop relies on the seed cache to short-circuit
+    /// subsequent visits, and filtering short LR seeds out causes O(2^N)
+    /// re-descent in deep LR cascades (issue #55). Failure entries in
+    /// `fail()` are also not filtered; their value is short-circuiting.
     memo_threshold: usize,
     /// Per-rule-invocation watermark of the farthest input position examined
     /// since the enclosing `StackEntry::Memo` frame was pushed. One entry
@@ -575,7 +579,14 @@ impl<'p, 'i> VM<'p, 'i> {
                             }
                         })
                         .collect();
-                    self.cache_success(*memo_id, start_sp, self.sp, examined_max, rule_captures);
+                    self.cache_success(
+                        RuleKind::Memo,
+                        *memo_id,
+                        start_sp,
+                        self.sp,
+                        examined_max,
+                        rule_captures,
+                    );
                     self.ip += 1;
                 }
                 Instruction::LRTail(memo_id, body_start) => {
@@ -667,7 +678,14 @@ impl<'p, 'i> VM<'p, 'i> {
                         // `MemoCache::apply_edit`. Failure caching for LR
                         // rules is not yet implemented (#48 scoped to
                         // converged seeds only).
-                        self.cache_success(*memo_id, start_sp, final_sp, examined, seed_captures);
+                        self.cache_success(
+                            RuleKind::Lr,
+                            *memo_id,
+                            start_sp,
+                            final_sp,
+                            examined,
+                            seed_captures,
+                        );
                         self.maybe_snapshot();
                         self.ip += 1;
                     }
@@ -827,23 +845,41 @@ impl<'p, 'i> VM<'p, 'i> {
         false
     }
 
-    /// Threshold-filtered success-entry insert. Both `MemoClose` and
-    /// `LRTail`'s no-growth branch route through this helper so the
-    /// memo-threshold policy (skip caching when the matched span is
-    /// shorter than `memo_threshold` — see GPeg's 512-byte default and
-    /// Yedidia §5.2.4) lives in one place. The captures source differs
-    /// between callers (live buffer at `MemoClose`; already-closed
-    /// `LSeed::captures` at `LRTail`); both pre-process to a closed
-    /// `Vec<Capture>` before calling this.
+    /// Success-entry insert, with kind-aware threshold policy. Both
+    /// `MemoClose` and `LRTail`'s no-growth branch route through this
+    /// helper so the policy lives in one place.
+    ///
+    /// `RuleKind::Memo` (non-LR): apply the `memo_threshold` filter —
+    /// skip caching when the matched span is shorter than the
+    /// threshold. Tracks GPeg's 512-byte default and Yedidia §5.2.4;
+    /// short Memo entries are pure overhead because the hash insert +
+    /// lookup cost more than re-executing the rule body.
+    ///
+    /// `RuleKind::Lr`: always cache, ignoring the threshold. Caching
+    /// the converged seed is part of the seed-and-grow algorithm's
+    /// short-circuit on subsequent visits at the same `sp`; filtering
+    /// short seeds out causes an O(2^N) cascade re-descent in deep LR
+    /// ladders (the iter-2 second-alt fallback re-invokes the next
+    /// level on operator-failure, which would otherwise have been a
+    /// memo hit). See issue #55.
+    ///
+    /// The captures source differs between callers (live buffer at
+    /// `MemoClose`; already-closed `LSeed::captures` at `LRTail`);
+    /// both pre-process to a closed `Vec<Capture>` before calling.
     fn cache_success(
         &mut self,
+        kind: RuleKind,
         memo_id: MemoId,
         start_sp: usize,
         end_sp: usize,
         examined_max: usize,
         captures: Vec<Capture>,
     ) {
-        if end_sp - start_sp >= self.memo_threshold {
+        let should_cache = match kind {
+            RuleKind::Lr => true,
+            RuleKind::Memo => end_sp - start_sp >= self.memo_threshold,
+        };
+        if should_cache {
             self.memo.insert(
                 (memo_id, start_sp),
                 MemoEntry {
