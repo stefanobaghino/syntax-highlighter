@@ -231,6 +231,24 @@ fn designated_initializer_parses() {
 }
 
 #[test]
+fn operator_longest_match_disambiguates_lr_cascade() {
+    // Pins the three lookahead-class pitfalls in the LR-cascade port:
+    //   - compound-assign vs same-prefix binary  (`<<=` is one token, not `<<` + `=`)
+    //   - two-char vs one-char relational        (`<<` is shift, not `<` + `<`)
+    //   - logical-vs-bitwise                     (`&&` is land, not `&` + `&`)
+    let inputs = [
+        "int main(void) { int a = 1; a <<= 2; a >>= 3; a += 4; return a; }\n",
+        "int main(void) { int a = 1, b = 2; if (a < 1 << b) return 1; return 0; }\n",
+        "int main(void) { int a = 1, b = 2, c = 3; if (a & b && c) return 1; return 0; }\n",
+    ];
+    for input in &inputs {
+        let (caps, kinds) = assert_complete_full(input);
+        let k = kinds_for(&caps, &kinds);
+        assert!(k.contains(&"operator"), "expected operators in {:?}", input);
+    }
+}
+
+#[test]
 fn recovery_absorbs_malformed_item() {
     let input = "int a() {}\n@@@ garbage @@@\nint b() {}\n";
     let (matched, caps, kinds, complete) = run(input);
