@@ -352,6 +352,28 @@ fn ternary_parses() {
 }
 
 #[test]
+fn operator_longest_match_disambiguates_lr_cascade() {
+    // Pins the lookahead-class pitfalls in the LR-cascade port:
+    //   - compound-assign vs same-prefix binary  (`<<=` is one token, not `<<` + `=`)
+    //   - two-char vs one-char relational        (`<<` is shift, not `<` + `<`)
+    //   - logical-vs-bitwise                     (`&&` is land, not `&` + `&`)
+    //   - strict-equality vs equality            (`===` before `==` in the alt)
+    //   - exponent vs multiply                   (`**` is right-assoc pow, not `*` + `*`)
+    let inputs = [
+        "let a = 1; a <<= 2; a >>>= 3; a ??= 4;\n",
+        "if (a < 1 << b) { let c = 1; }\n",
+        "if (a & b && c) { let d = 1; }\n",
+        "if (a === b !== c) { let d = 1; }\n",
+        "let p = 2 ** 3 ** 2;\n",
+    ];
+    for input in &inputs {
+        let (caps, kinds) = assert_complete_full(input);
+        let k = kinds_for(&caps, &kinds);
+        assert!(k.contains(&"operator"), "expected operators in {:?}", input);
+    }
+}
+
+#[test]
 fn labeled_statement_and_break_parse() {
     let (_, _) =
         assert_complete_full("outer: for (let i = 0; i < 10; i++) { if (i === 5) break outer; }\n");

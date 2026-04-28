@@ -200,24 +200,28 @@ arrow_body     <- block
 
 expr_yield     <- @keyword{'yield'} (ws @operator{'*'})? (ws expr_assign)?
 
-# Ternary.
-expr_conditional <- expr_bin (ws @operator{'?'} ws expr_no_comma ws @punctuation{':'} ws expr_no_comma)?
+# Ternary. Below the ternary, precedence is encoded by direct left
+# recursion — `level_n <- level_n OP level_{n+1} / level_{n+1}` per
+# level — except `expr_pow` (`**`) which stays right-recursive to
+# preserve right-associativity. Each level inlines its operator
+# alternation; cross-level ambiguities (`<` vs `<<`, `&` vs `&&`,
+# operator vs compound-assign, …) need explicit `!`-lookaheads.
+expr_conditional <- expr_nullish (ws @operator{'?'} ws expr_no_comma ws @punctuation{':'} ws expr_no_comma)?
 
-# Binary / logical / bitwise — flattened, precedence not enforced.
-expr_bin       <- expr_unary (ws bin_op ws expr_unary)*
-bin_op         <- @operator{'??'}
-                / @operator{'||'} / @operator{'&&'}
-                / @operator{'==='} / @operator{'!=='}
-                / @operator{'=='} / @operator{'!='}
-                / @operator{'<='} / @operator{'>='}
-                / @operator{'<<'} / @operator{'>>>'} / @operator{'>>'}
-                / @operator{'**'}
-                / @operator{'+'} / @operator{'-'}
-                / @operator{'*'} / @operator{'/'} / @operator{'%'}
-                / @operator{'&'} / @operator{'|'} / @operator{'^'}
-                / @operator{'<'} / @operator{'>'}
-                / @keyword{'instanceof'}
-                / @keyword{'in'}
+expr_nullish   <- expr_nullish ws @operator{'??'} !'=' ws expr_lor / expr_lor
+expr_lor       <- expr_lor ws @operator{'||'} !'=' ws expr_land / expr_land
+expr_land      <- expr_land ws @operator{'&&'} !'=' ws expr_bor / expr_bor
+expr_bor       <- expr_bor ws @operator{'|'} !'|' !'=' ws expr_bxor / expr_bxor
+expr_bxor      <- expr_bxor ws @operator{'^'} !'=' ws expr_band / expr_band
+expr_band      <- expr_band ws @operator{'&'} !'&' !'=' ws expr_eq / expr_eq
+expr_eq        <- expr_eq ws (@operator{'==='} / @operator{'!=='} / @operator{'=='} / @operator{'!='}) ws expr_rel / expr_rel
+expr_rel       <- expr_rel ws (@operator{'<='} / @operator{'>='} / @operator{'<'} !'<' / @operator{'>'} !'>' / @keyword{'instanceof'} / @keyword{'in'}) ws expr_shift / expr_shift
+expr_shift     <- expr_shift ws (@operator{'>>>'} !'=' / @operator{'<<'} !'=' / @operator{'>>'} !'=') ws expr_add / expr_add
+expr_add       <- expr_add ws (@operator{'+'} !'=' / @operator{'-'} !'=') ws expr_mul / expr_mul
+expr_mul       <- expr_mul ws (@operator{'*'} !'=' !'*' / @operator{'/'} !'=' / @operator{'%'} !'=') ws expr_pow / expr_pow
+
+# Right-associative: stays right-recursive, not LR.
+expr_pow       <- expr_unary ws @operator{'**'} !'=' ws expr_pow / expr_unary
 
 expr_unary     <- (unary_op ws)* expr_postfix
 unary_op       <- @keyword{'typeof'}
