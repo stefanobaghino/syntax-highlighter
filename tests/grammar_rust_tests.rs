@@ -304,3 +304,22 @@ fn raw_identifier_parses() {
     let input = "fn r#match() {}\n";
     let (_, _) = assert_complete_full(input);
 }
+
+#[test]
+fn operator_longest_match_disambiguates_lr_cascade() {
+    // Pins lookahead-class pitfalls in the LR-cascade port:
+    //   - compound-assign vs binary  (`<<=`, `+=`, `&=` all stay one token)
+    //   - shift vs comparison        (`<<` is shift, not `<` + `<`)
+    //   - logical vs bitwise         (`&&` is land, not `&` + `&`; `||` vs `|`)
+    //   - assignment vs equality     (`=` !'=' so `==` doesn't get half-eaten)
+    let inputs = [
+        "fn f() { let mut a = 1; a <<= 2; a >>= 3; a += 4; a &= 5; }\n",
+        "fn f(a: u32, b: u32) -> bool { a < 1 << b }\n",
+        "fn f(a: bool, b: u32, c: u32) -> bool { a && b & c == 0 }\n",
+    ];
+    for input in &inputs {
+        let (caps, kinds) = assert_complete_full(input);
+        let k = kinds_for(&caps, &kinds);
+        assert!(k.contains(&"operator"), "expected operators in {:?}", input);
+    }
+}

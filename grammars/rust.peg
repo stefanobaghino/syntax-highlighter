@@ -2,12 +2,13 @@
 # The first rule is the start rule.
 #
 # Scope: highlighting, not compilation. The grammar parses most real-
-# world Rust code to completion at the item/expression/type level. It
-# is deliberately token-ish: precedence is not enforced, and semantic
-# constraints (name resolution, typing, trait coherence) are not
-# checked. The bench value lives in the shared-prefix backtracking
-# Rust induces: paths vs generics, turbofish, closures vs bitor,
-# attributes vs inner-attributes, references vs logical-and.
+# world Rust code to completion at the item/expression/type level.
+# Expression precedence is encoded by direct left recursion mirroring
+# the Rust reference precedence table; semantic constraints (name
+# resolution, typing, trait coherence) are not checked. The bench
+# value lives in the shared-prefix backtracking Rust induces: paths
+# vs generics, turbofish, closures vs bitor, attributes vs
+# inner-attributes, references vs logical-and.
 #
 # Capture kinds used (all present in src/highlight/theme.rs):
 #   keyword, string, number, comment, operator, punctuation, type,
@@ -18,8 +19,6 @@
 #     `ident!(...)` / `ident!{...}` / `ident![...]` as balanced-
 #     bracket skip-over and call the ident a @function.
 #   - Const generics (`Foo<const N: usize>`).
-#   - Full precedence grammar; expressions are a left-to-right
-#     sequence of primaries joined by operator tokens.
 #
 # Recovery: the top-level uses `*^` so malformed items don't
 # abort the whole file.
@@ -250,38 +249,44 @@ pattern_binding <- (@keyword{'ref'} ws)? (@keyword{'mut'} ws)? @variable{ident}
 
 # --- Expressions -------------------------------------------------------
 #
-# Not precedence-correct. The sweep only cares about shared-prefix
-# backtracking at token level, so we accept `a + b * c` as "primary op
-# primary op primary" without tree-shape enforcement.
+# Precedence is encoded by direct left recursion: each binary level is
+# `expr_LEVEL <- expr_LEVEL OP expr_NEXT / expr_NEXT`, mirroring the
+# Rust reference precedence table. Assignment is right-associative
+# (single right-recursive rule); range is non-associative with
+# special prefix/suffix forms; everything else is left-associative LR.
+# Cross-level ambiguities (`<` vs `<<`, compound-assignments vs the
+# matching binary, `&` vs `&&`, `|` vs `||`) need explicit
+# `!`-lookaheads inside each level's operator alternation.
 
-expr          <- expr_op
+expr          <- expr_assign
 
-expr_op       <- expr_range (ws bin_op ws expr_range)*
+# Right-associative: `a = b = c` parses as `a = (b = c)`.
+expr_assign   <- expr_range ws assign_op ws expr_assign / expr_range
 
-# Range: `a..b`, `a..=b`, `..b`, `a..`, `..`.
-expr_range    <- expr_unary (ws (@punctuation{'..='} / @punctuation{'..'}) ws expr_unary?)?
-               / (@punctuation{'..='} / @punctuation{'..'}) ws expr_unary?
-
-bin_op        <- @operator{'<<='} / @operator{'>>='}
-               / @operator{'&&'}  / @operator{'||'}
-               / @operator{'=='}  / @operator{'!='}
-               / @operator{'<='}  / @operator{'>='}
-               / @operator{'<<'}  / @operator{'>>'}
+assign_op     <- @operator{'<<='} / @operator{'>>='}
                / @operator{'+='}  / @operator{'-='}
                / @operator{'*='}  / @operator{'/='}
                / @operator{'%='}  / @operator{'&='}
                / @operator{'|='}  / @operator{'^='}
-               / @operator{'='}
-               / @operator{'<'}   / @operator{'>'}
-               / @operator{'+'}   / @operator{'-'}
-               / @operator{'*'}   / @operator{'/'}
-               / @operator{'%'}
-               / @operator{'&'}   / @operator{'|'}
-               / @operator{'^'}
-               / @keyword{'as'} ws type_expr_suffix_marker
+               / @operator{'='} !'='
+
+# Range: `a..b`, `a..=b`, `..b`, `a..`, `..`. Non-associative.
+expr_range    <- expr_lor (ws (@punctuation{'..='} / @punctuation{'..'}) ws expr_lor?)?
+               / (@punctuation{'..='} / @punctuation{'..'}) ws expr_lor?
+
+expr_lor      <- expr_lor ws @operator{'||'} ws expr_land / expr_land
+expr_land     <- expr_land ws @operator{'&&'} ws expr_cmp / expr_cmp
+expr_cmp      <- expr_cmp ws (@operator{'=='} / @operator{'!='} / @operator{'<='} / @operator{'>='} / @operator{'<'} !'<' / @operator{'>'} !'>') ws expr_bor / expr_bor
+expr_bor      <- expr_bor ws @operator{'|'} !'|' !'=' ws expr_bxor / expr_bxor
+expr_bxor     <- expr_bxor ws @operator{'^'} !'=' ws expr_band / expr_band
+expr_band     <- expr_band ws @operator{'&'} !'&' !'=' ws expr_shift / expr_shift
+expr_shift    <- expr_shift ws (@operator{'<<'} !'=' / @operator{'>>'} !'=') ws expr_add / expr_add
+expr_add      <- expr_add ws (@operator{'+'} !'=' / @operator{'-'} !'=') ws expr_mul / expr_mul
+expr_mul      <- expr_mul ws (@operator{'*'} !'=' / @operator{'/'} !'=' / @operator{'%'} !'=') ws expr_as / expr_as
+expr_as       <- expr_as ws @keyword{'as'} ws type_expr_suffix_marker / expr_unary
 
 # A marker rule: when `as` matches, consume the following type. Split
-# from `bin_op` so the type_expr stays attached.
+# from the cascade so the type_expr stays attached.
 type_expr_suffix_marker <- type_expr
 
 expr_unary    <- (unary_op ws)* expr_postfix
