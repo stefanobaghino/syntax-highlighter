@@ -214,6 +214,26 @@ fn line_and_block_comment_parse() {
 }
 
 #[test]
+fn operator_longest_match_disambiguates_lr_cascade() {
+    // Pins lookahead-class pitfalls in the LR-cascade port:
+    //   - shift vs comparison      (`<<` is shift, not `<` + `<`)
+    //   - logical vs bitwise       (`&&` is land, not `&` + `&`; same for `||` vs `|`)
+    //   - `&^` (and-not) vs `&`    (`&^` matched as one token at expr_mul level)
+    //   - compound-assign prefixes (`<<=`, `+=`, `&=` etc. don't get half-eaten)
+    let inputs = [
+        "package p\nfunc f() { var a int = 1; a <<= 2; a >>= 3; a += 4 }\n",
+        "package p\nfunc f(a, b int) bool { return a < 1 << b }\n",
+        "package p\nfunc f(a, b, c bool) bool { return a && b || c }\n",
+        "package p\nfunc f(a, b uint) uint { return a &^ b }\n",
+    ];
+    for input in &inputs {
+        let (caps, kinds) = assert_complete_full(input);
+        let k = kinds_for(&caps, &kinds);
+        assert!(k.contains(&"operator"), "expected operators in {:?}", input);
+    }
+}
+
+#[test]
 fn recovery_absorbs_malformed_item() {
     let input = "package p\n\nfunc a() {}\n@@@ garbage @@@\nfunc b() {}\n";
     let (matched, caps, kinds, complete) = run(input);

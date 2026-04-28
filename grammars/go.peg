@@ -200,22 +200,29 @@ fallthrough_stmt <- @keyword{'fallthrough'}
 # control-flow headers and simple statements we use `expr_no_compound`
 # to avoid parsing `y { z }` as `y{z}` a la composite literal. Mirrors
 # Go's own disambiguation (see go/parser for `exprLev`).
+#
+# Precedence is encoded by direct left recursion: each binary level is
+# `expr_LEVEL <- expr_LEVEL OP expr_NEXT / expr_NEXT`, mirroring Go's
+# spec (5 levels: `||`, `&&`, comparison, additive, multiplicative).
+# The `_nc` track is a parallel ladder descending into `expr_unary_nc`
+# at the bottom. Cross-level ambiguities (`<` vs `<<`, `&` vs `&&`,
+# `&` vs `&^`, `|` vs `||`) need explicit `!`-lookaheads — within a
+# level, longer operators come first.
 
-expr          <- expr_bin
-expr_no_compound <- expr_bin_nc
+expr             <- expr_lor
+expr_no_compound <- expr_lor_nc
 
-expr_bin      <- expr_unary (ws bin_op ws expr_unary)*
-expr_bin_nc   <- expr_unary_nc (ws bin_op ws expr_unary_nc)*
+expr_lor         <- expr_lor ws @operator{'||'} ws expr_land / expr_land
+expr_land        <- expr_land ws @operator{'&&'} ws expr_rel / expr_rel
+expr_rel         <- expr_rel ws (@operator{'=='} / @operator{'!='} / @operator{'<='} / @operator{'>='} / @operator{'<'} !'<' / @operator{'>'} !'>') ws expr_add / expr_add
+expr_add         <- expr_add ws (@operator{'+'} !'=' / @operator{'-'} !'=' / @operator{'|'} !'|' !'=' / @operator{'^'} !'=') ws expr_mul / expr_mul
+expr_mul         <- expr_mul ws (@operator{'<<'} !'=' / @operator{'>>'} !'=' / @operator{'&^'} !'=' / @operator{'*'} !'=' / @operator{'/'} !'=' / @operator{'%'} !'=' / @operator{'&'} !'&' !'^' !'=') ws expr_unary / expr_unary
 
-bin_op        <- @operator{'&&'} / @operator{'||'}
-               / @operator{'=='} / @operator{'!='}
-               / @operator{'<='} / @operator{'>='}
-               / @operator{'<<'} / @operator{'>>'}
-               / @operator{'&^'}
-               / @operator{'+'} / @operator{'-'}
-               / @operator{'*'} / @operator{'/'} / @operator{'%'}
-               / @operator{'&'} / @operator{'|'} / @operator{'^'}
-               / @operator{'<'} / @operator{'>'}
+expr_lor_nc      <- expr_lor_nc ws @operator{'||'} ws expr_land_nc / expr_land_nc
+expr_land_nc     <- expr_land_nc ws @operator{'&&'} ws expr_rel_nc / expr_rel_nc
+expr_rel_nc      <- expr_rel_nc ws (@operator{'=='} / @operator{'!='} / @operator{'<='} / @operator{'>='} / @operator{'<'} !'<' / @operator{'>'} !'>') ws expr_add_nc / expr_add_nc
+expr_add_nc      <- expr_add_nc ws (@operator{'+'} !'=' / @operator{'-'} !'=' / @operator{'|'} !'|' !'=' / @operator{'^'} !'=') ws expr_mul_nc / expr_mul_nc
+expr_mul_nc      <- expr_mul_nc ws (@operator{'<<'} !'=' / @operator{'>>'} !'=' / @operator{'&^'} !'=' / @operator{'*'} !'=' / @operator{'/'} !'=' / @operator{'%'} !'=' / @operator{'&'} !'&' !'^' !'=') ws expr_unary_nc / expr_unary_nc
 
 expr_unary    <- (unary_op ws)* expr_postfix
 expr_unary_nc <- (unary_op ws)* expr_postfix_nc
