@@ -529,7 +529,7 @@ fn grammar_rules_are_wrapped_in_memo_open_close() {
     rules.insert("start".into(), Pattern::literal("a"));
     rules.insert("other".into(), Pattern::literal("b"));
     let prog = Grammar::new(rules, "start").compile().unwrap();
-    assert_eq!(prog.memo_count, 2);
+    assert_eq!(prog.rule_count, 2);
     assert_eq!(
         prog.code,
         vec![
@@ -575,7 +575,7 @@ fn direct_lr_rule_emits_lrbody_lrtail_skeleton() {
         ]),
     );
     let prog = Grammar::new(rules, "start").compile().unwrap();
-    assert_eq!(prog.memo_count, 1);
+    assert_eq!(prog.rule_count, 1);
     // Prologue is at code[2]; the bootstrap is the usual Call/End pair.
     assert!(matches!(prog.code[0], Instruction::Call(Label(2))));
     assert!(matches!(prog.code[1], Instruction::End));

@@ -9,8 +9,9 @@ use super::instruction::Instruction;
 pub struct Program {
     pub code: Vec<Instruction>,
     pub capture_kinds: Vec<String>,
-    /// Number of memoized rules. Each rule gets a distinct `MemoId` in the
-    /// range `0..memo_count`, assigned in compilation order, so the VM can
-    /// size its memo table once up front.
-    pub memo_count: usize,
+    /// Number of rules in the grammar. Every rule is memoized today, so this
+    /// also doubles as the memo-table size: each rule gets a distinct
+    /// `MemoId` in the range `0..rule_count`, assigned in compilation order,
+    /// so the VM can size its memo table once up front.
+    pub rule_count: usize,
 }
