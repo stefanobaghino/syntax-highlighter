@@ -25,6 +25,10 @@ path = "src/bin/demo/main.rs"
 name = "pegc"
 path = "src/bin/pegc.rs"
 
+[[bin]]
+name = "pegdb"
+path = "src/bin/pegdb.rs"
+
 [[bench]]
 name = "memo"
 path = "benches/memo.rs"
