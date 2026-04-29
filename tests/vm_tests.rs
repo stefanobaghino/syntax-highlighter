@@ -492,7 +492,7 @@ fn partial_match_captures_survive_backtrack_below_watermark() {
 // the array literals below. The constants are: body_start=3, lrtail=13,
 // return_addr=14.
 fn lr_expr_program() -> Vec<Instruction> {
-    let body_start = 3usize;
+    let body_start = 3u32;
     vec![
         // 0: bootstrap
         Instruction::Call(Label(2)),

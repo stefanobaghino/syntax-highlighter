@@ -20,6 +20,14 @@ impl std::fmt::Display for CompileError {
 
 impl std::error::Error for CompileError {}
 
+/// Construct a `Label` from a `usize` instruction position. The expect()
+/// is unreachable for any program `pegc` actually produces — sqlite, our
+/// largest grammar, compiles to ~6 K instructions, six orders of
+/// magnitude below `u32::MAX`.
+fn pos_to_label(pos: usize) -> Label {
+    Label(u32::try_from(pos).expect("instruction position exceeds u32::MAX"))
+}
+
 struct Compiler {
     code: Vec<Instruction>,
     pending_calls: Vec<(usize, String)>,
@@ -60,7 +68,7 @@ impl Compiler {
             target,
             self.code.len()
         );
-        let target = Label(target);
+        let target = pos_to_label(target);
         let new = match &self.code[idx] {
             Instruction::Jump(_) => Instruction::Jump(target),
             Instruction::Choice(_) => Instruction::Choice(target),
@@ -134,7 +142,7 @@ impl Compiler {
                 let choice = self.emit(Instruction::Choice(Label(0)));
                 let body = self.pos();
                 self.compile_pat(inner);
-                self.emit(Instruction::PartialCommit(Label(body)));
+                self.emit(Instruction::PartialCommit(pos_to_label(body)));
                 let l2 = self.pos();
                 self.patch_jump(choice, l2);
             }
@@ -203,7 +211,7 @@ impl Compiler {
                 let loop_top = self.pos();
                 let outer_choice = self.emit(Instruction::Choice(Label(0))); // → rec
                 self.compile_pat(inner);
-                self.emit(Instruction::Commit(Label(loop_top)));
+                self.emit(Instruction::Commit(pos_to_label(loop_top)));
 
                 let rec = self.pos();
                 self.patch_jump(outer_choice, rec);
@@ -212,7 +220,7 @@ impl Compiler {
                 self.emit(Instruction::CaptureBegin(kind));
                 self.emit(Instruction::Any(1));
                 self.emit(Instruction::CaptureEnd);
-                self.emit(Instruction::Commit(Label(loop_top)));
+                self.emit(Instruction::Commit(pos_to_label(loop_top)));
 
                 let exit = self.pos();
                 self.patch_jump(inner_choice, exit);
@@ -298,7 +306,7 @@ pub(crate) fn compile_rules(
         c.compile_pat(&rules[name]);
         match kind {
             RuleKind::Lr => {
-                c.emit(Instruction::LRTail(memo_id, Label(body_start)));
+                c.emit(Instruction::LRTail(memo_id, pos_to_label(body_start)));
             }
             RuleKind::Memo => {
                 c.emit(Instruction::MemoClose(memo_id));

@@ -318,7 +318,7 @@ impl<'p, 'i> VM<'p, 'i> {
                         self.sp += 1;
                         self.ip += 1;
                     } else {
-                        self.ip = label.0;
+                        self.ip = label.as_index();
                     }
                 }
                 Instruction::TestSet(set, label) => {
@@ -329,16 +329,16 @@ impl<'p, 'i> VM<'p, 'i> {
                             self.ip += 1;
                         }
                         _ => {
-                            self.ip = label.0;
+                            self.ip = label.as_index();
                         }
                     }
                 }
                 Instruction::Jump(label) => {
-                    self.ip = label.0;
+                    self.ip = label.as_index();
                 }
                 Instruction::Choice(label) => {
                     self.stack.push(StackEntry::Backtrack {
-                        ip: label.0,
+                        ip: label.as_index(),
                         sp: self.sp,
                         capture_len: self.captures.len(),
                     });
@@ -346,7 +346,7 @@ impl<'p, 'i> VM<'p, 'i> {
                 }
                 Instruction::Commit(label) => {
                     self.pop_backtrack();
-                    self.ip = label.0;
+                    self.ip = label.as_index();
                 }
                 Instruction::PartialCommit(label) => {
                     let top = self.stack.last_mut().expect("PartialCommit on empty stack");
@@ -359,7 +359,7 @@ impl<'p, 'i> VM<'p, 'i> {
                         }
                         _ => panic!("PartialCommit expected Backtrack on stack top"),
                     }
-                    self.ip = label.0;
+                    self.ip = label.as_index();
                 }
                 Instruction::BackCommit(label) => {
                     self.maybe_snapshot();
@@ -372,7 +372,7 @@ impl<'p, 'i> VM<'p, 'i> {
                         self.protect_max_captures(capture_len);
                         self.captures.truncate(capture_len);
                     }
-                    self.ip = label.0;
+                    self.ip = label.as_index();
                 }
                 Instruction::FailTwice => {
                     self.pop_backtrack();
@@ -387,7 +387,7 @@ impl<'p, 'i> VM<'p, 'i> {
                 }
                 Instruction::Call(label) => {
                     self.stack.push(StackEntry::Return { ip: self.ip + 1 });
-                    self.ip = label.0;
+                    self.ip = label.as_index();
                 }
                 Instruction::Return => {
                     let ret_ip = match self.stack.pop() {
@@ -423,7 +423,7 @@ impl<'p, 'i> VM<'p, 'i> {
                                 }
                                 self.bump_top_memo_examined(hit_examined);
                                 self.sp = end_sp;
-                                self.ip = return_label.0;
+                                self.ip = return_label.as_index();
                                 // Hit advances sp past code that didn't run;
                                 // farthest-failure bookkeeping must see it.
                                 self.maybe_snapshot();
@@ -492,7 +492,7 @@ impl<'p, 'i> VM<'p, 'i> {
                                     }
                                     self.bump_top_memo_examined(found.end_sp);
                                     self.sp = found.end_sp;
-                                    self.ip = return_label.0;
+                                    self.ip = return_label.as_index();
                                     self.maybe_snapshot();
                                 }
                                 Some(None) => {
@@ -512,7 +512,7 @@ impl<'p, 'i> VM<'p, 'i> {
                                         memo_id: *memo_id,
                                         start_sp: self.sp,
                                         capture_start_len: self.captures.len(),
-                                        return_addr: return_label.0,
+                                        return_addr: return_label.as_index(),
                                         seed: None,
                                     });
                                     self.memo_examined.push(self.sp);
@@ -646,7 +646,7 @@ impl<'p, 'i> VM<'p, 'i> {
                         });
                         self.captures.truncate(capture_start_len);
                         self.sp = start_sp;
-                        self.ip = body_start.0;
+                        self.ip = body_start.as_index();
                     } else {
                         // No growth — accept the prior seed. If the seed
                         // is still None here (body matched empty on first
