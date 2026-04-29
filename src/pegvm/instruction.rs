@@ -134,6 +134,21 @@ impl CharSet {
         }
         out
     }
+
+    /// Borrow the raw 256-bit bitmap. The set encodes which of the 256
+    /// possible `u8` values it contains; bit `b % 8` of byte `b / 8` is
+    /// set iff `contains(b)`. Used by `pegb` to round-trip a `CharSet`
+    /// through bytes; not generally useful otherwise.
+    pub const fn bitmap(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    /// Construct a `CharSet` from a raw 256-bit bitmap. Inverse of
+    /// `bitmap()`. Distinct from `from_bytes(&[u8])`, which takes a list
+    /// of byte *values* to insert; this takes the bitmap directly.
+    pub const fn from_bitmap(bytes: [u8; 32]) -> Self {
+        CharSet(bytes)
+    }
 }
 
 impl std::fmt::Debug for CharSet {
