@@ -21,6 +21,10 @@ path = "src/lib.rs"
 name = "demo"
 path = "src/bin/demo/main.rs"
 
+[[bin]]
+name = "pegc"
+path = "src/bin/pegc.rs"
+
 [[bench]]
 name = "memo"
 path = "benches/memo.rs"
