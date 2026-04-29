@@ -22,7 +22,7 @@ The design goals:
 
 - **Grammars compile to compact bytecode.** The goal is that most
   languages stay in the kilobyte range per grammar; see Status below
-  for per-grammar counts.
+  for the shipped example.
 - **The VM is the only compiled code; languages are pure data.** Adding,
   swapping, or generating a language grammar — including at runtime, or by
   an LLM — should not require recompiling the library.
@@ -41,25 +41,24 @@ The design goals:
 
 ## Quick demo
 
-Run against any of the shipped bench fixtures — the grammar is
-picked by file extension. Complete grammars:
+Run the `demo` binary against any of the shipped bench fixtures —
+the grammar is picked by file extension. Complete grammars:
 
 ```bash
-cargo run -- benches/fixtures/medium.json
-cargo run -- benches/fixtures/medium.toml
-cargo run -- benches/fixtures/medium.sql
+cargo run --bin demo -- benches/fixtures/medium.json
+cargo run --bin demo -- benches/fixtures/medium.toml
+cargo run --bin demo -- benches/fixtures/medium.sql
 ```
 
-Partial grammars (see the Status table below for the tracking issue
-per language) cover most real-world code but have documented gaps —
+Partial grammars cover most real-world code but have documented gaps —
 expect the occasional miscoloring at the edges:
 
 ```bash
-cargo run -- benches/fixtures/medium.css
-cargo run -- benches/fixtures/medium.c
-cargo run -- benches/fixtures/medium.js
-cargo run -- benches/fixtures/medium.go
-cargo run -- benches/fixtures/medium.rs
+cargo run --bin demo -- benches/fixtures/medium.css
+cargo run --bin demo -- benches/fixtures/medium.c
+cargo run --bin demo -- benches/fixtures/medium.js
+cargo run --bin demo -- benches/fixtures/medium.go
+cargo run --bin demo -- benches/fixtures/medium.rs
 ```
 
 Stdin is also accepted (defaults to JSON; pass `-l <lang>` to
@@ -69,18 +68,11 @@ override).
 
 Early MVP; expect breaking changes. Eight grammars ship today, plus
 an ANSI-coloring CLI. The "kilobyte range per grammar" design goal
-from *Why this approach* above holds across the shipped set:
+holds across the shipped set: as a representative data point, the
+largest grammar (SQLite) compiles to roughly 5,600 instructions
+across 426 rules — comfortably within the kilobyte-per-grammar target.
 
-| Language   | Status         | Rules | Instructions |
-|------------|----------------|------:|-------------:|
-| JSON       | complete       |    16 |          197 |
-| TOML       | complete       |    59 |          629 |
-| CSS        | partial (#34)  |    55 |          688 |
-| C          | partial (#33)  |   102 |        2,483 |
-| JavaScript | partial (#31)  |   137 |        2,916 |
-| Go         | partial (#32)  |   145 |        3,118 |
-| Rust       | partial (#30)  |   172 |        3,413 |
-| SQLite     | complete       |   426 |        5,622 |
+For current per-grammar numbers, run `cargo run --bin pegc -- stats grammars/<lang>.peg`; see [`TOOLS.md`](TOOLS.md) for the developer tools' full contract.
 
 The CLI picks a grammar by file extension (`.json`, `.toml`, `.sql`,
 `.rs`, `.js`/`.mjs`/`.cjs`, `.go`, `.c`/`.h`, `.css`) or an explicit
@@ -93,7 +85,7 @@ Grammars that opt into the `*^` recovery operator on a top-level
 repetition resync past broken regions instead — see the SQL grammar
 (`grammars/sqlite.peg`) for the shipped example.
 
-`Highlighter` owns its input and reuses the memo table across edits:
+`Parser` owns its input and reuses the memo table across edits:
 append-only streaming and arbitrary-position edits reparse only the
 regions whose memo entries cross the edit point, not the whole buffer
 (see `src/pegvm/incremental.rs` for the invalidation protocol).
@@ -106,6 +98,10 @@ regions whose memo entries cross the edit point, not the whole buffer
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to make changes: commands,
   project-level rules, code conventions. Applies to anyone touching the
   code, human or AI agent.
+- [`TOOLS.md`](TOOLS.md) — the `pegc` and `pegdb` grammar developer
+  tools: bytecode stats (compile-time) and per-capture dumps
+  (debug-time). Distinct from the demo CLI; reach for them when
+  authoring or diagnosing a grammar.
 - [`AGENTS.md`](AGENTS.md) — entry point for AI coding agents (mostly a
   pointer to the above).
 

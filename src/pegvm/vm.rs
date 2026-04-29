@@ -2,6 +2,14 @@ use std::collections::HashMap;
 
 use super::instruction::{CaptureKind, Instruction, MemoId, RuleKind};
 
+/// One half-open byte span `start..end` tagged with a [`CaptureKind`].
+///
+/// Emitted in `CaptureBegin` order: `start`-ascending, with a parent
+/// capture appearing before any of its children (the outer rule's
+/// `CaptureBegin` fires before any inner one's). `CaptureEnd` only
+/// fills in the matching capture's `end` — it doesn't reorder.
+/// Consumers that reconstruct nesting can walk a stack keyed on `end`
+/// (see `walk` in `src/walk.rs` for the canonical traversal).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Capture {
     pub kind: CaptureKind,

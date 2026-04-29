@@ -19,6 +19,17 @@ access patterns can invalidate the current tuning. The `memo-bench`
 skill (`.claude/skills/memo-bench/SKILL.md`) documents how to read the
 output and when to raise the default.
 
+## Developer tools
+
+`pegc` (compile-time inspection) and `pegdb` (debug surface) cover the
+grammar developer's workflow: bytecode stats, per-capture dumps. Full
+contract in [`TOOLS.md`](TOOLS.md).
+
+For a quick sanity check on a grammar's bytecode size after
+non-trivial edits, run `cargo run --bin pegc -- stats grammars/<lang>.peg`.
+Walker correctness is asserted by unit tests in `src/walk.rs` and
+runs as part of `cargo test`.
+
 ## Project-level rules
 
 - **Warnings fail CI.** `RUSTFLAGS: -D warnings` is set globally in the workflow. Don't introduce code that produces rustc or clippy warnings.

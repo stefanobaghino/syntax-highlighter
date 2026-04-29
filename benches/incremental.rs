@@ -16,7 +16,7 @@
 
 use std::time::Instant;
 
-use syntax_highlighter::highlight::Highlighter;
+use syntax_highlighter::parser::Parser;
 
 #[path = "common.rs"]
 mod common;
@@ -97,25 +97,26 @@ impl EditKind {
     }
 
     /// Apply this edit to `inc`. Each bench iteration must call this on
-    /// a freshly primed highlighter so the cache reflects exactly one
+    /// a freshly primed parser so the cache reflects exactly one
     /// edit's worth of invalidation.
-    fn apply(&self, inc: &mut Highlighter) {
+    fn apply(&self, inc: &mut Parser) {
+        let view = || std::str::from_utf8(inc.input()).expect("UTF-8 fixture");
         match self {
-            EditKind::AppendOneChar => inc.append(" "),
+            EditKind::AppendOneChar => inc.append(b" "),
             EditKind::InsertMid10 => {
-                let at = pick_boundary(inc.input(), inc.input().len() / 2);
-                inc.edit(at, at, "          ");
+                let at = pick_boundary(view(), view().len() / 2);
+                inc.edit(at, at, b"          ");
             }
             EditKind::DeleteMid10 => {
-                let a = pick_boundary(inc.input(), inc.input().len() / 2);
+                let a = pick_boundary(view(), view().len() / 2);
                 let mut b = a + 10;
-                while b < inc.input().len() && !inc.input().is_char_boundary(b) {
+                while b < view().len() && !view().is_char_boundary(b) {
                     b += 1;
                 }
-                if b > inc.input().len() {
-                    b = inc.input().len();
+                if b > view().len() {
+                    b = view().len();
                 }
-                inc.edit(a, b, "");
+                inc.edit(a, b, b"");
             }
         }
     }
@@ -152,11 +153,11 @@ fn run_cell(
     // Correctness guard: one warm iteration and one fresh full parse
     // must agree bit-for-bit on captures before we trust any timings.
     {
-        let mut inc = Highlighter::new(grammar_src).unwrap();
-        inc.set_input(fixture.to_string());
+        let mut inc = Parser::new(grammar_src).unwrap();
+        inc.set_input(fixture.as_bytes().to_vec());
         edit_kind.apply(&mut inc);
-        let mut fresh = Highlighter::new(grammar_src).unwrap();
-        fresh.set_input(inc.input().to_string());
+        let mut fresh = Parser::new(grammar_src).unwrap();
+        fresh.set_input(inc.input().to_vec());
         assert_eq!(
             inc.captures(),
             fresh.captures(),
@@ -168,11 +169,11 @@ fn run_cell(
     }
 
     // Build the post-edit input once outside the timed regions.
-    let post_edit = {
-        let mut inc = Highlighter::new(grammar_src).unwrap();
-        inc.set_input(fixture.to_string());
+    let post_edit: Vec<u8> = {
+        let mut inc = Parser::new(grammar_src).unwrap();
+        inc.set_input(fixture.as_bytes().to_vec());
         edit_kind.apply(&mut inc);
-        inc.input().to_string()
+        inc.input().to_vec()
     };
 
     // Cold: each iteration drops the cache and full-parses the
@@ -180,7 +181,7 @@ fn run_cell(
     // parse by construction (new MemoCache, every rule invocation
     // is a miss).
     let mut cold_times = Vec::with_capacity(RUNS_PER_CELL);
-    let mut fresh = Highlighter::new(grammar_src).unwrap();
+    let mut fresh = Parser::new(grammar_src).unwrap();
     for _ in 0..RUNS_PER_CELL {
         let t0 = Instant::now();
         fresh.set_input(post_edit.clone());
@@ -192,8 +193,8 @@ fn run_cell(
     let mut warm_times = Vec::with_capacity(RUNS_PER_CELL);
     let mut last_stats = syntax_highlighter::pegvm::MemoStats::default();
     for _ in 0..RUNS_PER_CELL {
-        let mut inc = Highlighter::new(grammar_src).unwrap();
-        inc.set_input(fixture.to_string());
+        let mut inc = Parser::new(grammar_src).unwrap();
+        inc.set_input(fixture.as_bytes().to_vec());
         let t0 = Instant::now();
         edit_kind.apply(&mut inc);
         warm_times.push(t0.elapsed().as_nanos());
@@ -359,7 +360,7 @@ fn main() {
     ];
 
     println!(
-        "incremental reparse sweep — {} runs/cell; cold = fresh Highlighter parse of post-edit input",
+        "incremental reparse sweep — {} runs/cell; cold = fresh Parser parse of post-edit input",
         RUNS_PER_CELL
     );
     println!();

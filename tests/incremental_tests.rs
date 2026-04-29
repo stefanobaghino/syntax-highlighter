@@ -13,13 +13,13 @@
 //!    correctness property this crate has — if any edit invalidates
 //!    more or fewer entries than it should, this test catches it.
 //!
-//! Parser is the deep incremental-parsing abstraction; Highlighter
-//! wraps it without adding state, so a single Highlighter-level smoke
-//! test is enough to prove the wrapper is faithful.
+//! Parser is the deep incremental-parsing abstraction. The demo CLI
+//! wraps it in a `Highlighter` for ANSI rendering, but that wrapper is
+//! demo-internal and adds no state — its faithfulness is a property of
+//! `Parser`, not something this suite needs to re-test through a wrapper.
 
 use std::collections::HashMap;
 
-use syntax_highlighter::highlight::Highlighter;
 use syntax_highlighter::parser::Parser;
 use syntax_highlighter::pegc::{Grammar, Pattern};
 use syntax_highlighter::pegvm::{CharSet, MatchResult, MemoCache, VM};
@@ -324,24 +324,6 @@ fn set_input_resets_cache_cleanly() {
     assert_equivalent(&inc, JSON_GRAMMAR, "reset step 2");
     inc.set_input(b"null".to_vec());
     assert_equivalent(&inc, JSON_GRAMMAR, "reset step 3");
-}
-
-/// Wrapper smoke test: drive a Highlighter through the same shape of
-/// edits the Parser suites exercise and assert it agrees with a fresh
-/// Highlighter. Parser is tested in depth above; this test only
-/// guards that the wrapper doesn't lose equivalence at the `str`
-/// boundary.
-#[test]
-fn highlighter_wrapper_preserves_equivalence_under_edits() {
-    let mut inc = Highlighter::new(JSON_GRAMMAR).unwrap();
-    inc.set_input(r#"{"a": 1}"#.to_string());
-    inc.edit(6, 7, "42");
-    inc.append(", \"b\": true");
-
-    let mut fresh = Highlighter::new(JSON_GRAMMAR).unwrap();
-    fresh.set_input(inc.input().to_string());
-    assert_eq!(inc.captures(), fresh.captures());
-    assert_eq!(inc.highlight(), fresh.highlight());
 }
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {

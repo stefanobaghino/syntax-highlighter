@@ -18,10 +18,8 @@
 //!
 //! PEG matching is byte-oriented, so `Parser` accepts
 //! [`Vec<u8>`] / `&[u8]` rather than `String` / `&str`. UTF-8 handling
-//! is the caller's concern; the ANSI-coloring wrapper in
-//! [`crate::highlight`] handles the `str`/`bytes` conversion at its
-//! entry points, backed by the invariant that every mutation enters as
-//! valid UTF-8.
+//! is the caller's concern; callers that ingest `&str` should preserve
+//! the UTF-8 invariant at their own boundary.
 
 use crate::pegc;
 use crate::pegvm::{incremental::Edit, Capture, MemoCache, MemoStats, Program, VM};
@@ -56,6 +54,7 @@ pub struct Parser {
     input: Vec<u8>,
     cache: MemoCache,
     matched: usize,
+    complete: bool,
     captures: Vec<Capture>,
     last_stats: MemoStats,
 }
@@ -70,6 +69,7 @@ impl Parser {
             input: Vec::new(),
             cache: MemoCache::new(),
             matched: 0,
+            complete: true,
             captures: Vec::new(),
             last_stats: MemoStats::default(),
         })
@@ -125,6 +125,14 @@ impl Parser {
         (self.matched, &self.captures)
     }
 
+    /// True iff the most recent parse reached `End` (the input fully
+    /// matched the grammar). Distinct from `captures().0 == input.len()`,
+    /// which can hold for a partial parse whose farthest-reached
+    /// position happens to equal the input length.
+    pub fn is_complete(&self) -> bool {
+        self.complete
+    }
+
     pub fn capture_kinds(&self) -> &[String] {
         &self.program.capture_kinds
     }
@@ -142,6 +150,7 @@ impl Parser {
             VM::new_with_cache(&self.program.code, &self.input, seeded).run_with_cache();
         self.cache = cache_after;
         self.matched = result.matched;
+        self.complete = result.complete;
         self.captures = result.captures;
         self.last_stats = stats;
     }
@@ -209,6 +218,21 @@ mod tests {
 
         inc.edit(pos, pos + 1, b"");
         assert_equivalent(&inc, TOML_GRAMMAR, "after second edit");
+    }
+
+    #[test]
+    fn is_complete_distinguishes_full_parse_from_truncation() {
+        let mut p = Parser::new(JSON_GRAMMAR).unwrap();
+        p.set_input(br#"{"a": 1}"#.to_vec());
+        assert_eq!(p.captures().0, 8);
+        assert!(p.is_complete(), "full parse must report complete");
+
+        // Truncate the input mid-object: missing closing brace.
+        p.set_input(br#"{"a": 1"#.to_vec());
+        assert!(
+            !p.is_complete(),
+            "truncated input must report partial parse"
+        );
     }
 
     #[test]
