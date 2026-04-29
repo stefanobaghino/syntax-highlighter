@@ -4,14 +4,12 @@
 //! 1. Compile source → `Program`.
 //! 2. Encode → bytes, decode → second `Program`, assert structural
 //!    equality (`code`, `capture_kinds`, `rule_count`).
-//! 3. Run the same canned input through both Programs (constructed
-//!    `VM`s, not the higher-level `Parser`), assert identical
-//!    `MatchResult`s. Confirms the wire format preserves runtime
-//!    behavior end-to-end.
+//! 3. Run the same canned input through (a) `VM` directly on both
+//!    Programs and (b) `Parser::from_program` on the decoded one,
+//!    assert all three observe the same captures + completion. Confirms
+//!    the wire format preserves runtime behavior end-to-end through both
+//!    the low-level VM and the deep-module `Parser` surface.
 //! 4. Determinism: encoding twice yields byte-equal output.
-//!
-//! The `Parser::from_program` integration is exercised in `parser.rs`
-//! itself once that constructor lands (milestone 3).
 //!
 //! Sqlite is `#[ignore]`'d by default — it's the largest grammar
 //! (5 K+ instructions, 426 rules) and adds noticeable test latency.
@@ -19,7 +17,8 @@
 //! --ignored sqlite_roundtrips` to exercise the largest varint widths
 //! and the bigger end of the instruction stream.
 
-use syntax_highlighter::pegvm::{Program, VM};
+use syntax_highlighter::parser::Parser;
+use syntax_highlighter::pegvm::VM;
 use syntax_highlighter::{pegb, pegc};
 
 fn assert_roundtrip(grammar: &str, sample: &[u8], tag: &str) {
@@ -45,22 +44,35 @@ fn assert_roundtrip(grammar: &str, sample: &[u8], tag: &str) {
         "{tag}: encoding is not deterministic"
     );
 
-    // End-to-end: running both Programs against the same input must
-    // produce identical match results.
+    // End-to-end via VM: running both Programs against the same input
+    // must produce identical match results.
     let r1 = VM::new(&p1.code, sample).run();
     let r2 = VM::new(&p2.code, sample).run();
     assert_eq!(r1.matched, r2.matched, "{tag}: matched differs");
     assert_eq!(r1.complete, r2.complete, "{tag}: complete flag differs");
     assert_eq!(r1.captures, r2.captures, "{tag}: captures differ");
+
+    // End-to-end via Parser::from_program: a Parser built from the
+    // decoded Program must agree with one built from grammar source on
+    // captures and completion.
+    let mut from_decoded = Parser::from_program(p2);
+    let mut from_source = Parser::new(grammar).unwrap();
+    from_decoded.set_input(sample.to_vec());
+    from_source.set_input(sample.to_vec());
+    assert_eq!(
+        from_decoded.captures(),
+        from_source.captures(),
+        "{tag}: Parser::from_program captures diverge from Parser::new"
+    );
+    assert_eq!(
+        from_decoded.is_complete(),
+        from_source.is_complete(),
+        "{tag}: Parser::from_program completion diverges from Parser::new"
+    );
 }
 
 fn assert_grammar(path_label: &str, grammar: &str, sample: &[u8]) {
     assert_roundtrip(grammar, sample, path_label);
-    // Also confirm `Program` is structurally what we expect (sanity:
-    // non-empty code + at least one capture kind).
-    let p = pegc::compile(grammar).unwrap();
-    assert!(!p.code.is_empty(), "{path_label}: code unexpectedly empty");
-    let _: &Program = &p;
 }
 
 #[test]
