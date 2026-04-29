@@ -604,7 +604,7 @@ fn direct_lr_rule_emits_lrbody_lrtail_skeleton() {
     }
     // RuleEnter's return label points at the rule's Return (last instruction).
     if let Instruction::RuleEnter(_, RuleKind::Lr, Label(ret)) = prog.code[2] {
-        assert_eq!(ret, n - 1);
+        assert_eq!(ret as usize, n - 1);
     }
     // LRTail's body-start label points at the instruction after RuleEnter.
     if let Instruction::LRTail(_, Label(body_start)) = prog.code[n - 2] {

@@ -92,16 +92,16 @@ An `Instruction` is a pure value; it carries no pointers or state, only the data
 
 ### `Label` — opaque code addresses
 
-`Label` is a newtype over `usize`: the index of an instruction in a compiled program's code array.
+`Label` is a newtype over `u32`: the index of an instruction in a compiled program's code array.
 
 ```rust
 #[repr(transparent)]
-pub struct Label(pub usize);
+pub struct Label(pub u32);
 ```
 
-Its purpose is *disambiguation*, not just bit-packing. Within the VM, `usize` is also used for the instruction pointer (`ip`), the subject pointer (`sp`), the capture stack length, and various lengths and indices. Making `Label` a distinct type means that a `Jump(label)` instruction can only target something that was deliberately constructed as a code address — a stray `sp` or `len` cannot silently be used where the grammar's structure expects a label.
+Its purpose is *disambiguation*: a `Jump(label)` instruction can only target something that was deliberately constructed as a code address — a stray `sp` or `len` cannot silently be used where the grammar's structure expects a label. The inner width is `u32` rather than `usize` because every `Instruction` variant carrying a Label pays for that width via enum padding; trimming Label from 8 to 4 bytes shrinks the largest variant (`TestSet(CharSet, Label)`) from 40 to 36 payload bytes and the whole enum from 48 to 40 bytes, ~17% less memory across every Program. The cap of 4 G instructions is well beyond what `pegc` produces — sqlite, the largest grammar in this repo, compiles to ~6 K instructions.
 
-Labels appear only in `Instruction` payloads. Once the VM is actually executing, it works with raw `usize` values (`self.ip = label.0`); the newtype's job is to keep the *data* of the program well-typed.
+Labels appear only in `Instruction` payloads. The VM widens to `usize` at the boundary where a Label flows into the instruction pointer or onto the backtrack stack via `Label::as_index` (`self.ip = label.as_index()`); the newtype's job is to keep the *data* of the program well-typed and compact.
 
 ### `CaptureKind` — interned capture-name tags
 

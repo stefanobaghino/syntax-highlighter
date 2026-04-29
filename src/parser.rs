@@ -64,15 +64,25 @@ impl Parser {
     /// Compilation runs once; subsequent `set_input` / `edit` calls
     /// reuse the same [`Program`].
     pub fn new(grammar_source: &str) -> Result<Self, ParserError> {
-        Ok(Self {
-            program: pegc::compile(grammar_source)?,
+        Ok(Self::from_program(pegc::compile(grammar_source)?))
+    }
+
+    /// Construct an empty-input parser from a pre-compiled [`Program`].
+    /// Skips the grammar-source pipeline — useful when the program came
+    /// from [`crate::pegb::decode`], from a hand-built fixture, or from
+    /// any other producer. The caller is responsible for the program's
+    /// shape; there's no validation beyond what the producer already
+    /// did.
+    pub fn from_program(program: Program) -> Self {
+        Self {
+            program,
             input: Vec::new(),
             cache: MemoCache::new(),
             matched: 0,
             complete: true,
             captures: Vec::new(),
             last_stats: MemoStats::default(),
-        })
+        }
     }
 
     /// Replace the entire input and perform a cold parse. Discards any
@@ -245,5 +255,23 @@ mod tests {
             cold.misses > 0,
             "expected at least one lookup, got {cold:?}"
         );
+    }
+
+    /// `Parser::from_program` and `Parser::new` produce equivalent
+    /// parsers when given matching inputs — the `from_program` path
+    /// skips `pegc::compile` but otherwise must behave identically.
+    #[test]
+    fn from_program_matches_new_on_same_grammar() {
+        let program = pegc::compile(JSON_GRAMMAR).unwrap();
+        let mut from_prog = Parser::from_program(program);
+        let mut from_src = Parser::new(JSON_GRAMMAR).unwrap();
+
+        let input = br#"{"a": 1, "b": [true, null]}"#.to_vec();
+        from_prog.set_input(input.clone());
+        from_src.set_input(input);
+
+        assert_eq!(from_prog.captures(), from_src.captures());
+        assert_eq!(from_prog.is_complete(), from_src.is_complete());
+        assert_eq!(from_prog.capture_kinds(), from_src.capture_kinds());
     }
 }

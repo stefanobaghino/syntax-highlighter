@@ -1,12 +1,28 @@
 /// Index into a compiled `Program`'s instruction array — i.e. a code address.
 ///
-/// A newtype rather than a bare `usize` so it cannot be silently confused with
-/// the subject pointer (`sp`), an array length, or any other index. Wrapping
-/// is a `#[repr(transparent)]` newtype: zero runtime cost, identical layout to
-/// `usize`. See `CLAUDE.md` for the project-wide convention behind this choice.
+/// A newtype rather than a bare integer so it cannot be silently confused with
+/// the subject pointer (`sp`), an array length, or any other index. The inner
+/// width is `u32`: smaller than `usize` on 64-bit targets, which shrinks every
+/// `Instruction` variant carrying a Label and is plenty for any realistic
+/// program (the largest grammar in this repo compiles to ~6 K instructions,
+/// well below `u32::MAX`). Consumers reach for [`Label::as_index`] at the
+/// boundary where a Label flows into the instruction pointer or the
+/// backtrack stack.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct Label(pub usize);
+pub struct Label(pub u32);
+
+impl Label {
+    /// Widen the inner `u32` to `usize` for indexing. The conversion is
+    /// always lossless on every target Rust supports (`usize` is at least
+    /// 32 bits everywhere). Centralizes the cast at the type's boundary
+    /// so VM dispatch sites read as `self.ip = label.as_index()` rather
+    /// than scattering `label.0 as usize` across the loop body.
+    #[inline]
+    pub const fn as_index(self) -> usize {
+        self.0 as usize
+    }
+}
 
 impl std::fmt::Debug for Label {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -117,6 +133,21 @@ impl CharSet {
             out.0[i] = self.0[i] | other.0[i];
         }
         out
+    }
+
+    /// Borrow the raw 256-bit bitmap. The set encodes which of the 256
+    /// possible `u8` values it contains; bit `b % 8` of byte `b / 8` is
+    /// set iff `contains(b)`. Used by `pegb` to round-trip a `CharSet`
+    /// through bytes; not generally useful otherwise.
+    pub const fn bitmap(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    /// Construct a `CharSet` from a raw 256-bit bitmap. Inverse of
+    /// `bitmap()`. Distinct from `from_bytes(&[u8])`, which takes a list
+    /// of byte *values* to insert; this takes the bitmap directly.
+    pub const fn from_bitmap(bytes: [u8; 32]) -> Self {
+        CharSet(bytes)
     }
 }
 
