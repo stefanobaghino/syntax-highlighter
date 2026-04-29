@@ -9,9 +9,12 @@ use super::instruction::Instruction;
 pub struct Program {
     pub code: Vec<Instruction>,
     pub capture_kinds: Vec<String>,
-    /// Number of rules in the grammar. Every rule is memoized today, so this
-    /// also doubles as the memo-table size: each rule gets a distinct
-    /// `MemoId` in the range `0..rule_count`, assigned in compilation order,
-    /// so the VM can size its memo table once up front.
+    /// Number of rules in the grammar. Each rule gets a distinct `MemoId`
+    /// in the range `0..rule_count`, assigned by [`crate::pegc`] in
+    /// compilation order. Today this is read by `pegc stats` and a
+    /// handful of compiler tests; the VM uses a `HashMap`-backed
+    /// [`crate::pegvm::MemoCache`] and doesn't size by `rule_count`.
+    /// [`crate::pegb::decode`] reconstructs the value from the
+    /// instruction stream rather than carrying it on the wire.
     pub rule_count: usize,
 }
