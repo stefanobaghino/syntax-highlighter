@@ -18,10 +18,8 @@
 //!
 //! PEG matching is byte-oriented, so `Parser` accepts
 //! [`Vec<u8>`] / `&[u8]` rather than `String` / `&str`. UTF-8 handling
-//! is the caller's concern; the ANSI-coloring wrapper in
-//! [`crate::highlight`] handles the `str`/`bytes` conversion at its
-//! entry points, backed by the invariant that every mutation enters as
-//! valid UTF-8.
+//! is the caller's concern; callers that ingest `&str` should preserve
+//! the UTF-8 invariant at their own boundary.
 
 use crate::pegc;
 use crate::pegvm::{incremental::Edit, Capture, MemoCache, MemoStats, Program, VM};

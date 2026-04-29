@@ -18,8 +18,8 @@ exclude = [".github"]
 path = "src/lib.rs"
 
 [[bin]]
-name = "syntax-highlighter"
-path = "src/main.rs"
+name = "demo"
+path = "src/bin/demo/main.rs"
 
 [[bench]]
 name = "memo"
