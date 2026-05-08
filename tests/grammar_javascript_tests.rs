@@ -378,3 +378,98 @@ fn labeled_statement_and_break_parse() {
     let (_, _) =
         assert_complete_full("outer: for (let i = 0; i < 10; i++) { if (i === 5) break outer; }\n");
 }
+
+// Pins the inter-statement-whitespace handling inside `block` and
+// `switch_case`. Stmts whose syntactic tail is `}` (`if_stmt`,
+// `for_stmt`, `while_stmt`, `block_stmt`, `try_stmt`, …) leave their
+// trailing space unconsumed; the stmt-list rules must consume it
+// between siblings, otherwise the enclosing `block` fails on the
+// next stmt's keyword and the whole `fn_decl` collapses into
+// recovery captures.
+
+fn keyword_literals<'a>(input: &'a str, captures: &[Capture], kinds: &[String]) -> Vec<&'a str> {
+    captures
+        .iter()
+        .filter(|c| kinds[c.kind.0 as usize] == "keyword")
+        .map(|c| &input[c.start..c.end])
+        .collect()
+}
+
+#[test]
+fn block_with_if_then_return_keeps_function_keyword() {
+    let input = "function f() { if (true) {} return; }\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let kw = keyword_literals(input, &caps, &kinds);
+    assert!(
+        kw.contains(&"function") && kw.contains(&"if") && kw.contains(&"return"),
+        "expected function/if/return as keywords, got: {:?}",
+        kw
+    );
+}
+
+#[test]
+fn block_with_for_then_return_keeps_function_keyword() {
+    let input = "function f() { for (let i=0;i<1;i++) {} return; }\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let kw = keyword_literals(input, &caps, &kinds);
+    assert!(
+        kw.contains(&"function") && kw.contains(&"for") && kw.contains(&"return"),
+        "expected function/for/return as keywords, got: {:?}",
+        kw
+    );
+}
+
+#[test]
+fn block_with_while_then_return_keeps_function_keyword() {
+    let input = "function f() { while (true) {} return; }\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let kw = keyword_literals(input, &caps, &kinds);
+    assert!(
+        kw.contains(&"function") && kw.contains(&"while") && kw.contains(&"return"),
+        "expected function/while/return as keywords, got: {:?}",
+        kw
+    );
+}
+
+#[test]
+fn block_stmt_then_return_keeps_function_keyword() {
+    let input = "function f() { {} return; }\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let kw = keyword_literals(input, &caps, &kinds);
+    assert!(
+        kw.contains(&"function") && kw.contains(&"return"),
+        "expected function/return as keywords, got: {:?}",
+        kw
+    );
+}
+
+#[test]
+fn switch_case_with_block_tail_stmt_parses() {
+    let input = "function f() { switch (x) { case 1: if (y) {} break; } }\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let kw = keyword_literals(input, &caps, &kinds);
+    assert!(
+        kw.contains(&"function")
+            && kw.contains(&"switch")
+            && kw.contains(&"case")
+            && kw.contains(&"if")
+            && kw.contains(&"break"),
+        "expected function/switch/case/if/break as keywords, got: {:?}",
+        kw
+    );
+}
+
+#[test]
+fn try_then_return_keeps_function_keyword() {
+    let input = "function f() { try {} catch (e) {} return; }\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let kw = keyword_literals(input, &caps, &kinds);
+    assert!(
+        kw.contains(&"function")
+            && kw.contains(&"try")
+            && kw.contains(&"catch")
+            && kw.contains(&"return"),
+        "expected function/try/catch/return as keywords, got: {:?}",
+        kw
+    );
+}

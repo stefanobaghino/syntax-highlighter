@@ -134,8 +134,8 @@ while_stmt     <- @keyword{'while'} ws @punctuation{'('} ws expr ws @punctuation
 do_while_stmt  <- @keyword{'do'} ws stmt ws @keyword{'while'} ws @punctuation{'('} ws expr ws @punctuation{')'} ws opt_semi
 switch_stmt    <- @keyword{'switch'} ws @punctuation{'('} ws expr ws @punctuation{')'} ws
                   @punctuation{'{'} ws switch_case* ws @punctuation{'}'}
-switch_case    <- @keyword{'case'} ws expr ws @punctuation{':'} ws (!switch_case_term stmt)*
-                / @keyword{'default'} ws @punctuation{':'} ws (!switch_case_term stmt)*
+switch_case    <- @keyword{'case'} ws expr ws @punctuation{':'} ws (!switch_case_term stmt ws)*
+                / @keyword{'default'} ws @punctuation{':'} ws (!switch_case_term stmt ws)*
 switch_case_term <- @keyword{'case'} / @keyword{'default'} / @punctuation{'}'}
 try_stmt       <- @keyword{'try'} ws block (ws catch_clause)? (ws finally_clause)?
 catch_clause   <- @keyword{'catch'} (ws @punctuation{'('} ws pattern ws @punctuation{')'})? ws block
@@ -147,7 +147,7 @@ continue_stmt  <- @keyword{'continue'} (ws @variable{ident})? ws opt_semi
 debugger_stmt  <- @keyword{'debugger'} ws opt_semi
 labeled_stmt   <- @variable{ident} ws @punctuation{':'} ws stmt
 block_stmt     <- block
-block          <- @punctuation{'{'} ws stmt* ws @punctuation{'}'}
+block          <- @punctuation{'{'} ws (stmt ws)* @punctuation{'}'}
 
 # --- Function params and patterns -------------------------------------
 
