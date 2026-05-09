@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::mem::MaybeUninit;
 
 use super::instruction::{CaptureKind, Instruction, MemoId, RuleKind};
+use super::slab::Slab;
 
 /// One half-open byte span `start..end` tagged with a [`CaptureKind`].
 ///
@@ -22,7 +24,7 @@ enum StackEntry {
     Backtrack {
         ip: usize,
         sp: usize,
-        capture_len: usize,
+        snapshot: CaptureSnapshot,
     },
     Return {
         ip: usize,
@@ -31,12 +33,12 @@ enum StackEntry {
     /// `RuleKind::Memo` miss path, popped by `MemoClose` on success (which
     /// records the entry) or by `fail()` when the rule escapes via failure
     /// (which records a failure entry). Holds enough state to locate the
-    /// cache slot (`memo_id`, `start_sp`) and to slice the captures
-    /// produced inside the rule (`capture_start_len`).
+    /// cache slot (`memo_id`, `start_sp`) and to extract the captures
+    /// produced inside the rule (`snapshot`).
     Memo {
         memo_id: MemoId,
         start_sp: usize,
-        capture_start_len: usize,
+        snapshot: CaptureSnapshot,
     },
     /// Frame for an in-flight left-recursive rule invocation. Pushed by
     /// `RuleEnter`'s `RuleKind::Lr` miss path on the first entry at a
@@ -49,7 +51,7 @@ enum StackEntry {
     LFrame {
         memo_id: MemoId,
         start_sp: usize,
-        capture_start_len: usize,
+        snapshot: CaptureSnapshot,
         return_addr: usize,
         seed: Option<LSeed>,
     },
@@ -57,7 +59,7 @@ enum StackEntry {
 
 /// Successful seed of a left-recursive rule's prior iteration: the `sp` the
 /// body matched up to, and the closed captures it produced past the
-/// `LFrame`'s `capture_start_len`. Replayed verbatim on recursive entries
+/// `LFrame`'s baseline snapshot. Replayed verbatim on recursive entries
 /// (where the recursive call must appear to have returned this seed) and on
 /// the convergence step (where the rule itself exits with this match).
 #[derive(Debug, Clone)]
@@ -112,21 +114,35 @@ pub struct VM<'p, 'i> {
     ip: usize,
     sp: usize,
     stack: Vec<StackEntry>,
-    captures: Vec<OpenCapture>,
+    /// Speculative-capture arena. `OpenCapture`s live in a parent-linked
+    /// chain of fixed-size [`Chunk`]s (size [`CHUNK_SIZE`]). The chain
+    /// from `current_chunk` back to `root_chunk` is the live capture
+    /// stream in `CaptureBegin` order. Pushes spill into a freshly
+    /// allocated child chunk when the current chunk fills; restores walk
+    /// the chain leaf-first, freeing chunks back to the slab. Replaces
+    /// the flat-Vec design and its `protect_max_captures` clone-on-fail
+    /// (which was 73.6 % self-time on jquery.js) with chain-walk
+    /// preservation that pays only when the watermark is endangered.
+    chunks: Slab<Chunk>,
+    current_chunk: ChunkId,
+    /// Origin of the chain. Allocated in `VM::new`; never freed. Pushes
+    /// from a freshly constructed VM land in `root_chunk` until it fills.
+    root_chunk: ChunkId,
+    /// Monotone-increasing counter assigned to each `Chunk` at slab-insert
+    /// time. Two purposes: (a) detect slab-slot reuse — a `CaptureSnapshot`'s
+    /// `chunk_seq` must match the live chunk's `seq`, otherwise the slot
+    /// was freed and a different chunk now occupies it; (b) total-order
+    /// chunks for `MaxSnap`'s endangerment check.
+    next_seq: u64,
     max_sp: usize,
-    /// Length of `captures` at the moment `sp` reached `max_sp`. The
-    /// captures themselves live in `captures[..max_captures_len]` until a
-    /// `fail()` or `BackCommit` truncates the vector below that watermark,
-    /// at which point `protect_max_captures` materializes a copy into
-    /// `max_captures_saved`. Deferring the clone makes `maybe_snapshot`
-    /// O(1) instead of O(n) per sp-advance — critical on large inputs
-    /// where the eager-clone variant went quadratic in captures count.
-    max_captures_len: usize,
-    /// Populated lazily the first time a truncate would drop captures
-    /// below `max_captures_len`. `None` means the canonical captures
-    /// still reside in `captures[..max_captures_len]`. Cleared whenever
-    /// `max_sp` advances (the prior snapshot becomes stale).
-    max_captures_saved: Option<Vec<OpenCapture>>,
+    /// Farthest-failure capture state. Stores `(chunk, offset)` at the
+    /// moment `sp` reached `max_sp`; the preservation copy in
+    /// `MaxSnap.saved` is materialised only when `restore_to` is about
+    /// to free the snapshot's chunk (or truncate within it past
+    /// `snapshot.offset`). On a successful parse the snapshot is never
+    /// materialised — what was 73.6 % self-time as `protect_max_captures`
+    /// becomes a single integer comparison.
+    max_capture: Option<MaxSnap>,
     /// Packrat memo table, keyed by `(memo_id, start_sp)`. Populated by
     /// `MemoClose` on success and by `fail()` on failure escape (Commit 5).
     memo: HashMap<(MemoId, usize), MemoEntry>,
@@ -185,11 +201,96 @@ pub(crate) struct MemoEntry {
     pub(crate) captures: Vec<Capture>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct OpenCapture {
     kind: CaptureKind,
     start: usize,
     end: Option<usize>,
+}
+
+/// Number of `OpenCapture`s a single `Chunk` can hold inline. Sized so
+/// that a chunk is ≈1 KiB on a 64-bit target (32 × 32 B = 1024 B for
+/// the captures array, plus ≈18 B of bookkeeping). Larger values reduce
+/// chain depth (and thus per-restore walk length) but raise the
+/// per-chunk slab footprint and the per-clone cost when an endangered
+/// `MaxSnap` materialises. 32 is the starting point; sweep if perf is
+/// sensitive.
+const CHUNK_SIZE: usize = 32;
+
+/// Index into the `chunks` slab. Stable across pushes; reused after
+/// `Slab::remove` (the `seq` field on each saved snapshot detects
+/// reuse). 32 bits is plenty — the largest realistic input observed
+/// keeps live chunks under ~10⁵ even with deep backtracking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ChunkId(u32);
+
+/// One node of the chunked capture chain. Slots `[..len]` are
+/// initialised; the remainder are `MaybeUninit::uninit()` and may not
+/// be read until written by `push_capture`. `parent` is `None` only
+/// for `root_chunk`, allocated in [`VM::new`]; every other chunk is
+/// linked back to a chunk that existed at allocation time. `seq` is a
+/// monotone-increasing per-VM counter, assigned at slab-insert time.
+struct Chunk {
+    captures: [MaybeUninit<OpenCapture>; CHUNK_SIZE],
+    len: u16,
+    parent: Option<ChunkId>,
+    seq: u64,
+}
+
+impl Chunk {
+    fn new(parent: Option<ChunkId>, seq: u64) -> Self {
+        Chunk {
+            captures: std::array::from_fn(|_| MaybeUninit::uninit()),
+            len: 0,
+            parent,
+            seq,
+        }
+    }
+
+    /// Initialised prefix as a `&[OpenCapture]` slice. Reads only the
+    /// `len` slots that `push_capture` has written.
+    fn slots(&self) -> &[OpenCapture] {
+        // SAFETY: slots `..len` are initialised by `push_capture`; the
+        // `MaybeUninit<T>` and `T` have identical layouts, and the
+        // pointer cast respects alignment of `OpenCapture`.
+        unsafe {
+            std::slice::from_raw_parts(
+                self.captures.as_ptr() as *const OpenCapture,
+                self.len as usize,
+            )
+        }
+    }
+}
+
+impl Drop for Chunk {
+    fn drop(&mut self) {
+        for slot in &mut self.captures[..self.len as usize] {
+            // SAFETY: slots `..len` are initialised by `push_capture`.
+            unsafe { slot.assume_init_drop() };
+        }
+    }
+}
+
+/// Saved state of "everything that has been captured so far": the
+/// chunk the writer was in, plus the in-chunk offset at save time.
+/// Captures up to this point form `chunk.slots()[..offset]` **plus**
+/// `chunk`'s ancestor chain.
+#[derive(Debug, Clone, Copy)]
+struct CaptureSnapshot {
+    chunk: ChunkId,
+    offset: u16,
+    chunk_seq: u64,
+}
+
+/// Farthest-failure capture state, materialised lazily. `snapshot`
+/// points at the live chunk reached at `max_sp`; `saved` is the
+/// preservation copy, populated only the first time `restore_to` would
+/// drop captures the snapshot still depends on (either freeing
+/// `snapshot.chunk` outright, or truncating it below `snapshot.offset`).
+/// On `sp > max_sp` the snapshot is replaced and `saved` cleared.
+struct MaxSnap {
+    snapshot: CaptureSnapshot,
+    saved: Option<Vec<OpenCapture>>,
 }
 
 impl<'p, 'i> VM<'p, 'i> {
@@ -201,16 +302,25 @@ impl<'p, 'i> VM<'p, 'i> {
     pub const DEFAULT_MEMO_THRESHOLD: usize = 128;
 
     pub fn new(program: &'p [Instruction], input: &'i [u8]) -> Self {
+        let mut chunks: Slab<Chunk> = Slab::new();
+        // Root chunk gets seq 0; subsequent allocations bump `next_seq`.
+        // The 0-baseline matters for the endangerment check: any snapshot
+        // taken on a non-root chunk has `chunk_seq > 0`, so a restore
+        // back through root correctly triggers preservation.
+        let root_id = chunks.insert(Chunk::new(None, 0));
+        let root_chunk = ChunkId(root_id);
         VM {
             program,
             input,
             ip: 0,
             sp: 0,
             stack: Vec::new(),
-            captures: Vec::new(),
+            chunks,
+            current_chunk: root_chunk,
+            root_chunk,
+            next_seq: 1,
             max_sp: 0,
-            max_captures_len: 0,
-            max_captures_saved: None,
+            max_capture: None,
             memo: HashMap::new(),
             memo_hits: 0,
             memo_misses: 0,
@@ -337,10 +447,11 @@ impl<'p, 'i> VM<'p, 'i> {
                     self.ip = label.as_index();
                 }
                 Instruction::Choice(label) => {
+                    let snapshot = self.snapshot_now();
                     self.stack.push(StackEntry::Backtrack {
                         ip: label.as_index(),
                         sp: self.sp,
-                        capture_len: self.captures.len(),
+                        snapshot,
                     });
                     self.ip += 1;
                 }
@@ -349,13 +460,12 @@ impl<'p, 'i> VM<'p, 'i> {
                     self.ip = label.as_index();
                 }
                 Instruction::PartialCommit(label) => {
+                    let new_snap = self.snapshot_now();
                     let top = self.stack.last_mut().expect("PartialCommit on empty stack");
                     match top {
-                        StackEntry::Backtrack {
-                            sp, capture_len, ..
-                        } => {
+                        StackEntry::Backtrack { sp, snapshot, .. } => {
                             *sp = self.sp;
-                            *capture_len = self.captures.len();
+                            *snapshot = new_snap;
                         }
                         _ => panic!("PartialCommit expected Backtrack on stack top"),
                     }
@@ -364,13 +474,9 @@ impl<'p, 'i> VM<'p, 'i> {
                 Instruction::BackCommit(label) => {
                     self.maybe_snapshot();
                     let entry = self.pop_backtrack();
-                    if let StackEntry::Backtrack {
-                        sp, capture_len, ..
-                    } = entry
-                    {
+                    if let StackEntry::Backtrack { sp, snapshot, .. } = entry {
                         self.sp = sp;
-                        self.protect_max_captures(capture_len);
-                        self.captures.truncate(capture_len);
+                        self.restore_to(snapshot);
                     }
                     self.ip = label.as_index();
                 }
@@ -402,26 +508,24 @@ impl<'p, 'i> VM<'p, 'i> {
                 Instruction::RuleEnter(memo_id, kind, return_label) => {
                     // Shared cache-hit prologue. Both kinds probe the same
                     // packrat slot; only the post-miss frame layout differs.
-                    // The `entry` borrow lives across the capture-replay loop
-                    // and is released by NLL before the kind branch below,
-                    // so the miss path can mutate `self` freely.
                     if let Some(entry) = self.memo.get(&(*memo_id, self.sp)) {
                         self.memo_hits += 1;
                         let hit_examined = entry.examined_max;
                         match entry.end_sp {
                             Some(end_sp) => {
                                 // Success hit: replay captures already-closed
-                                // (the enclosing `CaptureEnd`'s `rposition`
-                                // search binds to the innermost still-open
-                                // capture and skips over them).
-                                for c in &entry.captures {
-                                    self.captures.push(OpenCapture {
+                                // (the enclosing `CaptureEnd`'s reverse-walk
+                                // binds to the innermost still-open capture
+                                // and skips over them).
+                                let replay = entry.captures.clone();
+                                self.bump_top_memo_examined(hit_examined);
+                                for c in replay {
+                                    self.push_capture(OpenCapture {
                                         kind: c.kind,
                                         start: c.start,
                                         end: Some(c.end),
                                     });
                                 }
-                                self.bump_top_memo_examined(hit_examined);
                                 self.sp = end_sp;
                                 self.ip = return_label.as_index();
                                 // Hit advances sp past code that didn't run;
@@ -444,10 +548,11 @@ impl<'p, 'i> VM<'p, 'i> {
                     match kind {
                         RuleKind::Memo => {
                             self.memo_misses += 1;
+                            let snapshot = self.snapshot_now();
                             self.stack.push(StackEntry::Memo {
                                 memo_id: *memo_id,
                                 start_sp: self.sp,
-                                capture_start_len: self.captures.len(),
+                                snapshot,
                             });
                             // Parallel watermark for this frame. Starts at the
                             // rule's entry sp; read sites bump it as the body
@@ -483,14 +588,15 @@ impl<'p, 'i> VM<'p, 'i> {
                                     // captures and jump to the rule's Return
                                     // so the caller's `Call`-pushed Return
                                     // frame fires normally.
-                                    for c in &found.captures {
-                                        self.captures.push(OpenCapture {
+                                    let replay = found.captures;
+                                    self.bump_top_memo_examined(found.end_sp);
+                                    for c in replay {
+                                        self.push_capture(OpenCapture {
                                             kind: c.kind,
                                             start: c.start,
                                             end: Some(c.end),
                                         });
                                     }
-                                    self.bump_top_memo_examined(found.end_sp);
                                     self.sp = found.end_sp;
                                     self.ip = return_label.as_index();
                                     self.maybe_snapshot();
@@ -508,10 +614,11 @@ impl<'p, 'i> VM<'p, 'i> {
                                     // First entry at this sp — push an LFrame
                                     // and a paired memo_examined watermark,
                                     // then fall through to the body.
+                                    let snapshot = self.snapshot_now();
                                     self.stack.push(StackEntry::LFrame {
                                         memo_id: *memo_id,
                                         start_sp: self.sp,
-                                        capture_start_len: self.captures.len(),
+                                        snapshot,
                                         return_addr: return_label.as_index(),
                                         seed: None,
                                     });
@@ -523,12 +630,12 @@ impl<'p, 'i> VM<'p, 'i> {
                     }
                 }
                 Instruction::MemoClose(memo_id) => {
-                    let (top_id, start_sp, capture_start_len) = match self.stack.pop() {
+                    let (top_id, start_sp, snapshot) = match self.stack.pop() {
                         Some(StackEntry::Memo {
                             memo_id,
                             start_sp,
-                            capture_start_len,
-                        }) => (memo_id, start_sp, capture_start_len),
+                            snapshot,
+                        }) => (memo_id, start_sp, snapshot),
                         other => {
                             panic!("MemoClose expected Memo on stack top, got {:?}", other)
                         }
@@ -543,12 +650,6 @@ impl<'p, 'i> VM<'p, 'i> {
                         "MemoClose: rule body retreated past start_sp ({} > {})",
                         start_sp,
                         self.sp,
-                    );
-                    debug_assert!(
-                        capture_start_len <= self.captures.len(),
-                        "MemoClose: capture buffer shrank below entry baseline ({} > {})",
-                        capture_start_len,
-                        self.captures.len(),
                     );
                     // Pop this frame's examined watermark. Every `Memo`
                     // frame push (in `RuleEnter`'s Memo-kind miss path)
@@ -573,8 +674,9 @@ impl<'p, 'i> VM<'p, 'i> {
                     // lexically scoped to `@name{...}` and cannot straddle a
                     // rule boundary, so any `OpenCapture` with `end.is_none()`
                     // would be a compiler bug.
-                    let rule_captures: Vec<Capture> = self.captures[capture_start_len..]
-                        .iter()
+                    let body_caps = self.collect_captures_since(snapshot);
+                    let rule_captures: Vec<Capture> = body_caps
+                        .into_iter()
                         .map(|c| {
                             debug_assert!(
                                 c.end.is_some(),
@@ -609,7 +711,7 @@ impl<'p, 'i> VM<'p, 'i> {
                     let StackEntry::LFrame {
                         memo_id: top_id,
                         start_sp,
-                        capture_start_len,
+                        snapshot,
                         return_addr: _,
                         seed,
                     } = &mut self.stack[top_idx]
@@ -622,7 +724,7 @@ impl<'p, 'i> VM<'p, 'i> {
                         memo_id, top_id,
                     );
                     let start_sp = *start_sp;
-                    let capture_start_len = *capture_start_len;
+                    let snapshot = *snapshot;
                     let body_end_sp = self.sp;
                     let grew = match seed {
                         None => body_end_sp > start_sp,
@@ -632,19 +734,27 @@ impl<'p, 'i> VM<'p, 'i> {
                         // Snapshot the iteration's captures (closed at
                         // body_end_sp where any still-open ones land) and
                         // store as the new seed; rewind for re-iteration.
-                        let new_caps: Vec<Capture> = self.captures[capture_start_len..]
-                            .iter()
+                        let body_caps = self.collect_captures_since(snapshot);
+                        let new_caps: Vec<Capture> = body_caps
+                            .into_iter()
                             .map(|c| Capture {
                                 kind: c.kind,
                                 start: c.start,
                                 end: c.end.unwrap_or(body_end_sp),
                             })
                             .collect();
-                        *seed = Some(LSeed {
-                            end_sp: body_end_sp,
-                            captures: new_caps,
-                        });
-                        self.captures.truncate(capture_start_len);
+                        // Re-borrow the LFrame to install the new seed —
+                        // the immutable `collect_captures_since` borrow
+                        // above ended.
+                        if let StackEntry::LFrame { seed, .. } = &mut self.stack[top_idx] {
+                            *seed = Some(LSeed {
+                                end_sp: body_end_sp,
+                                captures: new_caps,
+                            });
+                        } else {
+                            unreachable!("LFrame slot reaffirmed")
+                        }
+                        self.restore_to(snapshot);
                         self.sp = start_sp;
                         self.ip = body_start.as_index();
                     } else {
@@ -659,14 +769,15 @@ impl<'p, 'i> VM<'p, 'i> {
                             .pop()
                             .expect("LRTail: memo_examined underflow");
                         self.bump_top_memo_examined(examined);
-                        // Replay seed captures (if any), restore sp, and
-                        // extract the captures vec for the cache write so
-                        // we don't have to re-clone from the live buffer.
-                        self.captures.truncate(capture_start_len);
+                        // Restore captures to the LFrame baseline, replay
+                        // seed captures (if any), and extract the captures
+                        // vec for the cache write so we don't have to
+                        // re-clone.
+                        self.restore_to(snapshot);
                         let (final_sp, seed_captures) = match final_seed {
                             Some(s) => {
                                 for c in &s.captures {
-                                    self.captures.push(OpenCapture {
+                                    self.push_capture(OpenCapture {
                                         kind: c.kind,
                                         start: c.start,
                                         end: Some(c.end),
@@ -699,7 +810,7 @@ impl<'p, 'i> VM<'p, 'i> {
                     }
                 }
                 Instruction::CaptureBegin(kind) => {
-                    self.captures.push(OpenCapture {
+                    self.push_capture(OpenCapture {
                         kind: *kind,
                         start: self.sp,
                         end: None,
@@ -707,12 +818,7 @@ impl<'p, 'i> VM<'p, 'i> {
                     self.ip += 1;
                 }
                 Instruction::CaptureEnd => {
-                    let idx = self
-                        .captures
-                        .iter()
-                        .rposition(|c| c.end.is_none())
-                        .expect("CaptureEnd without matching CaptureBegin");
-                    self.captures[idx].end = Some(self.sp);
+                    self.close_top_capture(self.sp);
                     self.ip += 1;
                 }
                 Instruction::End => {
@@ -721,10 +827,11 @@ impl<'p, 'i> VM<'p, 'i> {
                         hits: self.memo_hits,
                         misses: self.memo_misses,
                     };
+                    let all = self.collect_all_captures();
                     return (
                         MatchResult {
                             matched: self.sp,
-                            captures: close_captures(self.captures, self.sp),
+                            captures: close_captures(all, self.sp),
                             complete: true,
                         },
                         stats,
@@ -749,21 +856,16 @@ impl<'p, 'i> VM<'p, 'i> {
             // `Memo` frame would skip caching its failure and leak
             // re-executions on future hits at the same sp.
             match entry {
-                StackEntry::Backtrack {
-                    ip,
-                    sp,
-                    capture_len,
-                } => {
+                StackEntry::Backtrack { ip, sp, snapshot } => {
                     self.ip = ip;
                     self.sp = sp;
-                    self.protect_max_captures(capture_len);
-                    self.captures.truncate(capture_len);
+                    self.restore_to(snapshot);
                     return true;
                 }
                 StackEntry::Memo {
                     memo_id,
                     start_sp,
-                    capture_start_len: _,
+                    snapshot: _,
                 } => {
                     // Pop the paired examined watermark. See
                     // `RuleEnter`'s Memo-kind miss path — every
@@ -777,7 +879,7 @@ impl<'p, 'i> VM<'p, 'i> {
                     // short-circuits into `fail()` without re-executing the
                     // body. Captures produced inside the rule will be
                     // truncated by whichever `Backtrack` ultimately catches
-                    // this unwind (its `capture_len` was snapshotted *before*
+                    // this unwind (its `snapshot` was taken *before*
                     // `RuleEnter`'s Memo-kind miss path pushed this frame).
                     self.memo.insert(
                         (memo_id, start_sp),
@@ -801,7 +903,7 @@ impl<'p, 'i> VM<'p, 'i> {
                 StackEntry::LFrame {
                     memo_id: _,
                     start_sp: _,
-                    capture_start_len,
+                    snapshot,
                     return_addr,
                     seed,
                 } => {
@@ -827,10 +929,9 @@ impl<'p, 'i> VM<'p, 'i> {
                         // at `self.ip` — the Return frame the caller's
                         // `Call` pushed is still on the stack and will
                         // pop normally.
-                        self.protect_max_captures(capture_start_len);
-                        self.captures.truncate(capture_start_len);
+                        self.restore_to(snapshot);
                         for c in &s.captures {
-                            self.captures.push(OpenCapture {
+                            self.push_capture(OpenCapture {
                                 kind: c.kind,
                                 start: c.start,
                                 end: Some(c.end),
@@ -844,9 +945,7 @@ impl<'p, 'i> VM<'p, 'i> {
                     // No seed yet — the LR rule has failed without ever
                     // growing past bound 0. Continue unwinding past this
                     // frame; the captures-truncate happens at whichever
-                    // Backtrack ultimately catches the unwind (its
-                    // capture_len was snapshotted before `RuleEnter`'s
-                    // Lr-kind miss path pushed this frame).
+                    // Backtrack ultimately catches the unwind.
                 }
             }
         }
@@ -922,34 +1021,260 @@ impl<'p, 'i> VM<'p, 'i> {
         self.bump_top_memo_examined(self.sp + n);
     }
 
-    /// Update the farthest-failure snapshot if `sp` has advanced past the
-    /// previous maximum. Called from the only two sites where `sp` retreats —
-    /// [`fail`](Self::fail) and the `BackCommit` handler — plus defensively
-    /// at finalize time. Between retreats `sp` is monotone non-decreasing,
-    /// so these hooks capture the true deepest point.
-    ///
-    /// O(1) per call: stores a length only; the captures are materialized
-    /// lazily via [`protect_max_captures`](Self::protect_max_captures) or
-    /// [`finalize_partial`](Self::finalize_partial). The eager-clone
-    /// variant went quadratic in captures count on large inputs and was
-    /// pure overhead on the success path (which never reads the
-    /// snapshot).
-    fn maybe_snapshot(&mut self) {
-        if self.sp > self.max_sp {
-            self.max_sp = self.sp;
-            self.max_captures_len = self.captures.len();
-            self.max_captures_saved = None;
+    /// O(1) snapshot of the current write position: `(current_chunk,
+    /// chunk.len, chunk.seq)`. The `seq` lets snapshot consumers detect
+    /// slab-slot reuse (`Slab::remove` may reclaim a chunk's slot, and a
+    /// later `Slab::insert` would assign a different chunk to it).
+    fn snapshot_now(&self) -> CaptureSnapshot {
+        let cur = self.chunks.get(self.current_chunk.0);
+        CaptureSnapshot {
+            chunk: self.current_chunk,
+            offset: cur.len,
+            chunk_seq: cur.seq,
         }
     }
 
-    /// Called before truncating `captures` to `new_len`. If the truncate
-    /// would drop captures the farthest-failure snapshot still needs,
-    /// copy them aside first. Runs at most once per `max_sp` epoch —
-    /// subsequent truncates below the same watermark are no-ops.
-    fn protect_max_captures(&mut self, new_len: usize) {
-        if new_len < self.max_captures_len && self.max_captures_saved.is_none() {
-            self.max_captures_saved = Some(self.captures[..self.max_captures_len].to_vec());
+    /// Allocate a fresh chunk parented at `parent`, advancing the
+    /// per-VM seq counter so every chunk gets a unique seq.
+    fn allocate_chunk(&mut self, parent: ChunkId) -> ChunkId {
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        ChunkId(self.chunks.insert(Chunk::new(Some(parent), seq)))
+    }
+
+    /// Append one `OpenCapture`, allocating a new child chunk when the
+    /// current one fills. The active chain extends from `current_chunk`
+    /// (now the just-written chunk) back through parent pointers to
+    /// `root_chunk`.
+    fn push_capture(&mut self, cap: OpenCapture) {
+        let cur_id = self.current_chunk.0;
+        let cur = self.chunks.get_mut(cur_id);
+        if (cur.len as usize) < CHUNK_SIZE {
+            cur.captures[cur.len as usize].write(cap);
+            cur.len += 1;
+        } else {
+            let parent = self.current_chunk;
+            let new = self.allocate_chunk(parent);
+            let nc = self.chunks.get_mut(new.0);
+            nc.captures[0].write(cap);
+            nc.len = 1;
+            self.current_chunk = new;
         }
+    }
+
+    /// Close the innermost still-open capture by setting its `end` to
+    /// `sp`. Walks current_chunk leaf-first, scanning captures back to
+    /// front; on a chunk full of closed captures, follows the parent
+    /// pointer. Panics if no open capture exists — the compiler must
+    /// guarantee `CaptureBegin`/`CaptureEnd` balance per rule.
+    fn close_top_capture(&mut self, sp: usize) {
+        let mut cur_id = self.current_chunk.0;
+        loop {
+            let cur = self.chunks.get_mut(cur_id);
+            for i in (0..cur.len as usize).rev() {
+                // SAFETY: slots `..len` are initialised by `push_capture`.
+                let slot = unsafe { cur.captures[i].assume_init_mut() };
+                if slot.end.is_none() {
+                    slot.end = Some(sp);
+                    return;
+                }
+            }
+            match cur.parent {
+                Some(p) => cur_id = p.0,
+                None => panic!("CaptureEnd without matching CaptureBegin"),
+            }
+        }
+    }
+
+    /// Update the farthest-failure snapshot if `sp` has advanced past the
+    /// previous maximum. Called from the only two sites where `sp`
+    /// retreats — [`fail`](Self::fail) and the `BackCommit` handler —
+    /// plus defensively at finalize time. Between retreats `sp` is
+    /// monotone non-decreasing, so these hooks capture the true deepest
+    /// point.
+    ///
+    /// O(1) per call: stores a `(chunk, offset, seq)` triple. Captures
+    /// are materialised lazily via `restore_to`'s endangerment check
+    /// when (and only when) a backtrack would drop captures the snapshot
+    /// still depends on. Successful parses never pay the materialisation
+    /// cost.
+    fn maybe_snapshot(&mut self) {
+        if self.sp > self.max_sp {
+            self.max_sp = self.sp;
+            self.max_capture = Some(MaxSnap {
+                snapshot: self.snapshot_now(),
+                saved: None,
+            });
+        }
+    }
+
+    /// Restore the capture state to `target`: free every chunk on the
+    /// chain from `current_chunk` back to `target.chunk` (exclusive),
+    /// then truncate `target.chunk.captures` back to `target.offset`.
+    /// Sets `current_chunk = target.chunk`.
+    ///
+    /// If the `MaxSnap` snapshot still depends on captures we are about
+    /// to drop — either its chunk lives in the freed segment, or the
+    /// truncate would shrink its chunk past `snapshot.offset` —
+    /// materialise its captures first via `collect_captures_alive_at`.
+    /// Both endangerment cases are detected by a `(seq, offset)`
+    /// comparison; the in-chunk case matters because pushes during a
+    /// Choice's body may extend `target.chunk` past `target.offset`
+    /// before the watermark moves to a deeper chunk.
+    fn restore_to(&mut self, target: CaptureSnapshot) {
+        let needs_save = match &self.max_capture {
+            Some(m) if m.saved.is_none() => {
+                let s = m.snapshot;
+                target.chunk_seq < s.chunk_seq
+                    || (target.chunk_seq == s.chunk_seq && target.offset < s.offset)
+            }
+            _ => false,
+        };
+        if needs_save {
+            let snap = self
+                .max_capture
+                .as_ref()
+                .expect("needs_save implies max_capture")
+                .snapshot;
+            let saved = self.collect_captures_alive_at(snap);
+            self.max_capture
+                .as_mut()
+                .expect("needs_save implies max_capture")
+                .saved = Some(saved);
+        }
+        // Walk the chain freeing chunks until current_chunk == target.chunk.
+        while self.current_chunk != target.chunk {
+            let cur_id = self.current_chunk.0;
+            let parent = self
+                .chunks
+                .get(cur_id)
+                .parent
+                .expect("restore_to: walked past root looking for target chunk");
+            // `Slab::remove` runs `Chunk::drop`, which `assume_init_drop`s
+            // every initialised slot. No leaks.
+            self.chunks.remove(cur_id);
+            self.current_chunk = parent;
+        }
+        let cur = self.chunks.get_mut(self.current_chunk.0);
+        debug_assert_eq!(
+            cur.seq, target.chunk_seq,
+            "restore_to: target chunk seq mismatch (slab slot reused)"
+        );
+        // Drop captures in `[target.offset, cur.len)` — they were
+        // pushed after the snapshot and are no longer reachable.
+        for i in (target.offset as usize)..(cur.len as usize) {
+            // SAFETY: slots in `..cur.len` are initialised.
+            unsafe { cur.captures[i].assume_init_drop() };
+        }
+        cur.len = target.offset;
+    }
+
+    /// Walk the chunk chain from `current_chunk` back to `snap.chunk`
+    /// (inclusive), collecting captures pushed **since** the snapshot —
+    /// i.e. `snap.chunk.slots()[snap.offset..]` plus the captures of
+    /// every chunk added past it. Used by `MemoClose` and `LRTail`'s
+    /// growth path.
+    ///
+    /// Two passes: sum lengths to pre-allocate the result, then copy.
+    fn collect_captures_since(&self, snap: CaptureSnapshot) -> Vec<OpenCapture> {
+        // Walk leaf-first, recording each chunk we'll need to read.
+        let mut chain: Vec<ChunkId> = Vec::new();
+        let mut cur = self.current_chunk;
+        loop {
+            chain.push(cur);
+            if cur == snap.chunk {
+                break;
+            }
+            cur = self
+                .chunks
+                .get(cur.0)
+                .parent
+                .expect("collect_captures_since: snap.chunk not in current chain");
+        }
+        debug_assert_eq!(
+            self.chunks.get(snap.chunk.0).seq,
+            snap.chunk_seq,
+            "collect_captures_since: snap.chunk seq mismatch (slab slot reused)"
+        );
+        let mut total: usize = 0;
+        for (i, id) in chain.iter().enumerate() {
+            let c = self.chunks.get(id.0);
+            // The deepest entry (i == chain.len() - 1) is `snap.chunk`,
+            // and only its post-snapshot suffix counts.
+            let take = if i == chain.len() - 1 {
+                (c.len as usize).saturating_sub(snap.offset as usize)
+            } else {
+                c.len as usize
+            };
+            total += take;
+        }
+        let mut out: Vec<OpenCapture> = Vec::with_capacity(total);
+        for id in chain.iter().rev() {
+            let c = self.chunks.get(id.0);
+            if *id == snap.chunk {
+                out.extend_from_slice(&c.slots()[snap.offset as usize..]);
+            } else {
+                out.extend_from_slice(c.slots());
+            }
+        }
+        out
+    }
+
+    /// Walk **up** from `snap.chunk` to the root, collecting captures
+    /// that were **alive at the moment of the snapshot** — i.e.
+    /// `snap.chunk.slots()[..snap.offset]` plus the full `slots()` of
+    /// every ancestor (each ancestor's captures stop growing the moment
+    /// the writer moves to a child chunk, so the live `len` *is* its
+    /// alive-at-snap count). Used by `finalize_partial` and
+    /// `restore_to`'s `MaxSnap` preservation path — the snapshot's
+    /// "below" timeline, dual to `collect_captures_since`'s "above".
+    fn collect_captures_alive_at(&self, snap: CaptureSnapshot) -> Vec<OpenCapture> {
+        debug_assert_eq!(
+            self.chunks.get(snap.chunk.0).seq,
+            snap.chunk_seq,
+            "collect_captures_alive_at: snap.chunk seq mismatch (slab slot reused)"
+        );
+        let mut chain: Vec<ChunkId> = Vec::new();
+        let mut cur = snap.chunk;
+        loop {
+            chain.push(cur);
+            match self.chunks.get(cur.0).parent {
+                Some(p) => cur = p,
+                None => break,
+            }
+        }
+        let mut total: usize = 0;
+        for (i, id) in chain.iter().enumerate() {
+            let c = self.chunks.get(id.0);
+            let take = if i == 0 {
+                snap.offset as usize
+            } else {
+                c.len as usize
+            };
+            total += take;
+        }
+        let mut out: Vec<OpenCapture> = Vec::with_capacity(total);
+        for id in chain.iter().rev() {
+            let c = self.chunks.get(id.0);
+            if *id == snap.chunk {
+                out.extend_from_slice(&c.slots()[..snap.offset as usize]);
+            } else {
+                out.extend_from_slice(c.slots());
+            }
+        }
+        out
+    }
+
+    /// Collect every live capture from `root_chunk` to `current_chunk`,
+    /// in `CaptureBegin` order. Used by the `End` instruction to
+    /// extract the final result on a successful parse.
+    fn collect_all_captures(&self) -> Vec<OpenCapture> {
+        let root_seq = self.chunks.get(self.root_chunk.0).seq;
+        self.collect_captures_since(CaptureSnapshot {
+            chunk: self.root_chunk,
+            offset: 0,
+            chunk_seq: root_seq,
+        })
     }
 
     fn finalize_partial(mut self) -> (MatchResult, MemoStats, HashMap<(MemoId, usize), MemoEntry>) {
@@ -959,14 +1284,20 @@ impl<'p, 'i> VM<'p, 'i> {
             hits: self.memo_hits,
             misses: self.memo_misses,
         };
-        // Materialize the farthest-failure captures exactly once. If a
-        // prior truncate below the watermark forced an early save, take
-        // that; otherwise the canonical captures are still sitting in
-        // `self.captures[..max_captures_len]`.
-        let max_captures = self
-            .max_captures_saved
-            .take()
-            .unwrap_or_else(|| self.captures[..self.max_captures_len].to_vec());
+        // Materialise the farthest-failure captures. If `restore_to`
+        // already preserved them (because a fail dropped captures the
+        // snapshot needed), use that copy. Otherwise the snapshot still
+        // points at live chunks — walk **up** the ancestor chain.
+        let max_captures = match self.max_capture.take() {
+            Some(MaxSnap {
+                saved: Some(saved), ..
+            }) => saved,
+            Some(MaxSnap {
+                snapshot,
+                saved: None,
+            }) => self.collect_captures_alive_at(snapshot),
+            None => Vec::new(),
+        };
         let result = MatchResult {
             matched: self.max_sp,
             captures: close_captures(max_captures, self.max_sp),

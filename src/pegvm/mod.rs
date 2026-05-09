@@ -1,6 +1,7 @@
 pub mod incremental;
 pub mod instruction;
 pub mod program;
+mod slab;
 pub mod vm;
 
 pub use incremental::{Edit, MemoCache};
