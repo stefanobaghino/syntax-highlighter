@@ -185,7 +185,7 @@ pub(crate) struct MemoEntry {
     pub(crate) captures: Vec<Capture>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct OpenCapture {
     kind: CaptureKind,
     start: usize,
