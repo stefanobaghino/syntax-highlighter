@@ -114,19 +114,29 @@ pub struct VM<'p, 'i> {
     stack: Vec<StackEntry>,
     captures: Vec<OpenCapture>,
     max_sp: usize,
-    /// Length of `captures` at the moment `sp` reached `max_sp`. The
-    /// captures themselves live in `captures[..max_captures_len]` until a
-    /// `fail()` or `BackCommit` truncates the vector below that watermark,
-    /// at which point `protect_max_captures` materializes a copy into
-    /// `max_captures_saved`. Deferring the clone makes `maybe_snapshot`
-    /// O(1) instead of O(n) per sp-advance — critical on large inputs
-    /// where the eager-clone variant went quadratic in captures count.
+    /// Length of `captures` at the moment `sp` reached `max_sp` —
+    /// equivalently, the count of captures alive at the
+    /// farthest-failure watermark. Logically these live in
+    /// `captures[..max_captures_len]`, but a truncate may have
+    /// physically dropped some past `saved_lower` into `saved_above`.
+    /// At finalize, the alive-at-max set is reassembled from both.
     max_captures_len: usize,
-    /// Populated lazily the first time a truncate would drop captures
-    /// below `max_captures_len`. `None` means the canonical captures
-    /// still reside in `captures[..max_captures_len]`. Cleared whenever
-    /// `max_sp` advances (the prior snapshot becomes stale).
-    max_captures_saved: Option<Vec<OpenCapture>>,
+    /// Lowest capture index still backed by `self.captures`. Captures
+    /// in `[saved_lower, max_captures_len)` were displaced by a
+    /// truncate-below-watermark and now live in `saved_above`; those
+    /// in `[0, saved_lower)` are still in `captures`. Invariant:
+    /// `captures.len() >= saved_lower`. Reset to `max_captures_len`
+    /// when `max_sp` advances (the prior watermark is stale).
+    saved_lower: usize,
+    /// Captures displaced from the watermark prefix, stored in
+    /// reverse capture-order — i.e. the most recent drop is at the
+    /// back. `saved_above.iter().rev()` walks them in original
+    /// `[saved_lower, max_captures_len)` order. Replaces the old
+    /// "clone the whole prefix on first endangered truncate"
+    /// strategy: each capture is saved at most once per `max_sp`
+    /// epoch, and only the suffix being dropped — never the bulk of
+    /// the watermark prefix that survives every backtrack.
+    saved_above: Vec<OpenCapture>,
     /// Packrat memo table, keyed by `(memo_id, start_sp)`. Populated by
     /// `MemoClose` on success and by `fail()` on failure escape (Commit 5).
     memo: HashMap<(MemoId, usize), MemoEntry>,
@@ -210,7 +220,8 @@ impl<'p, 'i> VM<'p, 'i> {
             captures: Vec::new(),
             max_sp: 0,
             max_captures_len: 0,
-            max_captures_saved: None,
+            saved_lower: 0,
+            saved_above: Vec::new(),
             memo: HashMap::new(),
             memo_hits: 0,
             memo_misses: 0,
@@ -937,18 +948,41 @@ impl<'p, 'i> VM<'p, 'i> {
     fn maybe_snapshot(&mut self) {
         if self.sp > self.max_sp {
             self.max_sp = self.sp;
-            self.max_captures_len = self.captures.len();
-            self.max_captures_saved = None;
+            let len = self.captures.len();
+            self.max_captures_len = len;
+            self.saved_lower = len;
+            self.saved_above.clear();
         }
     }
 
-    /// Called before truncating `captures` to `new_len`. If the truncate
-    /// would drop captures the farthest-failure snapshot still needs,
-    /// copy them aside first. Runs at most once per `max_sp` epoch —
-    /// subsequent truncates below the same watermark are no-ops.
+    /// Called before truncating `captures` to `new_len`. If the
+    /// truncate would drop captures the farthest-failure watermark
+    /// still needs, displace them to `saved_above` first.
+    ///
+    /// Saves only the *suffix* `captures[new_len..saved_lower]` — the
+    /// captures actually being lost from the watermark prefix on this
+    /// step. Subsequent truncates that go shallower in the same epoch
+    /// save their own additional suffix; truncates that don't dip
+    /// below `saved_lower` are no-ops. Across an entire `max_sp`
+    /// epoch each capture is saved at most once, so the total bytes
+    /// displaced stay bounded by `max_captures_len * sizeof(OpenCapture)`
+    /// instead of being multiplied by the number of endangered
+    /// backtracks (which on jquery.js was ~80 k clones × ~750 KB ≈
+    /// 60 GB of memcpy under the prior eager clone-the-whole-prefix
+    /// strategy).
     fn protect_max_captures(&mut self, new_len: usize) {
-        if new_len < self.max_captures_len && self.max_captures_saved.is_none() {
-            self.max_captures_saved = Some(self.captures[..self.max_captures_len].to_vec());
+        if new_len < self.saved_lower {
+            // SAFETY of indexing: `captures.len() >= saved_lower` is
+            // an invariant — see the field doc. So
+            // `captures[new_len..saved_lower]` is in bounds whenever
+            // `new_len < saved_lower`.
+            self.saved_above.extend(
+                self.captures[new_len..self.saved_lower]
+                    .iter()
+                    .rev()
+                    .copied(),
+            );
+            self.saved_lower = new_len;
         }
     }
 
@@ -959,14 +993,13 @@ impl<'p, 'i> VM<'p, 'i> {
             hits: self.memo_hits,
             misses: self.memo_misses,
         };
-        // Materialize the farthest-failure captures exactly once. If a
-        // prior truncate below the watermark forced an early save, take
-        // that; otherwise the canonical captures are still sitting in
-        // `self.captures[..max_captures_len]`.
-        let max_captures = self
-            .max_captures_saved
-            .take()
-            .unwrap_or_else(|| self.captures[..self.max_captures_len].to_vec());
+        // Reassemble the farthest-failure captures: prefix still in
+        // `self.captures` plus suffix displaced into `saved_above`.
+        // `saved_above` is stored in reverse capture-order so
+        // iter().rev() reads it back in the right place.
+        let mut max_captures: Vec<OpenCapture> = Vec::with_capacity(self.max_captures_len);
+        max_captures.extend_from_slice(&self.captures[..self.saved_lower]);
+        max_captures.extend(self.saved_above.iter().rev().copied());
         let result = MatchResult {
             matched: self.max_sp,
             captures: close_captures(max_captures, self.max_sp),
