@@ -24,29 +24,22 @@ pub struct Segment<'a> {
     pub kind: Option<&'a str>,
 }
 
-#[derive(Clone, Copy, Debug)]
-enum EventKind {
-    Begin,
-    End,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Event {
-    pos: usize,
-    kind: EventKind,
-    cap_idx: usize,
-}
-
 /// Walk `captures` over `input`, invoking `on_segment` for each
-/// active-kind run between event boundaries. Together the segments
+/// active-kind run between capture boundaries. Together the segments
 /// form a contiguous, non-overlapping cover of `0..input.len()` —
 /// the renderer's load-bearing structural property.
 ///
-/// Implementation: build Begin/End events, sort with the tie-breaking
-/// rule that keeps the active-capture stack consistent under PEG
-/// nesting (forest invariant — captures are nested or disjoint, never
-/// overlapping), and emit one segment per non-empty `cursor..ev.pos`
-/// slice. The active kind is the innermost open capture's kind.
+/// Implementation: a single linear sweep over `captures`, which the
+/// VM emits in `CaptureBegin` order — `start`-ascending with parent
+/// before child (see [`pegvm::Capture`](crate::pegvm::Capture)). That
+/// ordering is exactly a pre-order forest traversal, so the active
+/// capture stack can be maintained directly: at each capture, pop
+/// every stack entry whose `end <= c.start` (those have closed before
+/// `c` begins, emitting their tail run as we go), emit any uncovered
+/// gap up to `c.start`, then push `c`. Drain the stack at the end and
+/// emit the trailing unkinded tail past the last capture's end. No
+/// events, no sort — `O(N)` total work, matching the input ordering
+/// the VM already gives us.
 pub fn walk<'a, F>(
     input: &'a str,
     captures: &'a [Capture],
@@ -66,68 +59,58 @@ pub fn walk<'a, F>(
         return;
     }
 
-    let mut events: Vec<Event> = Vec::with_capacity(captures.len() * 2);
-    for (i, c) in captures.iter().enumerate() {
-        events.push(Event {
-            pos: c.start,
-            kind: EventKind::Begin,
-            cap_idx: i,
-        });
-        events.push(Event {
-            pos: c.end,
-            kind: EventKind::End,
-            cap_idx: i,
-        });
-    }
-
-    // Order events at the same position so the stack stays consistent with
-    // properly nested captures:
-    //   - END events come before BEGIN events (a capture that ends here closes
-    //     before a sibling that starts here).
-    //   - For ENDs at the same position, inner captures (higher cap_idx) end first.
-    //   - For BEGINs at the same position, outer captures (lower cap_idx) start first.
-    events.sort_by(|a, b| {
-        a.pos.cmp(&b.pos).then_with(|| match (a.kind, b.kind) {
-            (EventKind::End, EventKind::Begin) => std::cmp::Ordering::Less,
-            (EventKind::Begin, EventKind::End) => std::cmp::Ordering::Greater,
-            (EventKind::End, EventKind::End) => b.cap_idx.cmp(&a.cap_idx),
-            (EventKind::Begin, EventKind::Begin) => a.cap_idx.cmp(&b.cap_idx),
-        })
-    });
-
+    let kind_of = |i: usize| capture_kinds[captures[i].kind.0 as usize].as_str();
     let mut stack: Vec<usize> = Vec::new(); // capture indices, innermost on top
     let mut cursor = 0usize;
 
-    for ev in events {
-        if ev.pos > cursor {
-            let kind = stack
-                .last()
-                .map(|&i| capture_kinds[captures[i].kind.0 as usize].as_str());
+    for (i, c) in captures.iter().enumerate() {
+        // Pop every still-open capture whose span ended at or before
+        // `c.start`. Each pop emits the unwritten tail of the popped
+        // capture under its own kind, so the stack only ever holds
+        // captures that genuinely contain `c`.
+        while let Some(&top) = stack.last() {
+            let top_end = captures[top].end;
+            if top_end > c.start {
+                break;
+            }
+            if cursor < top_end {
+                on_segment(Segment {
+                    range: cursor..top_end,
+                    kind: Some(kind_of(top)),
+                });
+                cursor = top_end;
+            }
+            stack.pop();
+        }
+        // Gap from cursor to c.start, tagged by whatever capture (if
+        // any) is now innermost on the stack. `None` means no parent —
+        // an unkinded gap between sibling captures or before the first.
+        if cursor < c.start {
+            let kind = stack.last().map(|&j| kind_of(j));
             on_segment(Segment {
-                range: cursor..ev.pos,
+                range: cursor..c.start,
                 kind,
             });
-            cursor = ev.pos;
+            cursor = c.start;
         }
-        match ev.kind {
-            EventKind::Begin => stack.push(ev.cap_idx),
-            EventKind::End => {
-                // With proper PEG nesting, the matching capture is on top of the stack.
-                if let Some(top) = stack.last() {
-                    if *top == ev.cap_idx {
-                        stack.pop();
-                    } else if let Some(pos) = stack.iter().rposition(|&i| i == ev.cap_idx) {
-                        // Defensive: search and remove (shouldn't happen for valid grammars).
-                        stack.remove(pos);
-                    }
-                }
-            }
+        stack.push(i);
+    }
+
+    // Drain remaining open captures, innermost first.
+    while let Some(top) = stack.pop() {
+        let end = captures[top].end;
+        if cursor < end {
+            on_segment(Segment {
+                range: cursor..end,
+                kind: Some(kind_of(top)),
+            });
+            cursor = end;
         }
     }
 
-    // Trailing input past the last event — unkinded by definition (no
-    // open capture covers it). For partial parses this is the
-    // unmatched tail; for full parses it is empty.
+    // Trailing input past the last capture — unkinded by definition.
+    // For partial parses this is the unmatched tail; for full parses
+    // it is empty.
     if cursor < len {
         on_segment(Segment {
             range: cursor..len,
