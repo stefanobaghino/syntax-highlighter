@@ -272,6 +272,49 @@ fn t_suffix_typedef_resolves_as_type() {
 }
 
 #[test]
+fn sizeof_struct_type_name_parses() {
+    // Regression: the old `expr_unary` consumed `sizeof` as a unary
+    // prefix, so `sizeof(struct Foo)` then had to parse via
+    // `cast_or_paren` — which fails because `struct Foo` isn't an
+    // `expr_primary`. Fixed by trying `sizeof_type` first in `expr_unary`.
+    let input = "int f(void) { return sizeof(struct Foo); }\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let k = kinds_for(&caps, &kinds);
+    assert!(!k.contains(&"recovery"), "no recovery expected: {:?}", k);
+    let sizeof_pos = input.find("sizeof").unwrap();
+    let struct_pos = input.find("struct").unwrap();
+    let foo_pos = input.find("Foo").unwrap();
+    assert_eq!(kind_at_pos(&caps, &kinds, sizeof_pos), Some("keyword"));
+    assert_eq!(kind_at_pos(&caps, &kinds, struct_pos), Some("keyword"));
+    assert_eq!(kind_at_pos(&caps, &kinds, foo_pos), Some("type"));
+}
+
+#[test]
+fn medium_fixture_parses_without_recovery() {
+    let input = include_str!("../benches/fixtures/medium.c");
+    let (caps, kinds) = assert_complete_full(input);
+    let k = kinds_for(&caps, &kinds);
+    assert!(
+        !k.contains(&"recovery"),
+        "medium.c should parse without recovery, got kinds: {:?}",
+        k
+    );
+    let function_literals: HashSet<&str> = caps
+        .iter()
+        .filter(|c| kinds[c.kind.0 as usize] == "function")
+        .map(|c| &input[c.start..c.end])
+        .collect();
+    for name in ["counter_new", "counter_push", "classify", "sum", "main"] {
+        assert!(
+            function_literals.contains(name),
+            "expected `{}` as @function in medium.c captures, got {:?}",
+            name,
+            function_literals
+        );
+    }
+}
+
+#[test]
 fn recovery_absorbs_malformed_item() {
     let input = "int a() {}\n@@@ garbage @@@\nint b() {}\n";
     let (matched, caps, kinds, complete) = run(input);
