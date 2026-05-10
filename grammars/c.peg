@@ -11,8 +11,8 @@
 # for a schema-less lexer.
 #
 # Preprocessor lines (`#include`, `#define`, ...) are captured as
-# `@comment` — the directive itself isn't code and needs no
-# tokenization for highlighting.
+# `@keyword` — the directive itself isn't tokenized further, but the
+# whole line stays visually distinct from real comments.
 #
 # Capture kinds used (all present in src/highlight/theme.rs):
 #   keyword, string, number, comment, operator, punctuation, type,
@@ -32,7 +32,7 @@ c_file        <- ws (external_decl)*^ ws !.
 
 # --- Preprocessor directives (absorbed as @comment) ------------------
 
-pp_line       <- @comment{pp_body}
+pp_line       <- @keyword{pp_body}
 pp_body       <- '#' (pp_cont / !'\n' .)*
 pp_cont       <- '\\' '\n'
                 / '\\' '\r' '\n'

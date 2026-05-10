@@ -87,8 +87,8 @@ fn hello_world_parses() {
     let (caps, kinds) = assert_complete_full(input);
     let k = kinds_for(&caps, &kinds);
     assert!(
-        k.contains(&"comment"),
-        "expected #include as comment: {:?}",
+        !k.contains(&"comment"),
+        "no real comments in input — `#include` should not be tagged as comment: {:?}",
         k
     );
     assert!(k.contains(&"keyword"), "expected keywords: {:?}", k);
@@ -100,7 +100,7 @@ fn preprocessor_directives_parse() {
     let input = "#define FOO 1\n#ifdef FOO\n#include \"x.h\"\n#endif\nint x = 0;\n";
     let (caps, kinds) = assert_complete_full(input);
     let k = kinds_for(&caps, &kinds);
-    assert!(k.contains(&"comment"), "expected PP as comments: {:?}", k);
+    assert!(k.contains(&"keyword"), "expected PP as keywords: {:?}", k);
 }
 
 #[test]

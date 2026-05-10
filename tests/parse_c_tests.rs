@@ -50,10 +50,10 @@ fn block_comment_is_comment() {
 }
 
 #[test]
-fn preprocessor_is_comment() {
+fn preprocessor_is_keyword() {
     let input = "#include <stdio.h>\nint x;\n";
     let pos = input.find("#include").unwrap();
-    assert_eq!(kind_at(GRAMMAR, input, pos).as_deref(), Some("comment"));
+    assert_eq!(kind_at(GRAMMAR, input, pos).as_deref(), Some("keyword"));
 }
 
 #[test]
