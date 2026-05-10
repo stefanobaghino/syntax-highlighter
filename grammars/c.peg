@@ -82,9 +82,12 @@ predef_type_name <- ('void' / 'char' / 'short' / 'long long' / 'long'
 
 # Heuristic typedef-name: PascalCase or `*_t` tail. If this mismatches
 # an actual declaration, the decl path will fail and we fall back to
-# expression statement.
+# expression statement. The `_t` arm uses the standard PEG non-greedy
+# idiom `(!end_t ident_body)*` because PEG `*` is possessive — a
+# greedy `ident_body*` would swallow the trailing `_t`.
 typedef_name  <- [A-Z] ident_body*
-               / [a-z_] ident_body* '_t' !ident_body
+               / [a-z_] (!typedef_t_end ident_body)* typedef_t_end
+typedef_t_end <- '_t' !ident_body
 
 struct_or_union_spec <- (@keyword{'struct'} / @keyword{'union'}) ws
                        (@type{ident})? (ws @punctuation{'{'} ws struct_decl* ws @punctuation{'}'})?

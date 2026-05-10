@@ -248,6 +248,29 @@ fn operator_longest_match_disambiguates_lr_cascade() {
     }
 }
 
+fn kind_at_pos<'a>(captures: &[Capture], kinds: &'a [String], pos: usize) -> Option<&'a str> {
+    captures
+        .iter()
+        .find(|c| c.start == pos)
+        .map(|c| kinds[c.kind.0 as usize].as_str())
+}
+
+#[test]
+fn t_suffix_typedef_resolves_as_type() {
+    // Regression: PEG `*` is possessive, so the old
+    // `[a-z_] ident_body* '_t' !ident_body` rule never matched anything
+    // (the greedy `ident_body*` swallowed the trailing `_t`). That caused
+    // identifiers like `counter_size_t` to fail `decl_spec` entirely.
+    let input = "counter_size_t x;\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let k = kinds_for(&caps, &kinds);
+    assert!(!k.contains(&"recovery"), "no recovery expected: {:?}", k);
+    let type_pos = input.find("counter_size_t").unwrap();
+    let var_pos = input.find('x').unwrap();
+    assert_eq!(kind_at_pos(&caps, &kinds, type_pos), Some("type"));
+    assert_eq!(kind_at_pos(&caps, &kinds, var_pos), Some("variable"));
+}
+
 #[test]
 fn recovery_absorbs_malformed_item() {
     let input = "int a() {}\n@@@ garbage @@@\nint b() {}\n";
