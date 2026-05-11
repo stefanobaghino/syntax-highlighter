@@ -198,15 +198,21 @@ type_tuple_or_group <- @punctuation{'('} ws type_list? ws @punctuation{')'}
 type_never    <- @punctuation{'!'}
 
 type_path     <- type_path_seg (@punctuation{'::'} type_path_seg)*
-type_path_seg <- @type{upper_ident} generic_args?
-               / @variable{lower_ident} generic_args?
+type_path_seg <- @type{upper_ident} path_tail?
+               / @variable{lower_ident} path_tail?
                / @keyword{'self'}
                / @keyword{'Self'}
                / @keyword{'super'}
                / @keyword{'crate'}
 
+# Either angle-bracket generics (`Foo<T>`) or paren-sugar for Fn-traits
+# (`Fn(T) -> U`); Rust's reference grammar splits these as
+# `GenericArgs` vs `ParenthesizedGenericArgs`.
+path_tail     <- generic_args
+               / paren_generic_args
 generic_args  <- @punctuation{'::'} @punctuation{'<'} ws generic_arg_list? ws @punctuation{'>'}
                / @punctuation{'<'} ws generic_arg_list? ws @punctuation{'>'}
+paren_generic_args <- @punctuation{'('} ws type_list? ws @punctuation{')'} (ws @punctuation{'->'} ws type_expr)?
 generic_arg_list <- generic_arg (ws @punctuation{','} ws generic_arg)* (ws @punctuation{','})?
 generic_arg   <- lifetime
                / type_expr

@@ -253,6 +253,29 @@ fn where_clause_parses() {
 }
 
 #[test]
+fn fn_trait_paren_sugar_parses() {
+    // `Fn(T) -> U` / `FnMut(T)` / `FnOnce(T) -> U` are paren-sugar for
+    // the Fn-trait family — see #82. `type_path_seg`'s tail must accept
+    // both angle-bracket generics and the parenthesized form.
+    for input in [
+        "fn with_each<F: FnMut(i64)>(f: F) {}\n",
+        "fn map_fn<F: Fn(i64) -> i64>(f: F) {}\n",
+        "fn consume<F: FnOnce()>(f: F) {}\n",
+        "fn boxed(f: Box<dyn Fn(i64) -> i64>) {}\n",
+        "fn dual<F: Fn(i64) -> i64 + Send>(f: F) {}\n",
+    ] {
+        let (caps, kinds) = assert_complete_full(input);
+        let recs = recovery_literals(&caps, &kinds, input);
+        assert!(
+            recs.is_empty(),
+            "expected no recovery on `{}` — got {:?}",
+            input.trim_end(),
+            recs
+        );
+    }
+}
+
+#[test]
 fn impl_with_generic_params_parses() {
     let input = "impl<T: Clone> Foo<T> { pub fn new() -> Self { Self { a: T::default() } } }\n";
     let (_, _) = assert_complete_full(input);
