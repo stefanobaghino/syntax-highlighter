@@ -87,8 +87,8 @@ fn hello_world_parses() {
     let (caps, kinds) = assert_complete_full(input);
     let k = kinds_for(&caps, &kinds);
     assert!(
-        k.contains(&"comment"),
-        "expected #include as comment: {:?}",
+        !k.contains(&"comment"),
+        "no real comments in input — `#include` should not be tagged as comment: {:?}",
         k
     );
     assert!(k.contains(&"keyword"), "expected keywords: {:?}", k);
@@ -100,7 +100,7 @@ fn preprocessor_directives_parse() {
     let input = "#define FOO 1\n#ifdef FOO\n#include \"x.h\"\n#endif\nint x = 0;\n";
     let (caps, kinds) = assert_complete_full(input);
     let k = kinds_for(&caps, &kinds);
-    assert!(k.contains(&"comment"), "expected PP as comments: {:?}", k);
+    assert!(k.contains(&"keyword"), "expected PP as keywords: {:?}", k);
 }
 
 #[test]
@@ -245,6 +245,72 @@ fn operator_longest_match_disambiguates_lr_cascade() {
         let (caps, kinds) = assert_complete_full(input);
         let k = kinds_for(&caps, &kinds);
         assert!(k.contains(&"operator"), "expected operators in {:?}", input);
+    }
+}
+
+fn kind_at_pos<'a>(captures: &[Capture], kinds: &'a [String], pos: usize) -> Option<&'a str> {
+    captures
+        .iter()
+        .find(|c| c.start == pos)
+        .map(|c| kinds[c.kind.0 as usize].as_str())
+}
+
+#[test]
+fn t_suffix_typedef_resolves_as_type() {
+    // Regression: PEG `*` is possessive, so the old
+    // `[a-z_] ident_body* '_t' !ident_body` rule never matched anything
+    // (the greedy `ident_body*` swallowed the trailing `_t`). That caused
+    // identifiers like `counter_size_t` to fail `decl_spec` entirely.
+    let input = "counter_size_t x;\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let k = kinds_for(&caps, &kinds);
+    assert!(!k.contains(&"recovery"), "no recovery expected: {:?}", k);
+    let type_pos = input.find("counter_size_t").unwrap();
+    let var_pos = input.find('x').unwrap();
+    assert_eq!(kind_at_pos(&caps, &kinds, type_pos), Some("type"));
+    assert_eq!(kind_at_pos(&caps, &kinds, var_pos), Some("variable"));
+}
+
+#[test]
+fn sizeof_struct_type_name_parses() {
+    // Regression: the old `expr_unary` consumed `sizeof` as a unary
+    // prefix, so `sizeof(struct Foo)` then had to parse via
+    // `cast_or_paren` — which fails because `struct Foo` isn't an
+    // `expr_primary`. Fixed by trying `sizeof_type` first in `expr_unary`.
+    let input = "int f(void) { return sizeof(struct Foo); }\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let k = kinds_for(&caps, &kinds);
+    assert!(!k.contains(&"recovery"), "no recovery expected: {:?}", k);
+    let sizeof_pos = input.find("sizeof").unwrap();
+    let struct_pos = input.find("struct").unwrap();
+    let foo_pos = input.find("Foo").unwrap();
+    assert_eq!(kind_at_pos(&caps, &kinds, sizeof_pos), Some("keyword"));
+    assert_eq!(kind_at_pos(&caps, &kinds, struct_pos), Some("keyword"));
+    assert_eq!(kind_at_pos(&caps, &kinds, foo_pos), Some("type"));
+}
+
+#[test]
+fn medium_fixture_parses_without_recovery() {
+    let input = include_str!("../benches/fixtures/medium.c");
+    let (caps, kinds) = assert_complete_full(input);
+    let k = kinds_for(&caps, &kinds);
+    assert!(
+        !k.contains(&"recovery"),
+        "medium.c should parse without recovery, got kinds: {:?}",
+        k
+    );
+    let function_literals: HashSet<&str> = caps
+        .iter()
+        .filter(|c| kinds[c.kind.0 as usize] == "function")
+        .map(|c| &input[c.start..c.end])
+        .collect();
+    for name in ["counter_new", "counter_push", "classify", "sum", "main"] {
+        assert!(
+            function_literals.contains(name),
+            "expected `{}` as @function in medium.c captures, got {:?}",
+            name,
+            function_literals
+        );
     }
 }
 
