@@ -240,10 +240,13 @@ postfix_op    <- @punctuation{'.'} postfix_selector
 postfix_op_nc <- @punctuation{'.'} postfix_selector
                / @punctuation{'['} ws slice_or_index ws @punctuation{']'}
                / @punctuation{'('} ws call_args? ws @punctuation{')'}
-postfix_selector <- @punctuation{'('} ws @keyword{'type'} ws @punctuation{')'}           # x.(type) (only in type switch; accepted here too)
-                  / @punctuation{'('} ws type_expr ws @punctuation{')'}                   # x.(T) type assertion
+postfix_selector <- @punctuation{'('} ws type_expr ws @punctuation{')'}                   # x.(T) type assertion
                   / @function{ident} &(ws @punctuation{'('})
                   / @property{ident}
+# `x.(type)` is intentionally not a postfix here: it is only valid inside
+# a `type_switch_guard`, where the `.(type)` tail is matched explicitly.
+# Letting `postfix_selector` swallow it would leave nothing for the guard
+# to match, causing the enclosing `switch_stmt` (and `func_decl`) to fail.
 slice_or_index <- expr? ws @punctuation{':'} ws expr? (ws @punctuation{':'} ws expr)?
                / expr
 
