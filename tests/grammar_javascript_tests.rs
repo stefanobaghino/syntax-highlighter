@@ -329,6 +329,20 @@ fn recovery_absorbs_malformed_item() {
 }
 
 #[test]
+fn blank_lines_between_top_stmts_emit_no_recovery() {
+    // Regression: file-root `(stmt)*^` used to drop inter-iteration ws,
+    // sending blank-line bytes through the recovery byte-eater. See #71.
+    let input = "function a() {}\n\nfunction b() {}\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let kv = kinds_for(&caps, &kinds);
+    assert!(
+        !kv.contains(&"recovery"),
+        "well-formed input should emit no @recovery captures, got: {:?}",
+        kv
+    );
+}
+
+#[test]
 fn method_chain_with_call_parses() {
     let input = "const r = arr.filter(x => x > 0).map(x => x * 2).reduce((a, b) => a + b, 0);\n";
     let (caps, kinds) = assert_complete_full(input);

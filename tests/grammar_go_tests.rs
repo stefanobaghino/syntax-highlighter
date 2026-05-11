@@ -246,3 +246,17 @@ fn recovery_absorbs_malformed_item() {
         k
     );
 }
+
+#[test]
+fn blank_lines_between_top_decls_emit_no_recovery() {
+    // Regression: file-root `(top_decl)*^` used to drop inter-iteration ws,
+    // sending blank-line bytes through the recovery byte-eater. See #71.
+    let input = "package main\n\nfunc a() {}\n\nfunc b() {}\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let k = kinds_for(&caps, &kinds);
+    assert!(
+        !k.contains(&"recovery"),
+        "well-formed input should emit no @recovery captures, got: {:?}",
+        k
+    );
+}
