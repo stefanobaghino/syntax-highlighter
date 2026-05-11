@@ -28,7 +28,7 @@
 # Recovery: top-level uses `*^` so malformed statements don't abort
 # the whole file.
 
-js_file        <- ws (stmt)*^ ws !.
+js_file        <- ws (stmt ws)*^ !.
 
 # --- Statements -------------------------------------------------------
 #

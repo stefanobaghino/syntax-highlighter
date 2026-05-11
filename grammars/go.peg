@@ -23,7 +23,7 @@
 # Recovery: top-level uses `*^` so malformed top-level declarations
 # don't abort the whole file.
 
-go_file       <- ws package_clause ws (import_decl ws)* (top_decl)*^ ws !.
+go_file       <- ws package_clause ws (import_decl ws)* (top_decl ws)*^ !.
 
 # --- Package / imports ----------------------------------------------
 
