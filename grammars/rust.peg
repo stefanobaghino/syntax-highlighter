@@ -78,7 +78,7 @@ fn_params     <- @punctuation{'('} ws fn_param_list? ws @punctuation{')'}
 fn_param_list <- fn_param (ws @punctuation{','} ws fn_param)* (ws @punctuation{','})?
 fn_param      <- attr_outer? self_param
                / attr_outer? fn_param_named
-fn_param_named <- pattern ws @punctuation{':'} ws type_expr
+fn_param_named <- pattern_no_or ws @punctuation{':'} ws type_expr
 self_param    <- ref_marker? ws (@keyword{'mut'} ws)? @keyword{'self'}
                / @keyword{'mut'} ws @keyword{'self'}
                / @keyword{'self'} ws @punctuation{':'} ws type_expr
@@ -215,8 +215,14 @@ generic_arg   <- lifetime
                / literal
 
 # --- Patterns ----------------------------------------------------------
+#
+# `pattern` allows a top-level or-pattern (`A | B`). In positions where
+# the surrounding rule uses `|` as its own delimiter (closure params,
+# fn params), use `pattern_no_or` so the closing `|` isn't eaten by
+# `pattern_or`'s greedy `*`. Mirrors Rust's reference `PatternNoTopAlt`.
 
 pattern       <- pattern_or
+pattern_no_or <- pattern_atom
 pattern_or    <- pattern_atom (ws @punctuation{'|'} ws pattern_atom)*
 pattern_atom  <- pattern_ref
                / pattern_box
@@ -340,7 +346,7 @@ expr_unsafe   <- @keyword{'unsafe'} ws block
 expr_closure  <- (@keyword{'move'} ws)? @punctuation{'|'} ws closure_params? ws @punctuation{'|'}
                  (ws @punctuation{'->'} ws type_expr)? ws expr
 closure_params <- closure_param (ws @punctuation{','} ws closure_param)* (ws @punctuation{','})?
-closure_param <- pattern (ws @punctuation{':'} ws type_expr)?
+closure_param <- pattern_no_or (ws @punctuation{':'} ws type_expr)?
 expr_block    <- block
 expr_async_block <- @keyword{'async'} (ws @keyword{'move'})? ws block
 expr_tuple_or_paren <- @punctuation{'('} ws expr_list? ws @punctuation{')'}
