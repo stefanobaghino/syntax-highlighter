@@ -47,6 +47,14 @@ fn kind_spans(captures: &[Capture], kinds: &[String], kind: &str) -> Vec<String>
         .collect()
 }
 
+fn recovery_literals<'a>(captures: &[Capture], kinds: &[String], input: &'a str) -> Vec<&'a str> {
+    captures
+        .iter()
+        .filter(|c| kinds[c.kind.0 as usize] == "recovery")
+        .map(|c| &input[c.start..c.end])
+        .collect()
+}
+
 #[test]
 fn grammar_parses_and_compiles() {
     let prog = compile_rust();
@@ -167,6 +175,23 @@ fn bitor_still_works_outside_closure_position() {
 }
 
 #[test]
+fn closure_with_tuple_destructure_param_parses() {
+    // Regression: `pattern_or`'s greedy `*` used to swallow the closing
+    // `|` of `expr_closure` when the param was an or-eligible
+    // `pattern_atom` (`(_, &n)` here), dropping the body and the rest
+    // of the enclosing item into recovery. `closure_param` now uses
+    // `pattern_no_or` so the delimiter stays free.
+    let input = "fn f() { let top = max_by_key(|(_, &n)| n); }\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let kv = kinds_for(&caps, &kinds);
+    assert!(
+        !kv.contains(&"recovery"),
+        "closure with tuple destructuring should not recover: {:?}",
+        kv
+    );
+}
+
+#[test]
 fn method_chain_with_turbofish_parses() {
     let input = "fn f() { v.iter().map(|x| x + 1).collect::<Vec<_>>(); }\n";
     let (_, _) = assert_complete_full(input);
@@ -189,12 +214,65 @@ fn lifetime_parses_as_type() {
         "lifetime `'a` should be captured as @type: {:?}",
         kv
     );
+    assert!(
+        recovery_literals(&caps, &kinds, input).is_empty(),
+        "no recovery expected for single-char lifetime"
+    );
+}
+
+#[test]
+fn multi_char_lifetime_parses() {
+    // `'static` and other multi-char lifetimes must reach the lifetime
+    // rule's full ident_body sequence — see #81.
+    for input in [
+        "fn k() -> &'static str { \"x\" }\n",
+        "fn k<'lt>(s: &'lt str) -> &'lt str { s }\n",
+        "fn k<'long_name>(x: &'long_name u8) {}\n",
+        "fn f<T>(x: T) where T: Clone + Send + 'static {}\n",
+        "fn f() -> Vec<(i64, &'static str)> { vec![] }\n",
+    ] {
+        let (caps, kinds) = assert_complete_full(input);
+        let recs = recovery_literals(&caps, &kinds, input);
+        assert!(
+            recs.is_empty(),
+            "expected no recovery on `{}` — got {:?}",
+            input.trim_end(),
+            recs
+        );
+    }
 }
 
 #[test]
 fn where_clause_parses() {
     let input = "fn f<T>(x: T) where T: Clone + Send + 'static {}\n";
-    let (_, _) = assert_complete_full(input);
+    let (caps, kinds) = assert_complete_full(input);
+    assert!(
+        recovery_literals(&caps, &kinds, input).is_empty(),
+        "where-clause with `'static` should not recover"
+    );
+}
+
+#[test]
+fn fn_trait_paren_sugar_parses() {
+    // `Fn(T) -> U` / `FnMut(T)` / `FnOnce(T) -> U` are paren-sugar for
+    // the Fn-trait family — see #82. `type_path_seg`'s tail must accept
+    // both angle-bracket generics and the parenthesized form.
+    for input in [
+        "fn with_each<F: FnMut(i64)>(f: F) {}\n",
+        "fn map_fn<F: Fn(i64) -> i64>(f: F) {}\n",
+        "fn consume<F: FnOnce()>(f: F) {}\n",
+        "fn boxed(f: Box<dyn Fn(i64) -> i64>) {}\n",
+        "fn dual<F: Fn(i64) -> i64 + Send>(f: F) {}\n",
+    ] {
+        let (caps, kinds) = assert_complete_full(input);
+        let recs = recovery_literals(&caps, &kinds, input);
+        assert!(
+            recs.is_empty(),
+            "expected no recovery on `{}` — got {:?}",
+            input.trim_end(),
+            recs
+        );
+    }
 }
 
 #[test]

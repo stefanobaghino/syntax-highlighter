@@ -69,3 +69,21 @@ fn null_is_constant() {
     let pos = input.find("null").unwrap();
     assert_eq!(kind_at(GRAMMAR, input, pos).as_deref(), Some("constant"));
 }
+
+// #73: reserved words after `.` are IdentifierName, not Identifier —
+// they must capture under the member-access kind rather than fall
+// into recovery.
+
+#[test]
+fn reserved_after_dot_with_call_is_function() {
+    let input = "main().catch(e);\n";
+    let pos = input.find(".catch").unwrap() + 1;
+    assert_eq!(kind_at(GRAMMAR, input, pos).as_deref(), Some("function"));
+}
+
+#[test]
+fn reserved_after_dot_without_call_is_property() {
+    let input = "p.catch;\n";
+    let pos = input.find("catch").unwrap();
+    assert_eq!(kind_at(GRAMMAR, input, pos).as_deref(), Some("property"));
+}

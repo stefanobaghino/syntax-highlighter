@@ -78,7 +78,7 @@ fn_params     <- @punctuation{'('} ws fn_param_list? ws @punctuation{')'}
 fn_param_list <- fn_param (ws @punctuation{','} ws fn_param)* (ws @punctuation{','})?
 fn_param      <- attr_outer? self_param
                / attr_outer? fn_param_named
-fn_param_named <- pattern ws @punctuation{':'} ws type_expr
+fn_param_named <- pattern_no_or ws @punctuation{':'} ws type_expr
 self_param    <- ref_marker? ws (@keyword{'mut'} ws)? @keyword{'self'}
                / @keyword{'mut'} ws @keyword{'self'}
                / @keyword{'self'} ws @punctuation{':'} ws type_expr
@@ -198,15 +198,21 @@ type_tuple_or_group <- @punctuation{'('} ws type_list? ws @punctuation{')'}
 type_never    <- @punctuation{'!'}
 
 type_path     <- type_path_seg (@punctuation{'::'} type_path_seg)*
-type_path_seg <- @type{upper_ident} generic_args?
-               / @variable{lower_ident} generic_args?
+type_path_seg <- @type{upper_ident} path_tail?
+               / @variable{lower_ident} path_tail?
                / @keyword{'self'}
                / @keyword{'Self'}
                / @keyword{'super'}
                / @keyword{'crate'}
 
+# Either angle-bracket generics (`Foo<T>`) or paren-sugar for Fn-traits
+# (`Fn(T) -> U`); Rust's reference grammar splits these as
+# `GenericArgs` vs `ParenthesizedGenericArgs`.
+path_tail     <- generic_args
+               / paren_generic_args
 generic_args  <- @punctuation{'::'} @punctuation{'<'} ws generic_arg_list? ws @punctuation{'>'}
                / @punctuation{'<'} ws generic_arg_list? ws @punctuation{'>'}
+paren_generic_args <- @punctuation{'('} ws type_list? ws @punctuation{')'} (ws @punctuation{'->'} ws type_expr)?
 generic_arg_list <- generic_arg (ws @punctuation{','} ws generic_arg)* (ws @punctuation{','})?
 generic_arg   <- lifetime
                / type_expr
@@ -215,8 +221,14 @@ generic_arg   <- lifetime
                / literal
 
 # --- Patterns ----------------------------------------------------------
+#
+# `pattern` allows a top-level or-pattern (`A | B`). In positions where
+# the surrounding rule uses `|` as its own delimiter (closure params,
+# fn params), use `pattern_no_or` so the closing `|` isn't eaten by
+# `pattern_or`'s greedy `*`. Mirrors Rust's reference `PatternNoTopAlt`.
 
 pattern       <- pattern_or
+pattern_no_or <- pattern_atom
 pattern_or    <- pattern_atom (ws @punctuation{'|'} ws pattern_atom)*
 pattern_atom  <- pattern_ref
                / pattern_box
@@ -340,7 +352,7 @@ expr_unsafe   <- @keyword{'unsafe'} ws block
 expr_closure  <- (@keyword{'move'} ws)? @punctuation{'|'} ws closure_params? ws @punctuation{'|'}
                  (ws @punctuation{'->'} ws type_expr)? ws expr
 closure_params <- closure_param (ws @punctuation{','} ws closure_param)* (ws @punctuation{','})?
-closure_param <- pattern (ws @punctuation{':'} ws type_expr)?
+closure_param <- pattern_no_or (ws @punctuation{':'} ws type_expr)?
 expr_block    <- block
 expr_async_block <- @keyword{'async'} (ws @keyword{'move'})? ws block
 expr_tuple_or_paren <- @punctuation{'('} ws expr_list? ws @punctuation{')'}
@@ -435,7 +447,7 @@ num_suffix    <- [a-zA-Z_] [a-zA-Z0-9_]*
 
 # --- Lifetimes and identifiers -----------------------------------------
 
-lifetime      <- @type{"'" ident_body}
+lifetime      <- @type{"'" ident_body+}
 
 # `r#keyword` raw identifier is accepted; the `r#` prefix is stripped
 # of special meaning for highlighting.

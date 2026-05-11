@@ -39,6 +39,22 @@ fn kinds_for<'a>(captures: &[Capture], kinds: &'a [String]) -> Vec<&'a str> {
         .collect()
 }
 
+/// Collect recovery captures whose text contains anything other than ASCII
+/// whitespace. Trailing-newline recovery is a known pre-existing quirk (see
+/// #71); this filter keeps callers focused on real recovery regressions.
+fn non_ws_recovery_literals<'a>(
+    captures: &[Capture],
+    kinds: &[String],
+    input: &'a str,
+) -> Vec<&'a str> {
+    captures
+        .iter()
+        .filter(|c| kinds[c.kind.0 as usize] == "recovery")
+        .map(|c| &input[c.start..c.end])
+        .filter(|s| s.chars().any(|ch| !ch.is_ascii_whitespace()))
+        .collect()
+}
+
 #[test]
 fn grammar_parses_and_compiles() {
     let prog = compile_go();
@@ -149,7 +165,50 @@ fn for_c_style_parses() {
 #[test]
 fn switch_type_switch_parses() {
     let input = "package p\n\nfunc f(x interface{}) {\n\tswitch v := x.(type) {\n\tcase int:\n\t\t_ = v\n\tcase string:\n\t\t_ = v\n\tdefault:\n\t\t_ = v\n\t}\n}\n";
-    let (_, _) = assert_complete_full(input);
+    let (caps, kinds) = assert_complete_full(input);
+    // Top-level `*^` recovery would let this pass even when the body fails
+    // to parse — explicitly assert the body landed under no recovery and
+    // that the guard produced the expected `switch`, `type`, and `case`
+    // keywords.
+    let leaks = non_ws_recovery_literals(&caps, &kinds, input);
+    assert!(
+        leaks.is_empty(),
+        "type-switch body should parse cleanly, recovered: {:?}",
+        leaks
+    );
+    let keyword_count = |kw: &str| {
+        caps.iter()
+            .filter(|c| kinds[c.kind.0 as usize] == "keyword")
+            .filter(|c| &input[c.start..c.end] == kw)
+            .count()
+    };
+    assert_eq!(keyword_count("switch"), 1);
+    assert_eq!(keyword_count("type"), 1, "expected `type` inside the guard");
+    assert_eq!(keyword_count("case"), 2);
+}
+
+#[test]
+fn type_switch_with_init_parses() {
+    let input = "package p\n\nfunc f(x interface{}) {\n\tswitch y := lookup(); v := y.(type) {\n\tcase int:\n\t\t_ = v\n\tdefault:\n\t\t_ = v\n\t}\n}\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let leaks = non_ws_recovery_literals(&caps, &kinds, input);
+    assert!(
+        leaks.is_empty(),
+        "type-switch with init clause should parse cleanly, recovered: {:?}",
+        leaks
+    );
+}
+
+#[test]
+fn type_switch_without_assignment_parses() {
+    let input = "package p\n\nfunc f(x interface{}) {\n\tswitch x.(type) {\n\tcase int:\n\tdefault:\n\t}\n}\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let leaks = non_ws_recovery_literals(&caps, &kinds, input);
+    assert!(
+        leaks.is_empty(),
+        "anonymous type-switch should parse cleanly, recovered: {:?}",
+        leaks
+    );
 }
 
 #[test]
@@ -243,6 +302,20 @@ fn recovery_absorbs_malformed_item() {
     assert!(
         k.contains(&"recovery"),
         "expected a @recovery capture for the @@@ region, got: {:?}",
+        k
+    );
+}
+
+#[test]
+fn blank_lines_between_top_decls_emit_no_recovery() {
+    // Regression: file-root `(top_decl)*^` used to drop inter-iteration ws,
+    // sending blank-line bytes through the recovery byte-eater. See #71.
+    let input = "package main\n\nfunc a() {}\n\nfunc b() {}\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let k = kinds_for(&caps, &kinds);
+    assert!(
+        !k.contains(&"recovery"),
+        "well-formed input should emit no @recovery captures, got: {:?}",
         k
     );
 }
