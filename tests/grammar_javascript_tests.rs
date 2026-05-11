@@ -487,3 +487,82 @@ fn try_then_return_keeps_function_keyword() {
         kw
     );
 }
+
+// Regression tests for #73: reserved words must be accepted at
+// IdentifierName positions (member access, property keys, imported
+// /exported names) where ES allows them but rejects only at binding
+// positions.
+
+#[test]
+fn reserved_word_after_dot_parses() {
+    let input = "main().catch(e => log(e));\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let k = kinds_for(&caps, &kinds);
+    assert!(
+        !k.contains(&"recovery"),
+        "no recovery expected for `.catch(...)`: {:?}",
+        k
+    );
+}
+
+#[test]
+fn reserved_word_after_dot_without_call_is_property() {
+    let input = "p.catch;\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let k = kinds_for(&caps, &kinds);
+    assert!(
+        !k.contains(&"recovery"),
+        "no recovery expected for `.catch;`: {:?}",
+        k
+    );
+    let catch_pos = input.find("catch").unwrap();
+    let catch_cap = caps.iter().find(|c| c.start == catch_pos).unwrap();
+    assert_eq!(kinds[catch_cap.kind.0 as usize], "property");
+}
+
+#[test]
+fn reserved_word_after_optional_chain_parses() {
+    let input = "obj?.delete; obj?.return(); obj?.['x'];\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let k = kinds_for(&caps, &kinds);
+    assert!(
+        !k.contains(&"recovery"),
+        "no recovery expected for optional-chain `?.<reserved>`: {:?}",
+        k
+    );
+}
+
+#[test]
+fn reserved_word_as_object_key_parses() {
+    let (_, _) = assert_complete_full("const o = { catch: 1, default: 2, new: 3 };\n");
+}
+
+#[test]
+fn reserved_word_as_object_method_shorthand_parses() {
+    let (_, _) = assert_complete_full("const o = { catch() { return 1; }, default() {} };\n");
+}
+
+#[test]
+fn reserved_word_as_class_method_and_field_parses() {
+    let (_, _) = assert_complete_full("class C { catch() {} default = 1; static return() {} }\n");
+}
+
+#[test]
+fn reserved_word_in_object_destructuring_key_parses() {
+    let (_, _) = assert_complete_full("const { default: d, catch: c } = obj;\n");
+}
+
+#[test]
+fn import_specifier_allows_reserved_imported_name() {
+    let (_, _) = assert_complete_full("import { default as foo, class as Cls } from 'm';\n");
+}
+
+#[test]
+fn export_specifier_allows_reserved_exported_name() {
+    let (_, _) = assert_complete_full("export { foo as default, bar as class };\n");
+}
+
+#[test]
+fn export_star_as_reserved_parses() {
+    let (_, _) = assert_complete_full("export * as default from 'm';\n");
+}

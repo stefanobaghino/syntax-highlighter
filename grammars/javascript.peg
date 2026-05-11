@@ -73,11 +73,11 @@ import_ns_or_named <- import_namespace / import_named
 import_namespace <- @operator{'*'} ws @keyword{'as'} ws @variable{ident}
 import_named   <- @punctuation{'{'} ws import_specifier_list? ws @punctuation{'}'}
 import_specifier_list <- import_specifier (ws @punctuation{','} ws import_specifier)* (ws @punctuation{','})?
-import_specifier <- @variable{ident} ws @keyword{'as'} ws @variable{ident}
+import_specifier <- @variable{ident_name} ws @keyword{'as'} ws @variable{ident}
                   / @variable{ident}
 
 export_decl    <- @keyword{'export'} ws @keyword{'default'} ws export_default_body
-                / @keyword{'export'} ws @operator{'*'} ws (@keyword{'as'} ws @variable{ident} ws)? @keyword{'from'} ws string_lit ws opt_semi
+                / @keyword{'export'} ws @operator{'*'} ws (@keyword{'as'} ws @variable{ident_name} ws)? @keyword{'from'} ws string_lit ws opt_semi
                 / @keyword{'export'} ws export_named
                 / @keyword{'export'} ws fn_decl
                 / @keyword{'export'} ws class_decl
@@ -87,7 +87,7 @@ export_default_body <- fn_decl
                      / expr ws opt_semi
 export_named   <- @punctuation{'{'} ws export_specifier_list? ws @punctuation{'}'} (ws @keyword{'from'} ws string_lit)? ws opt_semi
 export_specifier_list <- export_specifier (ws @punctuation{','} ws export_specifier)* (ws @punctuation{','})?
-export_specifier <- @variable{ident} ws @keyword{'as'} ws @variable{ident}
+export_specifier <- @variable{ident_name} ws @keyword{'as'} ws @variable{ident_name}
                   / @variable{ident}
 
 # --- Function / class declarations ------------------------------------
@@ -105,10 +105,10 @@ class_method_or_field <- (@keyword{'static'} ws)? (class_method / class_field)
 class_method   <- (@keyword{'async'} ws)? (@operator{'*'} ws)? method_head ws fn_params ws block ws
                 / (@keyword{'get'} / @keyword{'set'}) ws method_head ws fn_params ws block ws
 method_head    <- computed_prop
-                / @function{ident}
+                / @function{ident_name}
                 / string_lit
                 / number_lit
-class_field    <- (computed_prop / @property{ident}) ws (@operator{'='} ws expr_no_comma)? ws opt_semi
+class_field    <- (computed_prop / @property{ident_name}) ws (@operator{'='} ws expr_no_comma)? ws opt_semi
 
 # --- Variable declarations -------------------------------------------
 
@@ -167,7 +167,7 @@ array_pattern_el <- @operator{'...'} pattern
 object_pattern <- @punctuation{'{'} ws object_pattern_list? ws @punctuation{'}'}
 object_pattern_list <- object_pattern_prop (ws @punctuation{','} ws object_pattern_prop)* (ws @punctuation{','})?
 object_pattern_prop <- @operator{'...'} pattern
-                     / (computed_prop / @property{ident}) ws @punctuation{':'} ws pattern (ws @operator{'='} ws expr_no_comma)?
+                     / (computed_prop / @property{ident_name}) ws @punctuation{':'} ws pattern (ws @operator{'='} ws expr_no_comma)?
                      / @property{ident} (ws @operator{'='} ws expr_no_comma)?
 
 computed_prop  <- @punctuation{'['} ws expr ws @punctuation{']'}
@@ -244,8 +244,8 @@ postfix_op     <- @operator{'++'}
 postfix_after_optional <- call_args
                         / @punctuation{'['} ws expr ws @punctuation{']'}
                         / member_target
-member_target  <- @function{ident} &(ws @punctuation{'('})
-                / @property{ident}
+member_target  <- @function{ident_name} &(ws @punctuation{'('})
+                / @property{ident_name}
 call_args      <- @punctuation{'('} ws arg_list? ws @punctuation{')'}
 arg_list       <- arg (ws @punctuation{','} ws arg)* (ws @punctuation{','})?
 arg            <- @operator{'...'} expr_no_comma
@@ -285,7 +285,7 @@ expr_object    <- @punctuation{'{'} ws object_props? ws @punctuation{'}'}
 object_props   <- object_prop (ws @punctuation{','} ws object_prop)* (ws @punctuation{','})?
 object_prop    <- @operator{'...'} expr_no_comma
                 / object_method
-                / (computed_prop / string_lit / number_lit / @property{ident}) ws @punctuation{':'} ws expr_no_comma
+                / (computed_prop / string_lit / number_lit / @property{ident_name}) ws @punctuation{':'} ws expr_no_comma
                 / @property{ident}
 object_method  <- (@keyword{'async'} ws)? (@operator{'*'} ws)? method_head ws fn_params ws block
                 / (@keyword{'get'} / @keyword{'set'}) ws method_head ws fn_params ws block
@@ -336,6 +336,12 @@ bigint         <- 'n'
 # --- Identifiers / reserved words ------------------------------------
 
 ident          <- !reserved ident_start ident_body*
+# `ident_name` mirrors ECMA's `IdentifierName`: like `ident`, but the
+# `!reserved` guard is dropped so reserved words are accepted. Use at
+# positions where ES allows IdentifierName but not BindingIdentifier
+# (member access after `.` / `?.`, property keys, imported/exported
+# names that aren't local bindings).
+ident_name     <- ident_start ident_body*
 upper_ident    <- !reserved [A-Z] ident_body*
 lower_ident    <- !reserved [a-z_$] ident_body*
 ident_start    <- [A-Za-z_$]
