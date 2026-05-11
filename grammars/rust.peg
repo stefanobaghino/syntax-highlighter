@@ -441,7 +441,7 @@ num_suffix    <- [a-zA-Z_] [a-zA-Z0-9_]*
 
 # --- Lifetimes and identifiers -----------------------------------------
 
-lifetime      <- @type{"'" ident_body}
+lifetime      <- @type{"'" ident_body+}
 
 # `r#keyword` raw identifier is accepted; the `r#` prefix is stripped
 # of special meaning for highlighting.

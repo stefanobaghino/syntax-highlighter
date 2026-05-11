@@ -47,6 +47,14 @@ fn kind_spans(captures: &[Capture], kinds: &[String], kind: &str) -> Vec<String>
         .collect()
 }
 
+fn recovery_literals<'a>(captures: &[Capture], kinds: &[String], input: &'a str) -> Vec<&'a str> {
+    captures
+        .iter()
+        .filter(|c| kinds[c.kind.0 as usize] == "recovery")
+        .map(|c| &input[c.start..c.end])
+        .collect()
+}
+
 #[test]
 fn grammar_parses_and_compiles() {
     let prog = compile_rust();
@@ -206,12 +214,42 @@ fn lifetime_parses_as_type() {
         "lifetime `'a` should be captured as @type: {:?}",
         kv
     );
+    assert!(
+        recovery_literals(&caps, &kinds, input).is_empty(),
+        "no recovery expected for single-char lifetime"
+    );
+}
+
+#[test]
+fn multi_char_lifetime_parses() {
+    // `'static` and other multi-char lifetimes must reach the lifetime
+    // rule's full ident_body sequence — see #81.
+    for input in [
+        "fn k() -> &'static str { \"x\" }\n",
+        "fn k<'lt>(s: &'lt str) -> &'lt str { s }\n",
+        "fn k<'long_name>(x: &'long_name u8) {}\n",
+        "fn f<T>(x: T) where T: Clone + Send + 'static {}\n",
+        "fn f() -> Vec<(i64, &'static str)> { vec![] }\n",
+    ] {
+        let (caps, kinds) = assert_complete_full(input);
+        let recs = recovery_literals(&caps, &kinds, input);
+        assert!(
+            recs.is_empty(),
+            "expected no recovery on `{}` — got {:?}",
+            input.trim_end(),
+            recs
+        );
+    }
 }
 
 #[test]
 fn where_clause_parses() {
     let input = "fn f<T>(x: T) where T: Clone + Send + 'static {}\n";
-    let (_, _) = assert_complete_full(input);
+    let (caps, kinds) = assert_complete_full(input);
+    assert!(
+        recovery_literals(&caps, &kinds, input).is_empty(),
+        "where-clause with `'static` should not recover"
+    );
 }
 
 #[test]
