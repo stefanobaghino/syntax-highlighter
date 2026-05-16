@@ -462,6 +462,65 @@ fn non_reserved_words_parse_as_identifiers() {
 }
 
 #[test]
+fn attach_with_unknown_key_clause_keeps_prefix_kinded() {
+    // Issue #16's canonical repro: SQLite doesn't know the
+    // SEE-extension `KEY '...'` clause, so `attach_stmt` fails inside
+    // this line. Before the per-iteration RecoverScope work, the
+    // entire line collapsed into `recovery` because the outer `*^`'s
+    // Backtrack wiped every capture from the failed inner attempt.
+    // With RecoverToScopedMax in place, captures from the failed
+    // attempt's deepest-progress reach survive: at minimum, the
+    // `ATTACH DATABASE` keywords and the `'/path'` literal land as
+    // their proper grammar kinds, not as `recovery`.
+    //
+    // We intentionally test only the load-bearing invariant —
+    // "non-recovery captures appear in the early prefix" — rather
+    // than pinning each surviving token's kind/span. The exact
+    // failure point depends on how `statement`'s alternatives fail,
+    // which can drift as the grammar evolves.
+    let input = "ATTACH DATABASE '/path' AS 'name' KEY '';";
+    let (caps, kinds) = {
+        let (_, caps, kinds, _) = run(input);
+        (caps, kinds)
+    };
+    let recovery_spans = spans_for(&caps, &kinds, "recovery", input);
+    assert!(
+        !recovery_spans.is_empty(),
+        "expected at least one recovery span on this input; got kinds {:?}",
+        kinds_for(&caps, &kinds),
+    );
+    // The `ATTACH DATABASE` keywords sit at the very start. With the
+    // pre-fix behaviour they'd be swallowed by `recovery`. Assert
+    // that *some* non-recovery capture lands in the prefix before
+    // the `'/path'` string ends.
+    let path_close = input.find("' AS").expect("'/path' is in the input") + 1;
+    let non_recovery_in_prefix = caps
+        .iter()
+        .any(|c| kinds[c.kind.0 as usize] != "recovery" && c.start < path_close);
+    assert!(
+        non_recovery_in_prefix,
+        "expected the `ATTACH DATABASE '/path'` prefix to keep its non-recovery \
+         captures (issue #16 regression); got kinds {:?}",
+        kinds_for(&caps, &kinds),
+    );
+    // Recovery should not start before any of the prefix tokens —
+    // specifically, recovery spans must not cover the leading
+    // `ATTACH` keyword (positions 0..6).
+    let attach_end = "ATTACH".len();
+    for cap in &caps {
+        if kinds[cap.kind.0 as usize] == "recovery" {
+            assert!(
+                cap.start >= attach_end,
+                "recovery span at {}..{} = {:?} overlaps the leading ATTACH keyword",
+                cap.start,
+                cap.end,
+                &input[cap.start..cap.end],
+            );
+        }
+    }
+}
+
+#[test]
 fn blatantly_invalid_input_is_not_a_clean_parse() {
     // Two consecutive SELECTs without a separator or expression between
     // them are never valid as a single clean parse — `sql_file`'s

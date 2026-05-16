@@ -53,6 +53,48 @@ enum StackEntry {
         return_addr: usize,
         seed: Option<LSeed>,
     },
+    /// Per-iteration tracking frame for `p*^` (`Pattern::RecoverRepeat`).
+    /// Pushed by `RecoverScopeBegin` at the top of each iteration and
+    /// popped by `RecoverScopeEnd` on every exit edge. Carries an
+    /// iteration-local analogue of the global `(max_sp, max_captures_len,
+    /// saved_lower, saved_above)` watermark so `RecoverToScopedMax` can
+    /// splice the failed inner attempt's deepest-progress captures back
+    /// into the live buffer before the recovery branch emits its byte.
+    ///
+    /// Without this frame, the outer `Choice` that lowers `*^` truncates
+    /// `captures` to `baseline_capture_len` on failure (issue #16) and
+    /// the partial match emits zero useful highlights.
+    RecoverScope {
+        /// `sp` at the moment the iteration started — the value the
+        /// outer `Choice`'s `Backtrack` will restore on failure of
+        /// `<inner>`.
+        baseline_sp: usize,
+        /// `captures.len()` at the moment the iteration started — the
+        /// value the outer `Choice`'s `Backtrack` will truncate to on
+        /// failure of `<inner>`.
+        baseline_capture_len: usize,
+        /// Deepest input position reached during this iteration of the
+        /// loop. Initialized to `baseline_sp` and bumped by
+        /// `maybe_snapshot` whenever `sp > scoped_max_sp`. Cannot fall
+        /// below the iteration's baseline by construction.
+        scoped_max_sp: usize,
+        /// `captures.len()` at the moment `scoped_max_sp` was last
+        /// advanced. Mirrors the global `max_captures_len` field.
+        scoped_max_captures_len: usize,
+        /// Lowest capture index in `[baseline_capture_len,
+        /// scoped_max_captures_len)` still physically present in
+        /// `self.captures`. Captures in
+        /// `[scoped_saved_lower, scoped_max_captures_len)` were
+        /// displaced into `scoped_saved_above` by a
+        /// truncate-below-watermark. Mirrors the global `saved_lower`,
+        /// scoped to this iteration's watermark.
+        scoped_saved_lower: usize,
+        /// Captures displaced from the per-iteration watermark prefix,
+        /// stored in reverse capture-order. Walked in original order
+        /// via `iter().rev()` by `RecoverToScopedMax`. Mirrors the
+        /// global `saved_above`.
+        scoped_saved_above: Vec<OpenCapture>,
+    },
 }
 
 /// Successful seed of a left-recursive rule's prior iteration: the `sp` the
@@ -726,6 +768,108 @@ impl<'p, 'i> VM<'p, 'i> {
                     self.captures[idx].end = Some(self.sp);
                     self.ip += 1;
                 }
+                Instruction::RecoverScopeBegin => {
+                    let cur_sp = self.sp;
+                    let cur_len = self.captures.len();
+                    self.stack.push(StackEntry::RecoverScope {
+                        baseline_sp: cur_sp,
+                        baseline_capture_len: cur_len,
+                        scoped_max_sp: cur_sp,
+                        scoped_max_captures_len: cur_len,
+                        scoped_saved_lower: cur_len,
+                        scoped_saved_above: Vec::new(),
+                    });
+                    self.ip += 1;
+                }
+                Instruction::RecoverToScopedMax => {
+                    // We arrive here immediately after the outer Choice's
+                    // Backtrack fired: `sp` and `captures.len()` have been
+                    // restored to the iteration's baselines, and the same
+                    // `fail()` call's `protect_max_captures` has pulled
+                    // every live `RecoverScope`'s `scoped_saved_lower` down
+                    // to its `baseline_capture_len` (or lower). For the
+                    // topmost scope that means the entire alive-at-
+                    // `scoped_max_sp` pool is now sitting in
+                    // `scoped_saved_above`, in reverse capture order.
+                    //
+                    // Splice it back into `self.captures` (closing any
+                    // captures still open at `scoped_max_sp`, mirroring
+                    // `close_captures` and `LRTail`'s seed replay), then
+                    // jump `sp` forward to `scoped_max_sp` so the recovery
+                    // branch's `Any(1)` covers only the byte where parsing
+                    // actually broke, not the iteration's whole baseline-
+                    // to-failure span.
+                    let scope_idx = self
+                        .stack
+                        .iter()
+                        .rposition(|e| matches!(e, StackEntry::RecoverScope { .. }))
+                        .expect("RecoverToScopedMax without enclosing RecoverScope");
+                    let StackEntry::RecoverScope {
+                        baseline_sp,
+                        baseline_capture_len,
+                        scoped_max_sp,
+                        scoped_max_captures_len,
+                        scoped_saved_lower,
+                        scoped_saved_above,
+                    } = &mut self.stack[scope_idx]
+                    else {
+                        unreachable!("rposition matched RecoverScope")
+                    };
+                    let baseline_sp = *baseline_sp;
+                    let baseline_capture_len = *baseline_capture_len;
+                    let scoped_max_sp = *scoped_max_sp;
+                    let scoped_max_captures_len = *scoped_max_captures_len;
+                    debug_assert!(
+                        scoped_max_sp >= baseline_sp,
+                        "RecoverToScopedMax: scoped_max_sp ({}) retreated below baseline_sp ({})",
+                        scoped_max_sp,
+                        baseline_sp,
+                    );
+                    debug_assert_eq!(
+                        *scoped_saved_lower, baseline_capture_len,
+                        "RecoverToScopedMax: outer Choice's Backtrack should have driven \
+                         scoped_saved_lower down to baseline_capture_len via protect_max_captures",
+                    );
+                    let displaced = std::mem::take(scoped_saved_above);
+                    // Mark the per-iteration tracking as fully drained.
+                    // Subsequent `maybe_snapshot` calls in this iteration's
+                    // recovery branch will start from the newly-spliced
+                    // length.
+                    *scoped_saved_lower = scoped_max_captures_len;
+
+                    debug_assert_eq!(
+                        self.captures.len(),
+                        baseline_capture_len,
+                        "RecoverToScopedMax: outer Choice's Backtrack should have truncated \
+                         captures to baseline_capture_len",
+                    );
+                    // `displaced` holds the alive-at-scoped-max captures in
+                    // reverse order; iter().rev() restores original order.
+                    // Close any that were still open at scoped_max_sp so
+                    // the next CaptureEnd binds to the recovery span we're
+                    // about to open rather than to a re-materialized
+                    // straggler.
+                    self.captures
+                        .extend(displaced.iter().rev().map(|c| OpenCapture {
+                            kind: c.kind,
+                            start: c.start,
+                            end: Some(c.end.unwrap_or(scoped_max_sp)),
+                        }));
+                    debug_assert_eq!(self.captures.len(), scoped_max_captures_len);
+
+                    self.sp = scoped_max_sp;
+                    self.ip += 1;
+                }
+                Instruction::RecoverScopeEnd => {
+                    match self.stack.pop() {
+                        Some(StackEntry::RecoverScope { .. }) => {}
+                        other => panic!(
+                            "RecoverScopeEnd expected RecoverScope on stack top, got {:?}",
+                            other
+                        ),
+                    }
+                    self.ip += 1;
+                }
                 Instruction::End => {
                     let stats = MemoStats {
                         entries: self.memo.len(),
@@ -808,6 +952,17 @@ impl<'p, 'i> VM<'p, 'i> {
                     // Rule-call frame unwinding past its caller. The caller's
                     // Backtrack (if any) is deeper on the stack and will be
                     // found by continued popping.
+                }
+                StackEntry::RecoverScope { .. } => {
+                    // The outer `Choice` an iteration of `*^` pushes lives
+                    // *above* the `RecoverScope` and catches every fail
+                    // rooted in `<inner>`. Reaching this arm means the fail
+                    // is escaping the whole `*^` (e.g. through a rule body
+                    // called from `<inner>` whose own enclosing Backtrack is
+                    // deeper than the loop). The iteration is gone; its
+                    // per-iteration watermark is moot. Drop and keep
+                    // unwinding — some enclosing Backtrack will catch the
+                    // fail and truncate captures accordingly.
                 }
                 StackEntry::LFrame {
                     memo_id: _,
@@ -953,6 +1108,32 @@ impl<'p, 'i> VM<'p, 'i> {
             self.saved_lower = len;
             self.saved_above.clear();
         }
+        // Each live `RecoverScope` tracks its own per-iteration
+        // watermark in lockstep with the global one. Multiple may be
+        // live at once (nested `*^`); any scope whose `scoped_max_sp`
+        // has been surpassed needs its watermark advanced. Outer scopes
+        // legitimately track sp positions reached *inside* nested
+        // iterations — their recovery, if it fires later, must
+        // reconstruct from the deepest pool it ever saw.
+        let cur_sp = self.sp;
+        let cur_len = self.captures.len();
+        for entry in self.stack.iter_mut() {
+            if let StackEntry::RecoverScope {
+                scoped_max_sp,
+                scoped_max_captures_len,
+                scoped_saved_lower,
+                scoped_saved_above,
+                ..
+            } = entry
+            {
+                if cur_sp > *scoped_max_sp {
+                    *scoped_max_sp = cur_sp;
+                    *scoped_max_captures_len = cur_len;
+                    *scoped_saved_lower = cur_len;
+                    scoped_saved_above.clear();
+                }
+            }
+        }
     }
 
     /// Called before truncating `captures` to `new_len`. If the
@@ -983,6 +1164,31 @@ impl<'p, 'i> VM<'p, 'i> {
                     .copied(),
             );
             self.saved_lower = new_len;
+        }
+        // Mirror the spillover into every live `RecoverScope`. A scope
+        // only owns captures created since its baseline, so each scope
+        // clamps `new_len` at its `baseline_capture_len` before
+        // displacing — captures below baseline are the enclosing
+        // scope's (or the global epoch's) responsibility.
+        for entry in self.stack.iter_mut() {
+            if let StackEntry::RecoverScope {
+                baseline_capture_len,
+                scoped_saved_lower,
+                scoped_saved_above,
+                ..
+            } = entry
+            {
+                let clamped = new_len.max(*baseline_capture_len);
+                if clamped < *scoped_saved_lower {
+                    scoped_saved_above.extend(
+                        self.captures[clamped..*scoped_saved_lower]
+                            .iter()
+                            .rev()
+                            .copied(),
+                    );
+                    *scoped_saved_lower = clamped;
+                }
+            }
         }
     }
 

@@ -242,10 +242,13 @@ fn recover_repeat_mixed_success_and_recovery() {
 }
 
 #[test]
-fn recover_repeat_truncates_failed_inner_attempt_captures() {
+fn recover_repeat_preserves_failed_inner_attempt_deepest_captures() {
     // inner = @open{"a"} "b" — the @open capture opens before the "b"
-    // that may fail. After a failed attempt, that partial @open must NOT
-    // appear in the result; only successful attempts contribute to it.
+    // that may fail. Per issue #16, the deepest-progress captures of a
+    // failed inner attempt are re-materialized by `RecoverToScopedMax`
+    // before the recovery branch fires, and the recovery span covers
+    // only the byte where parsing actually broke (not the iteration's
+    // whole baseline-to-failure window).
     //
     // Kind interning order: RecoverRepeat enters before recursing into
     // inner, so "recovery" interns first (id 0), "open" second (id 1).
@@ -260,11 +263,122 @@ fn recover_repeat_truncates_failed_inner_attempt_captures() {
     assert_eq!(
         r.captures,
         vec![
-            cap(0, 0, 1), // recovery: 'a' (failed inner attempt's @open(0,1) is gone)
-            cap(0, 1, 2), // recovery: 'x'
+            cap(1, 0, 1), // @open: re-materialized from the failed iteration's deepest reach
+            cap(0, 1, 2), // recovery: 'x' (Any(1) consumes from scoped_max_sp=1, not baseline_sp=0)
             cap(1, 2, 3), // @open: the successful 'a' at sp=2
         ],
-        "the failed inner attempt's open capture must not leak into the result",
+        "the failed inner attempt's deepest-progress @open capture survives into the result",
+    );
+}
+
+#[test]
+fn recover_repeat_failed_attempt_reaching_eof_does_not_leak_clean_match() {
+    // inner = @open{"a"} "b" against input "a" — the inner @open opens
+    // at sp=0, then Char 'a' consumes ('sp=1'), then Char 'b' tries at
+    // sp=1 (EOF) and fails. The failed attempt's scoped_max_sp ==
+    // input.len(); RecoverToScopedMax would move sp to EOF, and the
+    // recovery branch's Any(1) would fail. Without the pre-
+    // materialization inner Choice baseline, the materialized
+    // @open(0,1) would leak into the result as a clean match — this
+    // test pins down that the materialization is undone and the parse
+    // reports an incomplete match instead. See the SQLite
+    // assert_not_clean_parse cases (e.g. "SELECT SELECT") for the
+    // grammar-level analogue.
+    let inner = Pattern::seq(vec![
+        Pattern::Capture("open".into(), Box::new(Pattern::literal("a"))),
+        Pattern::literal("b"),
+    ]);
+    let p = recover(inner, "recovery");
+    let r = run_pattern(&p, b"a");
+    // The loop exits cleanly at sp=0, then `compile_pattern` appends
+    // an `End` instruction — so `complete` is true at sp=0.
+    // `matched < input.len()` is what flags the partial parse.
+    assert!(r.matched < 1, "must not advance past failed attempt");
+    assert!(
+        r.captures.is_empty(),
+        "materialized @open must not leak; got {:?}",
+        r.captures
+    );
+}
+
+#[test]
+fn recover_repeat_nested_loops_do_not_panic() {
+    // outer = ((@a{"a"} "X")*^) "Z"  (the outer is itself wrapped in *^)
+    //
+    // Two RecoverScope frames are simultaneously live whenever the
+    // outer iteration is executing its inner `*^`. The
+    // `maybe_snapshot` and `protect_max_captures` walks must handle
+    // both frames without panicking — this regression-tests the
+    // multi-scope spillover logic. Behaviour-level assertions are
+    // deliberately loose: nested `*^` is a corner case, and the
+    // per-scope watermark machinery still has known cosmetic edges
+    // (an inner iteration that undoes via the EOF-Backtrack path may
+    // leave its materialized captures referenced by an outer scope's
+    // `saved_above` — see RecoverToScopedMax in src/pegvm/vm.rs).
+    // What we lock in here is the operational invariant: no panic,
+    // parse runs to completion.
+    let inner = recover(
+        Pattern::seq(vec![
+            Pattern::Capture("a".into(), Box::new(Pattern::literal("a"))),
+            Pattern::literal("X"),
+        ]),
+        "inner_rec",
+    );
+    let outer = recover(
+        Pattern::seq(vec![inner, Pattern::literal("Z")]),
+        "outer_rec",
+    );
+    // Several shapes that exercise different paths through the
+    // double-scope state machine. Every input must reach `End` (i.e.
+    // `complete` is true). The compiler-emitted `End` after the
+    // top-level `*^` always succeeds, so completeness measures only
+    // that the dispatcher didn't panic — sufficient to guard the
+    // multi-scope spillover.
+    for input in [b"".as_slice(), b"aX".as_slice(), b"!".as_slice(), b"aXaXZ"] {
+        let r = run_pattern(&outer, input);
+        assert!(r.complete, "nested *^ panicked or stalled on {:?}", input);
+    }
+}
+
+#[test]
+fn recover_repeat_empty_capture_in_failed_inner_attempt_is_dropped() {
+    // inner = @x{!"x"} "z" — @x opens and closes at the same sp via
+    // the NotPredicate succeeding without consuming. On input "by",
+    // inner fails at "z"; the failed attempt's @x(0,0) sits at the
+    // iteration's baseline sp and is dropped, NOT re-materialized.
+    //
+    // Why dropped: the per-iteration watermark mirrors the global
+    // `max_*` design — `maybe_snapshot` only bumps `scoped_max_*`
+    // when `sp` advances, so a capture that opens and closes without
+    // any byte being consumed doesn't enter the watermark's
+    // `(scoped_max_sp, scoped_max_captures_len)` snapshot. This
+    // matches PEG-failure semantics for the global watermark
+    // (`finalize_partial`) too, where a closed-but-empty capture at
+    // `max_sp` would equally not appear in the partial result.
+    //
+    // The test pins this behaviour explicitly so a future refactor
+    // that tries to "improve" the empty-capture case is forced to
+    // re-baseline this test deliberately.
+    let inner = Pattern::seq(vec![
+        Pattern::Capture(
+            "x".into(),
+            Box::new(Pattern::NotPredicate(Box::new(Pattern::literal("x")))),
+        ),
+        Pattern::literal("z"),
+    ]);
+    let p = recover(inner, "recovery");
+    let r = run_pattern(&p, b"by");
+    assert!(r.complete);
+    assert_eq!(r.matched, 2);
+    // Kind interning order: "recovery" (id 0), "x" (id 1). No @x
+    // captures survive — both iterations produced only empty ones at
+    // their baseline sp, which don't enter the watermark.
+    assert_eq!(
+        r.captures,
+        vec![
+            cap(0, 0, 1), // recovery: 'b'
+            cap(0, 1, 2), // recovery: 'y'
+        ],
     );
 }
 
@@ -480,31 +594,49 @@ fn repeat_emits_partial_commit() {
 fn recover_repeat_emits_choice_commit_skeleton() {
     let p = recover(Pattern::literal("a"), "recovery");
     let prog = compile_pattern(&p);
-    // loop_top: Choice rec
-    //           Char 'a'
-    //           Commit loop_top
-    // rec:      Choice exit
-    //           CaptureBegin recovery
-    //           Any(1)
-    //           CaptureEnd
-    //           Commit loop_top
-    // exit:     End
+    // loop_top:   RecoverScopeBegin
+    //             Choice rec
+    //             Char 'a'
+    //             Commit next_iter           ; pops outer Backtrack
+    // rec:        Choice exit_inner          ; pre-materialization baseline
+    //             RecoverToScopedMax         ; splice & advance sp
+    //             CaptureBegin recovery
+    //             Any(1)
+    //             CaptureEnd
+    //             Commit next_iter           ; pops inner Backtrack
+    // next_iter:  RecoverScopeEnd            ; pops RecoverScope
+    //             Jump loop_top
+    // exit_inner: RecoverScopeEnd            ; EOF exit edge
+    //             End
     //
-    // The recovery loop uses fresh Choice/Commit per iteration (not
+    // Per #16: the RecoverScopeBegin/RecoverScopeEnd pair tracks the
+    // iteration-local farthest-failure watermark; RecoverToScopedMax
+    // splices those captures into the live buffer before the recovery
+    // byte. The inner Choice is pushed *before* RecoverToScopedMax so
+    // its Backtrack captures the pre-materialization baseline — that
+    // way an EOF inside the recovery's Any(1) discards the
+    // materialization instead of leaking a failed attempt's captures
+    // out as a clean parse. Success and recovery-success edges share
+    // the `next_iter` epilogue. Fresh Choice/Commit per iteration (not
     // PartialCommit) so each retry's backtrack baseline is at the
-    // advanced sp. See src/pegvm/README.md invariant 1.
+    // advanced sp — see src/pegvm/README.md invariant 1.
     assert_eq!(
         prog.code,
         vec![
-            Instruction::Choice(Label(3)),             // → rec
-            Instruction::Char(b'a'),                   // <inner>
-            Instruction::Commit(Label(0)),             // → loop_top
-            Instruction::Choice(Label(8)),             // rec: → exit
+            Instruction::RecoverScopeBegin, // loop_top
+            Instruction::Choice(Label(4)),  // → rec
+            Instruction::Char(b'a'),        // <inner>
+            Instruction::Commit(Label(10)), // → next_iter
+            Instruction::Choice(Label(12)), // rec: → exit_inner
+            Instruction::RecoverToScopedMax,
             Instruction::CaptureBegin(CaptureKind(0)), // recovery
             Instruction::Any(1),
             Instruction::CaptureEnd,
-            Instruction::Commit(Label(0)), // → loop_top
-            Instruction::End,              // exit
+            Instruction::Commit(Label(10)), // → next_iter
+            Instruction::RecoverScopeEnd,   // next_iter: pop scope
+            Instruction::Jump(Label(0)),    // → loop_top
+            Instruction::RecoverScopeEnd,   // exit_inner: EOF exit edge
+            Instruction::End,
         ]
     );
     assert_eq!(prog.capture_kinds, vec!["recovery".to_string()]);

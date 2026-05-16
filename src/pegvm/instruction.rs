@@ -239,5 +239,24 @@ pub enum Instruction {
     CaptureBegin(CaptureKind),
     CaptureEnd,
 
+    /// Push a fresh `RecoverScope` frame capturing the current
+    /// `(sp, captures.len())` as the iteration baseline. Emitted at the
+    /// top of every `p*^` iteration so the VM can track the deepest
+    /// captures the failed inner attempt produced — see
+    /// `RecoverToScopedMax` and `src/pegc/compiler.rs`'s `RecoverRepeat`
+    /// arm.
+    RecoverScopeBegin,
+    /// Materialize the topmost `RecoverScope`'s deepest-progress
+    /// captures into the live capture buffer past the iteration's
+    /// `baseline_capture_len`, and advance `sp` to `scoped_max_sp`.
+    /// Emitted at the head of `p*^`'s recovery branch so the following
+    /// `Any(1)` emits a recovery span starting *after* the partially
+    /// matched prefix instead of swallowing it. Does not pop the scope.
+    RecoverToScopedMax,
+    /// Pop the topmost `RecoverScope` frame. Emitted on every edge that
+    /// leaves a `p*^` iteration so each `RecoverScopeBegin` is
+    /// brace-matched.
+    RecoverScopeEnd,
+
     End,
 }
