@@ -210,17 +210,24 @@ pub struct VM<'p, 'i> {
     /// `p < entry.examined_max`, so the bound must reflect lookahead reads
     /// past `end_sp` as well as the consumed span.
     memo_examined: Vec<usize>,
-    /// Count of live `StackEntry::RecoverScope` frames. Incremented by
-    /// `RecoverScopeBegin`, decremented by `RecoverScopeEnd` and the
-    /// `RecoverScope` arm of `fail()`. Lets `maybe_snapshot` and
-    /// `protect_max_captures` short-circuit their stack walks when no
-    /// scope is live — important because both are hot (`maybe_snapshot`
-    /// fires from `fail()`, `BackCommit`, every `RuleEnter` cache hit,
-    /// and `LRTail`'s commit; `protect_max_captures` fires from
-    /// `BackCommit` and every `fail()` that pops a `Backtrack`). Only
-    /// `p*^` patterns ever push a scope, so most grammars and most
-    /// instruction-stream positions see this counter at zero.
-    recover_scope_count: usize,
+    /// Indices into `self.stack` of every live `RecoverScope` frame.
+    /// Pushed by `RecoverScopeBegin`, popped by `RecoverScopeEnd` and
+    /// the `RecoverScope` arm of `fail()`. Lets `maybe_snapshot` and
+    /// `protect_max_captures` visit only scope frames instead of
+    /// iterating the entire backtrack stack — important because both
+    /// helpers are hot (`maybe_snapshot` fires from `fail()`,
+    /// `BackCommit`, every `RuleEnter` cache hit, and `LRTail`'s
+    /// commit; `protect_max_captures` fires from `BackCommit` and
+    /// every `fail()` that pops a `Backtrack`).
+    ///
+    /// In every shipped grammar that uses `*^`, the top-level rule
+    /// wraps the whole document in one — so the outer scope is live
+    /// for the entire parse and the alternative "skip walk when
+    /// no scope is live" guard never trips. The index list scales
+    /// with the number of scopes, not with overall stack depth, so
+    /// the inner walks stay O(scope-depth) (≤ 1 for non-nested `*^`)
+    /// regardless of rule-call nesting.
+    recover_scope_indices: Vec<usize>,
 }
 
 /// A memo-table entry for a rule invocation at a specific input position.
@@ -280,7 +287,7 @@ impl<'p, 'i> VM<'p, 'i> {
             memo_misses: 0,
             memo_threshold: Self::DEFAULT_MEMO_THRESHOLD,
             memo_examined: Vec::new(),
-            recover_scope_count: 0,
+            recover_scope_indices: Vec::new(),
         }
     }
 
@@ -783,6 +790,7 @@ impl<'p, 'i> VM<'p, 'i> {
                 Instruction::RecoverScopeBegin => {
                     let cur_sp = self.sp;
                     let cur_len = self.captures.len();
+                    let scope_idx = self.stack.len();
                     self.stack.push(StackEntry::RecoverScope {
                         baseline_sp: cur_sp,
                         baseline_capture_len: cur_len,
@@ -791,7 +799,7 @@ impl<'p, 'i> VM<'p, 'i> {
                         scoped_saved_lower: cur_len,
                         scoped_saved_above: Vec::new(),
                     });
-                    self.recover_scope_count += 1;
+                    self.recover_scope_indices.push(scope_idx);
                     self.ip += 1;
                 }
                 Instruction::RecoverToScopedMax => {
@@ -881,7 +889,9 @@ impl<'p, 'i> VM<'p, 'i> {
                             other
                         ),
                     }
-                    self.recover_scope_count -= 1;
+                    self.recover_scope_indices
+                        .pop()
+                        .expect("RecoverScopeEnd: recover_scope_indices underflow");
                     self.ip += 1;
                 }
                 Instruction::End => {
@@ -977,7 +987,9 @@ impl<'p, 'i> VM<'p, 'i> {
                     // per-iteration watermark is moot. Drop and keep
                     // unwinding — some enclosing Backtrack will catch the
                     // fail and truncate captures accordingly.
-                    self.recover_scope_count -= 1;
+                    self.recover_scope_indices
+                        .pop()
+                        .expect("fail(): recover_scope_indices underflow on RecoverScope");
                 }
                 StackEntry::LFrame {
                     memo_id: _,
@@ -1131,23 +1143,25 @@ impl<'p, 'i> VM<'p, 'i> {
         // iterations — their recovery, if it fires later, must
         // reconstruct from the deepest pool it ever saw.
         //
-        // Guarded by `recover_scope_count` to short-circuit the stack
-        // walk when no scope is live (the common case for grammars that
-        // don't use `*^` at all and for inter-statement positions in
-        // grammars that do).
-        if self.recover_scope_count == 0 {
+        // Iterate `recover_scope_indices` directly so the cost scales
+        // with scope depth (≤ 1 for non-nested `*^`) rather than total
+        // backtrack-stack depth. The empty-iterator path is the common
+        // case for grammars without `*^`, and for those that have it,
+        // visits exactly the scope frames instead of skipping every
+        // Backtrack / Memo / LFrame / Return on the way down.
+        if self.recover_scope_indices.is_empty() {
             return;
         }
         let cur_sp = self.sp;
         let cur_len = self.captures.len();
-        for entry in self.stack.iter_mut() {
+        for &idx in &self.recover_scope_indices {
             if let StackEntry::RecoverScope {
                 scoped_max_sp,
                 scoped_max_captures_len,
                 scoped_saved_lower,
                 scoped_saved_above,
                 ..
-            } = entry
+            } = &mut self.stack[idx]
             {
                 if cur_sp > *scoped_max_sp {
                     *scoped_max_sp = cur_sp;
@@ -1155,6 +1169,8 @@ impl<'p, 'i> VM<'p, 'i> {
                     *scoped_saved_lower = cur_len;
                     scoped_saved_above.clear();
                 }
+            } else {
+                debug_assert!(false, "recover_scope_indices points to non-RecoverScope");
             }
         }
     }
@@ -1194,19 +1210,19 @@ impl<'p, 'i> VM<'p, 'i> {
         // displacing — captures below baseline are the enclosing
         // scope's (or the global epoch's) responsibility.
         //
-        // Same guard as `maybe_snapshot`: skip the stack walk entirely
-        // when no scope is live (every grammar without `*^`, plus all
-        // inter-statement positions in grammars that use it).
-        if self.recover_scope_count == 0 {
+        // Iterate `recover_scope_indices` to keep the cost proportional
+        // to scope depth rather than backtrack-stack depth (same
+        // rationale as `maybe_snapshot`).
+        if self.recover_scope_indices.is_empty() {
             return;
         }
-        for entry in self.stack.iter_mut() {
+        for &idx in &self.recover_scope_indices {
             if let StackEntry::RecoverScope {
                 baseline_capture_len,
                 scoped_saved_lower,
                 scoped_saved_above,
                 ..
-            } = entry
+            } = &mut self.stack[idx]
             {
                 let clamped = new_len.max(*baseline_capture_len);
                 if clamped < *scoped_saved_lower {
@@ -1218,6 +1234,8 @@ impl<'p, 'i> VM<'p, 'i> {
                     );
                     *scoped_saved_lower = clamped;
                 }
+            } else {
+                debug_assert!(false, "recover_scope_indices points to non-RecoverScope");
             }
         }
     }
