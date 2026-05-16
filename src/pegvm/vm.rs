@@ -210,6 +210,17 @@ pub struct VM<'p, 'i> {
     /// `p < entry.examined_max`, so the bound must reflect lookahead reads
     /// past `end_sp` as well as the consumed span.
     memo_examined: Vec<usize>,
+    /// Count of live `StackEntry::RecoverScope` frames. Incremented by
+    /// `RecoverScopeBegin`, decremented by `RecoverScopeEnd` and the
+    /// `RecoverScope` arm of `fail()`. Lets `maybe_snapshot` and
+    /// `protect_max_captures` short-circuit their stack walks when no
+    /// scope is live — important because both are hot (`maybe_snapshot`
+    /// fires from `fail()`, `BackCommit`, every `RuleEnter` cache hit,
+    /// and `LRTail`'s commit; `protect_max_captures` fires from
+    /// `BackCommit` and every `fail()` that pops a `Backtrack`). Only
+    /// `p*^` patterns ever push a scope, so most grammars and most
+    /// instruction-stream positions see this counter at zero.
+    recover_scope_count: usize,
 }
 
 /// A memo-table entry for a rule invocation at a specific input position.
@@ -269,6 +280,7 @@ impl<'p, 'i> VM<'p, 'i> {
             memo_misses: 0,
             memo_threshold: Self::DEFAULT_MEMO_THRESHOLD,
             memo_examined: Vec::new(),
+            recover_scope_count: 0,
         }
     }
 
@@ -779,6 +791,7 @@ impl<'p, 'i> VM<'p, 'i> {
                         scoped_saved_lower: cur_len,
                         scoped_saved_above: Vec::new(),
                     });
+                    self.recover_scope_count += 1;
                     self.ip += 1;
                 }
                 Instruction::RecoverToScopedMax => {
@@ -868,6 +881,7 @@ impl<'p, 'i> VM<'p, 'i> {
                             other
                         ),
                     }
+                    self.recover_scope_count -= 1;
                     self.ip += 1;
                 }
                 Instruction::End => {
@@ -963,6 +977,7 @@ impl<'p, 'i> VM<'p, 'i> {
                     // per-iteration watermark is moot. Drop and keep
                     // unwinding — some enclosing Backtrack will catch the
                     // fail and truncate captures accordingly.
+                    self.recover_scope_count -= 1;
                 }
                 StackEntry::LFrame {
                     memo_id: _,
@@ -1115,6 +1130,14 @@ impl<'p, 'i> VM<'p, 'i> {
         // legitimately track sp positions reached *inside* nested
         // iterations — their recovery, if it fires later, must
         // reconstruct from the deepest pool it ever saw.
+        //
+        // Guarded by `recover_scope_count` to short-circuit the stack
+        // walk when no scope is live (the common case for grammars that
+        // don't use `*^` at all and for inter-statement positions in
+        // grammars that do).
+        if self.recover_scope_count == 0 {
+            return;
+        }
         let cur_sp = self.sp;
         let cur_len = self.captures.len();
         for entry in self.stack.iter_mut() {
@@ -1170,6 +1193,13 @@ impl<'p, 'i> VM<'p, 'i> {
         // clamps `new_len` at its `baseline_capture_len` before
         // displacing — captures below baseline are the enclosing
         // scope's (or the global epoch's) responsibility.
+        //
+        // Same guard as `maybe_snapshot`: skip the stack walk entirely
+        // when no scope is live (every grammar without `*^`, plus all
+        // inter-statement positions in grammars that use it).
+        if self.recover_scope_count == 0 {
+            return;
+        }
         for entry in self.stack.iter_mut() {
             if let StackEntry::RecoverScope {
                 baseline_capture_len,
