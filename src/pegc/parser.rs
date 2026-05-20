@@ -91,18 +91,42 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_choice(&mut self) -> Result<Pattern, ParseError> {
-        let mut alts = vec![self.parse_sequence()?];
+        let mut alts = vec![self.parse_catch()?];
         loop {
             self.skip_ws();
             if self.peek() == Some(b'/') {
                 self.pos += 1;
                 self.skip_ws();
-                alts.push(self.parse_sequence()?);
+                alts.push(self.parse_catch()?);
             } else {
                 break;
             }
         }
         Ok(Pattern::choice(alts))
+    }
+
+    /// `inner ^ recovery` — binds tighter than `/`, looser than
+    /// sequence. Left-associative: `a ^ b ^ c` ≡ `(a ^ b) ^ c`. No
+    /// collision with the `*^` / `+^` postfixes — those only fire when
+    /// `^` directly follows `*` / `+` with no whitespace; an `^` at
+    /// infix position is always reached after `parse_postfix` returns.
+    fn parse_catch(&mut self) -> Result<Pattern, ParseError> {
+        let mut lhs = self.parse_sequence()?;
+        loop {
+            self.skip_ws();
+            if self.peek() == Some(b'^') {
+                self.pos += 1;
+                self.skip_ws();
+                let rhs = self.parse_sequence()?;
+                lhs = Pattern::Catch {
+                    inner: Box::new(lhs),
+                    recovery: Box::new(rhs),
+                };
+            } else {
+                break;
+            }
+        }
+        Ok(lhs)
     }
 
     fn parse_sequence(&mut self) -> Result<Pattern, ParseError> {

@@ -25,6 +25,16 @@ pub enum Pattern {
         inner: Box<Pattern>,
         recovery_kind: String,
     },
+    /// Try `inner`; on failure, materialize the failed attempt's
+    /// deepest-reach captures (via `RecoverToScopedMax`) and run
+    /// `recovery` from that resync point. Reuses the `RecoverScope`
+    /// machinery from #16, minus the loop wrapper of `RecoverRepeat`.
+    /// If `recovery` also fails, the catch fails to its enclosing
+    /// backtrack.
+    Catch {
+        inner: Box<Pattern>,
+        recovery: Box<Pattern>,
+    },
 }
 
 impl Pattern {

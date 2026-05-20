@@ -45,6 +45,7 @@ atom       "abc"   [a-z]   .   ident   (...)   @name{...}
 postfix    p*      p+      p?  p*^     p+^
 prefix     !p      &p
 sequence   p1 p2 p3          (juxtaposition)
+catch      p1 ^ p2
 choice     p1 / p2 / p3
 ```
 
@@ -145,6 +146,45 @@ iteration rather than `PartialCommit` — see the invariants section in
 **Empty-match caveat.** If `p` matches the empty string, `p*^` spins
 forever — same hazard as plain `p*`. The compiler does not detect
 this; grammar authors must ensure `p` consumes input on success.
+
+### `inner ^ recovery` — catch with recovery
+
+Tries `inner`; on failure, splices the failed attempt's deepest-reach
+captures back into the live buffer (via `RecoverToScopedMax`) and runs
+`recovery` from that resync point. The recovery branch only fires when
+`inner` fails; on success the catch behaves exactly like its inner.
+
+```peg
+stmt <- (assign / call) ^ @err{ (!';' .)* } ';'
+```
+
+If both branches fail the catch fails to its enclosing backtrack.
+
+Precedence: tighter than `/`, looser than sequence. So `a b ^ c d`
+parses as `(a b) ^ (c d)`, and `a ^ b / c` parses as `(a ^ b) / c`.
+Chained `^` is left-associative: `a ^ b ^ c` ≡ `(a ^ b) ^ c`.
+
+**Difference from `/`.** Ordered choice rewinds `sp` and discards
+inner's partial work before trying the alternative; `^` preserves the
+partial work (the failed attempt's deepest-reach captures and
+position) and runs recovery from there. Subsumes Yacc-style error
+productions:
+
+```peg
+stmt <- alt1 / alt2 / error ';'      # error-production style
+stmt <- (alt1 / alt2) ^ (!';' .)* ';'  # same idea with `^`
+```
+
+**Difference from `*^`.** No loop and no synthetic single-byte
+`recovery` capture — the recovery body is author-written and emits
+whatever captures the author put in it. Wrap recovery in
+`@recovery{...}` (or any other capture name) if you want one. The
+natural two-tier composition is `^` inside a rule for known failure
+points and `*^` outside as the loop-level backstop.
+
+Implementation lives in `Pattern::Catch` (`src/pegc/pattern.rs`) and
+the emission in `src/pegc/compiler.rs`. Reuses the `RecoverScope*`
+opcodes introduced for `*^` — no new VM machinery.
 
 ## Semantics notes
 

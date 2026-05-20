@@ -267,6 +267,46 @@ impl Compiler {
                 self.patch_jump(inner_choice, exit_inner);
                 self.emit(Instruction::RecoverScopeEnd);
             }
+            Pattern::Catch { inner, recovery } => {
+                //              RecoverScopeBegin
+                //              Choice rec
+                //              <inner>
+                //              Commit done            ; pops outer Backtrack
+                // rec:         RecoverToScopedMax     ; splice failed inner's
+                //                                     ;   deepest-reach captures
+                //              <recovery>
+                // done:        RecoverScopeEnd
+                //
+                // If `<inner>` succeeds the Commit pops its Backtrack and
+                // jumps to `done:`, where `RecoverScopeEnd` pops the
+                // scope. If `<inner>` fails the VM restores `sp` and
+                // `captures` to the Backtrack's baseline and resumes at
+                // `rec:`; `RecoverToScopedMax` then re-materializes the
+                // failed attempt's deepest-reach captures into the live
+                // buffer before `<recovery>` runs. If `<recovery>` also
+                // fails the fail propagates past the RecoverScope frame
+                // (cleaned up by the `RecoverScope` arm of `fail()` in
+                // src/pegvm/vm.rs) and the whole catch fails to its
+                // enclosing backtrack.
+                //
+                // Mirrors the inner half of `RecoverRepeat`'s loop, but
+                // without iteration or a synthetic recovery-byte
+                // capture: the recovery body's captures are whatever
+                // the author wrote.
+                self.emit(Instruction::RecoverScopeBegin);
+                let outer_choice = self.emit(Instruction::Choice(Label(0))); // → rec
+                self.compile_pat(inner);
+                let success_commit = self.emit(Instruction::Commit(Label(0))); // → done
+
+                let rec = self.pos();
+                self.patch_jump(outer_choice, rec);
+                self.emit(Instruction::RecoverToScopedMax);
+                self.compile_pat(recovery);
+
+                let done = self.pos();
+                self.patch_jump(success_commit, done);
+                self.emit(Instruction::RecoverScopeEnd);
+            }
         }
     }
 }
@@ -406,6 +446,10 @@ fn check_refs(
         | Pattern::AndPredicate(inner)
         | Pattern::Capture(_, inner) => check_refs(_rule, inner, rules),
         Pattern::RecoverRepeat { inner, .. } => check_refs(_rule, inner, rules),
+        Pattern::Catch { inner, recovery } => {
+            check_refs(_rule, inner, rules)?;
+            check_refs(_rule, recovery, rules)
+        }
         Pattern::NonTerminal(name) => {
             if rules.contains_key(name) {
                 Ok(())
@@ -493,6 +537,12 @@ fn pattern_nullable(pat: &Pattern, nullable: &HashSet<String>) -> bool {
         Pattern::NotPredicate(_) | Pattern::AndPredicate(_) => true,
         Pattern::Capture(_, inner) => pattern_nullable(inner, nullable),
         Pattern::RecoverRepeat { .. } => true,
+        // Catch succeeds-as-inner when inner succeeds, or
+        // succeeds-as-recovery when inner fails. The recovery branch
+        // only runs on inner's failure, so it never contributes a
+        // "matches empty after success" path — nullability follows
+        // inner.
+        Pattern::Catch { inner, .. } => pattern_nullable(inner, nullable),
         Pattern::NonTerminal(name) => nullable.contains(name),
     }
 }
@@ -535,6 +585,16 @@ fn collect_first_calls(pat: &Pattern, nullable: &HashSet<String>, out: &mut Hash
         | Pattern::AndPredicate(inner)
         | Pattern::Capture(_, inner) => collect_first_calls(inner, nullable, out),
         Pattern::RecoverRepeat { inner, .. } => collect_first_calls(inner, nullable, out),
+        Pattern::Catch { inner, recovery } => {
+            // Both branches are reachable at baseline sp: inner
+            // unconditionally; recovery whenever inner fails at
+            // baseline (i.e. without consuming) — possible regardless
+            // of inner's nullability. Recurse into both, like
+            // OrderedChoice, so the LR analysis doesn't miss cycles
+            // routed through a catch's recovery body.
+            collect_first_calls(inner, nullable, out);
+            collect_first_calls(recovery, nullable, out);
+        }
         Pattern::NonTerminal(name) => {
             out.insert(name.clone());
         }
