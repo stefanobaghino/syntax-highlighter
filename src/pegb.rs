@@ -29,6 +29,10 @@
 //!   u16 LE      n = rule_names.len()
 //!   for each name: NUL-terminated UTF-8 bytes
 //!
+//! label-name table:
+//!   u16 LE      n = label_kinds.len()
+//!   for each name: NUL-terminated UTF-8 bytes
+//!
 //! instruction stream:
 //!   u32 LE      k = code.len()
 //!   for each instruction: u8 tag, then variant-specific payload
@@ -50,7 +54,7 @@
 //! is large enough for the load-time allocation to matter — sqlite at
 //! 5,622 instructions decodes in sub-millisecond time.
 
-use crate::pegvm::{CaptureKind, CharSet, Instruction, Label, MemoId, Program, RuleKind};
+use crate::pegvm::{CaptureKind, CharSet, Instruction, Label, LabelId, MemoId, Program, RuleKind};
 
 /// Failure modes for [`decode`]. [`encode`] is infallible for any
 /// well-formed `Program` (`pegc::compile` always produces one).
@@ -71,6 +75,8 @@ pub enum Error {
     InvalidCaptureName(std::str::Utf8Error),
     /// Rule name bytes were not valid UTF-8.
     InvalidRuleName(std::str::Utf8Error),
+    /// Label name bytes were not valid UTF-8.
+    InvalidLabelName(std::str::Utf8Error),
     /// Decoder reached a sensible stopping point but bytes remain in the
     /// buffer — usually means the producer wrote a slightly different
     /// format than the one this decoder reads.
@@ -109,6 +115,7 @@ impl std::fmt::Display for Error {
             }
             Error::InvalidCaptureName(e) => write!(f, "invalid capture name UTF-8: {}", e),
             Error::InvalidRuleName(e) => write!(f, "invalid rule name UTF-8: {}", e),
+            Error::InvalidLabelName(e) => write!(f, "invalid label name UTF-8: {}", e),
             Error::TrailingBytes { remaining } => {
                 write!(f, "{} trailing byte(s) after end of program", remaining)
             }
@@ -185,6 +192,7 @@ pub fn encode(program: &Program) -> Vec<u8> {
     let mut out = Vec::new();
     write_name_table(&mut out, &program.capture_kinds, "capture");
     write_name_table(&mut out, &program.rule_names, "rule");
+    write_name_table(&mut out, &program.label_kinds, "label");
     write_instructions(&mut out, &program.code);
     out
 }
@@ -295,7 +303,10 @@ fn write_instruction(out: &mut Vec<u8>, ins: &Instruction) {
             out.extend_from_slice(&kind.0.to_le_bytes());
         }
         Instruction::CaptureEnd => out.push(TAG_CAPTURE_END),
-        Instruction::RecoverScopeBegin => out.push(TAG_RECOVER_SCOPE_BEGIN),
+        Instruction::RecoverScopeBegin(label) => {
+            out.push(TAG_RECOVER_SCOPE_BEGIN);
+            out.extend_from_slice(&label.0.to_le_bytes());
+        }
         Instruction::RecoverToScopedMax => out.push(TAG_RECOVER_TO_SCOPED_MAX),
         Instruction::RecoverScopeEnd => out.push(TAG_RECOVER_SCOPE_END),
         Instruction::End => out.push(TAG_END),
@@ -319,6 +330,7 @@ pub fn decode(bytes: &[u8]) -> Result<Program, Error> {
     let mut cur = Cursor::new(bytes);
     let capture_kinds = read_name_table(&mut cur, Error::InvalidCaptureName)?;
     let rule_names = read_name_table(&mut cur, Error::InvalidRuleName)?;
+    let label_kinds = read_name_table(&mut cur, Error::InvalidLabelName)?;
     let code = read_instructions(&mut cur)?;
     if cur.pos != bytes.len() {
         return Err(Error::TrailingBytes {
@@ -331,6 +343,7 @@ pub fn decode(bytes: &[u8]) -> Result<Program, Error> {
         capture_kinds,
         rule_count,
         rule_names,
+        label_kinds,
     })
 }
 
@@ -415,7 +428,10 @@ fn read_instruction(cur: &mut Cursor<'_>) -> Result<Instruction, Error> {
             Instruction::CaptureBegin(kind)
         }
         TAG_CAPTURE_END => Instruction::CaptureEnd,
-        TAG_RECOVER_SCOPE_BEGIN => Instruction::RecoverScopeBegin,
+        TAG_RECOVER_SCOPE_BEGIN => {
+            let label = LabelId(u16::from_le_bytes(cur.read_array::<2>()?));
+            Instruction::RecoverScopeBegin(label)
+        }
         TAG_RECOVER_TO_SCOPED_MAX => Instruction::RecoverToScopedMax,
         TAG_RECOVER_SCOPE_END => Instruction::RecoverScopeEnd,
         TAG_END => Instruction::End,
@@ -613,6 +629,10 @@ mod tests {
             "rule_names mismatch after round-trip"
         );
         assert_eq!(
+            p.label_kinds, p2.label_kinds,
+            "label_kinds mismatch after round-trip"
+        );
+        assert_eq!(
             p.rule_count, p2.rule_count,
             "rule_count mismatch after round-trip (encoder vs derived-on-decode)"
         );
@@ -657,7 +677,7 @@ mod tests {
                 Instruction::LRTail(MemoId(1), Label(43)),
                 Instruction::CaptureBegin(CaptureKind(0)),
                 Instruction::CaptureEnd,
-                Instruction::RecoverScopeBegin,
+                Instruction::RecoverScopeBegin(LabelId(0)),
                 Instruction::RecoverToScopedMax,
                 Instruction::RecoverScopeEnd,
                 Instruction::End,
@@ -665,6 +685,7 @@ mod tests {
             capture_kinds: vec!["alpha".to_string()],
             rule_count: 2,
             rule_names: vec!["start".to_string(), "other".to_string()],
+            label_kinds: vec!["missing_then".to_string()],
         };
         assert_roundtrip(&p);
     }
@@ -705,10 +726,11 @@ mod tests {
 
     #[test]
     fn invalid_opcode_errors() {
-        // Empty capture table + empty rule table + one instruction with a bogus tag.
+        // Empty capture table + empty rule table + empty label table + one instruction with a bogus tag.
         let buf = [
             0x00u8, 0x00, // capture count = 0
             0x00, 0x00, // rule count = 0
+            0x00, 0x00, // label count = 0
             0x01, 0x00, 0x00, 0x00, // instruction count = 1
             0x77, // unknown opcode
         ];
@@ -724,6 +746,8 @@ mod tests {
             0x00, // capture count = 0
             0x00,
             0x00, // rule count = 0
+            0x00,
+            0x00, // label count = 0
             0x01,
             0x00,
             0x00,
@@ -754,6 +778,20 @@ mod tests {
     }
 
     #[test]
+    fn invalid_label_name_utf8_errors() {
+        // Empty capture and rule tables, then label table with one
+        // bad-UTF-8 name.
+        let buf = [
+            0x00u8, 0x00, // capture count = 0
+            0x00, 0x00, // rule count = 0
+            0x01, 0x00, // label count = 1
+            0xFF, 0x00, // bad UTF-8 + NUL
+        ];
+        let err = decode(&buf).unwrap_err();
+        assert!(matches!(err, Error::InvalidLabelName(_)));
+    }
+
+    #[test]
     fn trailing_bytes_errors() {
         let mut bytes = json_program_bytes();
         bytes.push(0x42);
@@ -767,7 +805,9 @@ mod tests {
     #[test]
     fn instruction_count_above_cap_errors() {
         let count = MAX_INSTRUCTION_COUNT + 1;
-        let mut buf = vec![0x00u8, 0x00, 0x00, 0x00]; // empty capture table + empty rule table
+        // empty capture + rule + label tables (6 zero bytes), then a
+        // declared instruction count above the cap.
+        let mut buf = vec![0x00u8; 6];
         buf.extend_from_slice(&count.to_le_bytes());
         let err = decode(&buf).unwrap_err();
         assert!(
@@ -783,6 +823,7 @@ mod tests {
             capture_kinds: vec![],
             rule_count: 0,
             rule_names: vec![],
+            label_kinds: vec![],
         };
         assert_roundtrip(&p);
     }
@@ -803,6 +844,7 @@ mod tests {
             capture_kinds: vec![],
             rule_count: 99, // intentionally inconsistent with the code
             rule_names: vec![],
+            label_kinds: vec![],
         };
         let bytes = encode(&p);
         let decoded = decode(&bytes).expect("decode succeeds");

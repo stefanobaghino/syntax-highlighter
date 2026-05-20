@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::instruction::{CaptureKind, Instruction, MemoId, RuleKind};
+use super::instruction::{CaptureKind, Instruction, LabelId, MemoId, RuleKind};
 
 /// One half-open byte span `start..end` tagged with a [`CaptureKind`].
 ///
@@ -114,6 +114,13 @@ enum StackEntry {
         /// would otherwise reject this shape on style grounds.
         #[allow(clippy::box_collection)]
         scoped_max_rule_stack: Option<Box<Vec<MemoId>>>,
+        /// Diagnostic tag for this scope. Set from the
+        /// `RecoverScopeBegin` instruction's payload; flows into the
+        /// `RecoveryDiagnostic` so `pegdb explain-recoveries` can
+        /// cluster firings by label. Has no effect on failure
+        /// propagation — every scope catches anonymous failures
+        /// alike.
+        label: LabelId,
     },
 }
 
@@ -175,6 +182,14 @@ pub struct RecoveryDiagnostic {
     /// during the failed iteration. Indexed values can be resolved to
     /// names via [`crate::pegvm::Program::rule_names`].
     pub rule_stack: Vec<MemoId>,
+    /// Diagnostic label attached to the enclosing `RecoverScope`.
+    /// Resolvable via [`crate::pegvm::Program::label_kinds`]. Set from
+    /// the `RecoverScopeBegin` instruction's payload — every recovery
+    /// firing carries one (labeled catches use the author's label;
+    /// `*^` uses the intern of its `recovery_kind` string). Lets
+    /// `pegdb explain-recoveries` cluster recoveries by
+    /// `(rule_stack, label)`.
+    pub label: LabelId,
 }
 
 /// Diagnostic counters for the memoization cache, exposed via
@@ -540,14 +555,15 @@ impl<'p, 'i> VM<'p, 'i> {
                 Instruction::BackCommit(label) => {
                     self.maybe_snapshot();
                     let entry = self.pop_backtrack();
-                    if let StackEntry::Backtrack {
-                        sp, capture_len, ..
-                    } = entry
-                    {
-                        self.sp = sp;
-                        self.protect_max_captures(capture_len);
-                        self.captures.truncate(capture_len);
-                    }
+                    let (sp, capture_len) = match entry {
+                        StackEntry::Backtrack {
+                            sp, capture_len, ..
+                        } => (sp, capture_len),
+                        _ => unreachable!("pop_backtrack returns only Backtrack frames"),
+                    };
+                    self.sp = sp;
+                    self.protect_max_captures(capture_len);
+                    self.captures.truncate(capture_len);
                     self.ip = label.as_index();
                 }
                 Instruction::FailTwice => {
@@ -922,7 +938,7 @@ impl<'p, 'i> VM<'p, 'i> {
                     self.captures[idx].end = Some(self.sp);
                     self.ip += 1;
                 }
-                Instruction::RecoverScopeBegin => {
+                Instruction::RecoverScopeBegin(label) => {
                     let cur_sp = self.sp;
                     let cur_len = self.captures.len();
                     let scope_idx = self.stack.len();
@@ -942,6 +958,7 @@ impl<'p, 'i> VM<'p, 'i> {
                         scoped_saved_lower: cur_len,
                         scoped_saved_above: Vec::new(),
                         scoped_max_rule_stack: initial_rule_stack,
+                        label: *label,
                     });
                     self.recover_scope_indices.push(scope_idx);
                     self.ip += 1;
@@ -977,6 +994,7 @@ impl<'p, 'i> VM<'p, 'i> {
                         scoped_saved_lower,
                         scoped_saved_above,
                         scoped_max_rule_stack: _,
+                        label,
                     } = &mut self.stack[scope_idx]
                     else {
                         unreachable!("rposition matched RecoverScope")
@@ -985,6 +1003,7 @@ impl<'p, 'i> VM<'p, 'i> {
                     let baseline_capture_len = *baseline_capture_len;
                     let scoped_max_sp = *scoped_max_sp;
                     let scoped_max_captures_len = *scoped_max_captures_len;
+                    let scope_label = *label;
                     debug_assert!(
                         scoped_max_sp >= baseline_sp,
                         "RecoverToScopedMax: scoped_max_sp ({}) retreated below baseline_sp ({})",
@@ -1067,6 +1086,7 @@ impl<'p, 'i> VM<'p, 'i> {
                             capture_index,
                             pos: scoped_max_sp,
                             rule_stack: rule_stack_for_diag,
+                            label: scope_label,
                         });
                     }
 
@@ -1112,6 +1132,9 @@ impl<'p, 'i> VM<'p, 'i> {
         }
     }
 
+    /// Pop the topmost backtrack frame. Used by `Commit`,
+    /// `BackCommit`, and `FailTwice`, all of which consume the frame
+    /// their paired `Choice` pushed.
     fn pop_backtrack(&mut self) -> StackEntry {
         match self.stack.pop() {
             Some(e @ StackEntry::Backtrack { .. }) => e,
@@ -1119,10 +1142,16 @@ impl<'p, 'i> VM<'p, 'i> {
         }
     }
 
+    /// Walks the stack to the nearest `Backtrack`, restoring `(ip, sp,
+    /// captures)` to that frame's snapshot. Pops `Memo`/`LFrame`/`Return`
+    /// frames along the way, caching the rule's failure where applicable.
+    /// Returns `false` if the stack drains without finding a catcher —
+    /// the caller (every dispatch site reaching `fail()`) finalizes the
+    /// parse as a partial match.
     fn fail(&mut self) -> bool {
         self.maybe_snapshot();
         while let Some(entry) = self.stack.pop() {
-            // Explicit match on all three variants — silently dropping a
+            // Explicit match on every variant — silently dropping a
             // `Memo` frame would skip caching its failure and leak
             // re-executions on future hits at the same sp.
             match entry {

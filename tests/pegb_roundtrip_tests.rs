@@ -33,6 +33,10 @@ fn assert_roundtrip(grammar: &str, sample: &[u8], tag: &str) {
         "{tag}: capture_kinds differ after round-trip"
     );
     assert_eq!(
+        p1.label_kinds, p2.label_kinds,
+        "{tag}: label_kinds differ after round-trip"
+    );
+    assert_eq!(
         p1.rule_count, p2.rule_count,
         "{tag}: rule_count differs after round-trip (encoder vs derived-on-decode)"
     );
@@ -146,4 +150,13 @@ fn sqlite_roundtrips() {
         include_str!("../grammars/sqlite.peg"),
         b"SELECT id, name FROM users WHERE id = 42;\n",
     );
+}
+
+#[test]
+fn labeled_catch_program_round_trips() {
+    // Exercises `RecoverScopeBegin(LabelId)` plus the label-name
+    // table. Input drives the catch through both success and recovery
+    // branches in case any future encoder change depends on runtime
+    // state.
+    assert_grammar("labeled_catch", "r <- 'a' ^lbl 'b'", b"ab");
 }

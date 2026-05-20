@@ -91,6 +91,171 @@ fn recover_repeat_postfix_plus_caret_lowers_to_seq() {
 }
 
 #[test]
+fn catch_basic_parses_to_pattern_catch() {
+    let g = parse("r <- 'a' ^lbl 'b'");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Catch {
+            inner: Box::new(Pattern::literal("a")),
+            label: "lbl".into(),
+            recovery: Box::new(Pattern::literal("b")),
+        }
+    );
+}
+
+#[test]
+fn catch_binds_tighter_than_choice() {
+    // 'a' ^lbl 'b' / 'c'   ≡   ('a' ^lbl 'b') / 'c'
+    let g = parse("r <- 'a' ^lbl 'b' / 'c'");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::OrderedChoice(vec![
+            Pattern::Catch {
+                inner: Box::new(Pattern::literal("a")),
+                label: "lbl".into(),
+                recovery: Box::new(Pattern::literal("b")),
+            },
+            Pattern::literal("c"),
+        ])
+    );
+}
+
+#[test]
+fn catch_binds_looser_than_sequence() {
+    // 'a' 'b' ^lbl 'c' 'd'   ≡   ('a' 'b') ^lbl ('c' 'd')
+    let g = parse("r <- 'a' 'b' ^lbl 'c' 'd'");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Catch {
+            inner: Box::new(Pattern::Sequence(vec![
+                Pattern::literal("a"),
+                Pattern::literal("b"),
+            ])),
+            label: "lbl".into(),
+            recovery: Box::new(Pattern::Sequence(vec![
+                Pattern::literal("c"),
+                Pattern::literal("d"),
+            ])),
+        }
+    );
+}
+
+#[test]
+fn catch_is_left_associative() {
+    // 'a' ^l1 'b' ^l2 'c'   ≡   ('a' ^l1 'b') ^l2 'c'
+    let g = parse("r <- 'a' ^l1 'b' ^l2 'c'");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Catch {
+            inner: Box::new(Pattern::Catch {
+                inner: Box::new(Pattern::literal("a")),
+                label: "l1".into(),
+                recovery: Box::new(Pattern::literal("b")),
+            }),
+            label: "l2".into(),
+            recovery: Box::new(Pattern::literal("c")),
+        }
+    );
+}
+
+#[test]
+fn catch_does_not_collide_with_star_caret() {
+    // `'x'*^` stays as RecoverRepeat (postfix with no whitespace
+    // between `*` and `^`). `'x'* ^lbl 'y'` is a Catch of Repeat over
+    // a separate recovery branch.
+    let g = parse("a <- 'x'*^\nb <- 'x'* ^lbl 'y'");
+    assert_eq!(
+        g.rules["a"],
+        Pattern::RecoverRepeat {
+            inner: Box::new(Pattern::literal("x")),
+            recovery_kind: "recovery".into(),
+        }
+    );
+    assert_eq!(
+        g.rules["b"],
+        Pattern::Catch {
+            inner: Box::new(Pattern::Repeat(Box::new(Pattern::literal("x")))),
+            label: "lbl".into(),
+            recovery: Box::new(Pattern::literal("y")),
+        }
+    );
+}
+
+#[test]
+fn catch_parens_force_grouping_on_recovery() {
+    // Default `'a' ^lbl 'b' / 'c'` is `('a' ^lbl 'b') / 'c'` (catch
+    // tighter than choice); to put a choice in the recovery branch
+    // the author must parenthesize.
+    let g = parse("r <- 'a' ^lbl ('b' / 'c')");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Catch {
+            inner: Box::new(Pattern::literal("a")),
+            label: "lbl".into(),
+            recovery: Box::new(Pattern::OrderedChoice(vec![
+                Pattern::literal("b"),
+                Pattern::literal("c"),
+            ])),
+        }
+    );
+}
+
+#[test]
+fn catch_label_touches_caret_whitespace_insensitive_on_left() {
+    // `foo ^lbl bar` and `foo^lbl bar` both parse identically — `^`
+    // is whitespace-insensitive on its *left* (same as today's other
+    // infix operators).
+    let with_space = parse("r <- 'a' ^lbl 'b'");
+    let glued = parse("r <- 'a'^lbl 'b'");
+    let expected = Pattern::Catch {
+        inner: Box::new(Pattern::literal("a")),
+        label: "lbl".into(),
+        recovery: Box::new(Pattern::literal("b")),
+    };
+    assert_eq!(with_space.rules["r"], expected);
+    assert_eq!(glued.rules["r"], expected);
+}
+
+#[test]
+fn catch_requires_label_without_whitespace() {
+    // `foo ^ bar` (whitespace between `^` and the label) is rejected
+    // — `^<non-ident-byte>` is a reserved syntactic slot for future
+    // overlays.
+    let err = parse_src("r <- 'a' ^ 'b'").unwrap_err();
+    assert!(
+        err.message.contains("label identifier"),
+        "expected a label-identifier error, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn catch_rejects_reserved_underscore_label() {
+    // Bare `_` as a label name is reserved for future use (anonymous
+    // catch).
+    let err = parse_src("r <- 'a' ^_ 'b'").unwrap_err();
+    assert!(
+        err.message.contains("reserved"),
+        "expected a reserved-label error, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn catch_accepts_underscore_prefixed_labels() {
+    // `_foo` (underscore prefix, not bare `_`) stays a valid label.
+    let g = parse("r <- 'a' ^_foo 'b'");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Catch {
+            inner: Box::new(Pattern::literal("a")),
+            label: "_foo".into(),
+            recovery: Box::new(Pattern::literal("b")),
+        }
+    );
+}
+
+#[test]
 fn predicate_operators() {
     let g = parse("a <- !'x' .\nb <- &'y' 'y'");
     assert_eq!(
@@ -226,6 +391,34 @@ fn end_to_end_recover_repeat_compile_run() {
     let spans: Vec<(usize, usize)> = r.captures.iter().map(|c| (c.start, c.end)).collect();
     assert_eq!(kinds, vec![1, 0, 0, 1]);
     assert_eq!(spans, vec![(0, 3), (3, 4), (4, 5), (5, 8)]);
+}
+
+#[test]
+fn end_to_end_catch_compile_run() {
+    use syntax_highlighter::pegvm::VM;
+    // Inner is a `SELECT … FROM` sequence; recovery scoops up the rest
+    // of the statement under an @err capture and consumes the closing
+    // semicolon. Input is malformed (no FROM), so the inner fails and
+    // the recovery branch fires.
+    let g = parse(
+        "stmt <- (@kw{'SELECT'} ' ' @kw{'FROM'} ' ' 'x' ';') ^bad_select @err{(!';' .)*} ';'",
+    );
+    let prog = g.compile().unwrap();
+    let r = VM::new(&prog.code, b"SELECT bogus;").run();
+    assert!(
+        r.complete,
+        "catch should let parse complete on malformed input"
+    );
+    assert_eq!(r.matched, 13);
+    // "kw" was interned first by the inner branch's first capture, "err" second.
+    assert_eq!(prog.capture_kinds, vec!["kw", "err"]);
+    let kinds: Vec<u16> = r.captures.iter().map(|c| c.kind.0).collect();
+    let spans: Vec<(usize, usize)> = r.captures.iter().map(|c| (c.start, c.end)).collect();
+    // Failed inner's deepest reach: the @kw{'SELECT'} survives via
+    // RecoverToScopedMax. Recovery then captures the byte range past
+    // "SELECT " up to the `;`.
+    assert_eq!(kinds, vec![0, 1]);
+    assert_eq!(spans, vec![(0, 6), (7, 12)]);
 }
 
 #[test]

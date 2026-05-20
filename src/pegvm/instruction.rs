@@ -46,6 +46,18 @@ pub struct CaptureKind(pub u16);
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
 pub struct MemoId(pub u32);
 
+/// Opaque tag identifying a recovery-scope label. Assigned by
+/// `Compiler::intern_label` and threaded through each
+/// `RecoverScopeBegin` instruction. The label is a diagnostic tag
+/// only: it flows into `RecoveryDiagnostic.label` so `pegdb
+/// explain-recoveries` clusters firings by it. The name resolves via
+/// [`crate::pegvm::Program::label_kinds`]. Distinct namespace from
+/// `CaptureKind` so a label and a capture kind with the same name
+/// don't collide.
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+pub struct LabelId(pub u16);
+
 /// Discriminator on a [`Instruction::RuleEnter`] selecting the post-cache-miss
 /// behavior. The cache-hit prologue is identical for both kinds; only the
 /// miss path differs.
@@ -241,11 +253,17 @@ pub enum Instruction {
 
     /// Push a fresh `RecoverScope` frame capturing the current
     /// `(sp, captures.len())` as the iteration baseline. Emitted at the
-    /// top of every `p*^` iteration so the VM can track the deepest
+    /// top of every `p*^` iteration and at the head of every catch
+    /// (`inner ^label recovery`) so the VM can track the deepest
     /// captures the failed inner attempt produced — see
-    /// `RecoverToScopedMax` and `src/pegc/compiler.rs`'s `RecoverRepeat`
-    /// arm.
-    RecoverScopeBegin,
+    /// `RecoverToScopedMax` and `src/pegc/compiler.rs`.
+    ///
+    /// The `LabelId` tags the scope with the catch's diagnostic label.
+    /// `*^` emits this as the intern of its `recovery_kind` string so
+    /// every `RecoveryDiagnostic` carries a name. Used by `pegdb
+    /// explain-recoveries` to cluster recoveries by label alongside
+    /// rule stack.
+    RecoverScopeBegin(LabelId),
     /// Materialize the topmost `RecoverScope`'s deepest-progress
     /// captures into the live capture buffer past the iteration's
     /// `baseline_capture_len`, and advance `sp` to `scoped_max_sp`.

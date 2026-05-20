@@ -25,6 +25,25 @@ pub enum Pattern {
         inner: Box<Pattern>,
         recovery_kind: String,
     },
+    /// Try `inner`; on failure, materialize the failed attempt's
+    /// deepest-reach captures (via `RecoverToScopedMax`) and run
+    /// `recovery` from that resync point. Reuses the `RecoverScope`
+    /// machinery from #16, minus the loop wrapper of `RecoverRepeat`.
+    /// If `recovery` also fails, the catch fails to its enclosing
+    /// backtrack.
+    ///
+    /// The `label` is mandatory and serves as a diagnostic tag:
+    /// `pegdb explain-recoveries` clusters firings by it so a grammar
+    /// author can see which catch is recovering on which input. It
+    /// has no effect on failure propagation — every catch fires on
+    /// any anonymous failure of `inner`. Future overlays (`^!label`
+    /// throws, `^_` or similar anonymous catch) are reserved
+    /// syntactic slots; see `src/pegc/README.md`.
+    Catch {
+        inner: Box<Pattern>,
+        label: String,
+        recovery: Box<Pattern>,
+    },
 }
 
 impl Pattern {
@@ -45,6 +64,17 @@ impl Pattern {
             items.into_iter().next().unwrap()
         } else {
             Pattern::OrderedChoice(items)
+        }
+    }
+
+    /// Labeled catch — equivalent to `inner ^label recovery` in source.
+    /// The label is a diagnostic tag flowed into `RecoveryDiagnostic` so
+    /// `pegdb explain-recoveries` can cluster firings by it.
+    pub fn catch(inner: Pattern, label: impl Into<String>, recovery: Pattern) -> Pattern {
+        Pattern::Catch {
+            inner: Box::new(inner),
+            label: label.into(),
+            recovery: Box::new(recovery),
         }
     }
 }

@@ -229,36 +229,45 @@ fn run_explain_recoveries(args: &[String]) -> ExitCode {
     let recovery_kind_idx = kinds.iter().position(|k| k == "recovery");
     let span_aggregates =
         compute_recovery_span_aggregates(captures, diagnostics, recovery_kind_idx);
+    let label_names = p.label_kinds();
 
-    // Cluster by full rule-stack. v1 uses the entire stack as the key;
-    // suffix-clustering is a follow-up. Map preserves insertion order
-    // for stable output across runs.
-    let mut clusters: std::collections::BTreeMap<Vec<String>, usize> =
+    // Cluster by `(rule_stack, label_name)`. Every recovery
+    // firing carries a label — labeled catches (`^label`) use the
+    // author's identifier; `*^` uses the intern of its
+    // `recovery_kind` string. v1 uses the entire stack as the key;
+    // suffix-clustering is a follow-up. BTreeMap preserves a stable
+    // key order for deterministic output.
+    type ClusterKey = (Vec<String>, String);
+    let mut clusters: std::collections::BTreeMap<ClusterKey, usize> =
         std::collections::BTreeMap::new();
     for slot in &span_aggregates {
         let Some(reach) = slot else {
             continue;
         };
-        let key: Vec<String> = reach
+        let stack: Vec<String> = reach
             .rule_stack
             .iter()
             .filter_map(|id| rule_names.get(id.0 as usize).cloned())
             .collect();
-        *clusters.entry(key).or_insert(0) += 1;
+        let label = label_names
+            .get(reach.label.0 as usize)
+            .cloned()
+            .unwrap_or_default();
+        *clusters.entry((stack, label)).or_insert(0) += 1;
     }
 
-    let mut entries: Vec<(Vec<String>, usize)> = clusters.into_iter().collect();
-    // Sort by count descending, then by stack lexicographically for
+    let mut entries: Vec<(ClusterKey, usize)> = clusters.into_iter().collect();
+    // Sort by count descending, then by key lexicographically for
     // determinism on ties.
     entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
     let mut out = std::io::stdout().lock();
-    for (stack, count) in &entries {
+    for ((stack, label), count) in &entries {
         let leaf = stack.last().map(String::as_str).unwrap_or("<empty>");
         let _ = writeln!(
             out,
-            "{} recoveries — farthest reach ends at {}",
-            count, leaf
+            "{} recoveries — farthest reach ends at {} (label: {})",
+            count, leaf, label
         );
     }
     if entries.is_empty() {

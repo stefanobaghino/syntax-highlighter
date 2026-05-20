@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::pattern::Pattern;
-use crate::pegvm::{CaptureKind, Instruction, Label, MemoId, Program, RuleKind};
+use crate::pegvm::{CaptureKind, Instruction, Label, LabelId, MemoId, Program, RuleKind};
 
 #[derive(Debug)]
 pub enum CompileError {
@@ -33,6 +33,8 @@ struct Compiler {
     pending_calls: Vec<(usize, String)>,
     capture_kinds: HashMap<String, CaptureKind>,
     capture_names: Vec<String>,
+    label_kinds: HashMap<String, LabelId>,
+    label_names: Vec<String>,
 }
 
 impl Compiler {
@@ -42,6 +44,8 @@ impl Compiler {
             pending_calls: Vec::new(),
             capture_kinds: HashMap::new(),
             capture_names: Vec::new(),
+            label_kinds: HashMap::new(),
+            label_names: Vec::new(),
         }
     }
 
@@ -92,6 +96,16 @@ impl Compiler {
         let k = CaptureKind(self.capture_names.len() as u16);
         self.capture_kinds.insert(name.to_string(), k);
         self.capture_names.push(name.to_string());
+        k
+    }
+
+    fn intern_label(&mut self, name: &str) -> LabelId {
+        if let Some(&k) = self.label_kinds.get(name) {
+            return k;
+        }
+        let k = LabelId(self.label_names.len() as u16);
+        self.label_kinds.insert(name.to_string(), k);
+        self.label_names.push(name.to_string());
         k
     }
 
@@ -242,8 +256,9 @@ impl Compiler {
                 // the recovery byte is emitted — see issue #16 and
                 // `StackEntry::RecoverScope` in src/pegvm/vm.rs.
                 let kind = self.intern_capture(recovery_kind);
+                let scope_label = self.intern_label(recovery_kind);
                 let loop_top = self.pos();
-                self.emit(Instruction::RecoverScopeBegin);
+                self.emit(Instruction::RecoverScopeBegin(scope_label));
                 let outer_choice = self.emit(Instruction::Choice(Label(0))); // → rec
                 self.compile_pat(inner);
                 let success_commit = self.emit(Instruction::Commit(Label(0))); // → next_iter
@@ -267,6 +282,51 @@ impl Compiler {
                 self.patch_jump(inner_choice, exit_inner);
                 self.emit(Instruction::RecoverScopeEnd);
             }
+            Pattern::Catch {
+                inner,
+                label,
+                recovery,
+            } => {
+                //              RecoverScopeBegin(label)
+                //              Choice rec
+                //              <inner>
+                //              Commit done            ; pops outer Backtrack
+                // rec:         RecoverToScopedMax     ; splice failed inner's
+                //                                     ;   deepest-reach captures
+                //              <recovery>
+                // done:        RecoverScopeEnd
+                //
+                // Catches every anonymous failure of `<inner>`. The
+                // `label` is a diagnostic tag threaded into the
+                // `RecoverScope` frame so `RecoverToScopedMax`'s
+                // emitted `RecoveryDiagnostic` carries it; `pegdb
+                // explain-recoveries` clusters firings by it.
+                //
+                // `RecoverScope` preserves the failed attempt's
+                // deepest-reach captures via `RecoverToScopedMax`
+                // before `<recovery>` runs — the capture-preservation
+                // story from #16.
+                //
+                // If `<recovery>` also fails the fail propagates past
+                // the `RecoverScope` frame (cleaned up by the
+                // `RecoverScope` arm of `fail()` in src/pegvm/vm.rs)
+                // and the whole catch fails to its enclosing
+                // backtrack.
+                let scope_label = self.intern_label(label);
+                self.emit(Instruction::RecoverScopeBegin(scope_label));
+                let outer_choice = self.emit(Instruction::Choice(Label(0))); // → rec
+                self.compile_pat(inner);
+                let success_commit = self.emit(Instruction::Commit(Label(0))); // → done
+
+                let rec = self.pos();
+                self.patch_jump(outer_choice, rec);
+                self.emit(Instruction::RecoverToScopedMax);
+                self.compile_pat(recovery);
+
+                let done = self.pos();
+                self.patch_jump(success_commit, done);
+                self.emit(Instruction::RecoverScopeEnd);
+            }
         }
     }
 }
@@ -287,6 +347,7 @@ pub fn compile_pattern(pat: &Pattern) -> Program {
         capture_kinds: c.capture_names,
         rule_count: 0,
         rule_names: Vec::new(),
+        label_kinds: c.label_names,
     }
 }
 
@@ -380,6 +441,7 @@ pub(crate) fn compile_rules(
         capture_kinds: c.capture_names,
         rule_count: rule_count as usize,
         rule_names,
+        label_kinds: c.label_names,
     })
 }
 
@@ -406,6 +468,12 @@ fn check_refs(
         | Pattern::AndPredicate(inner)
         | Pattern::Capture(_, inner) => check_refs(_rule, inner, rules),
         Pattern::RecoverRepeat { inner, .. } => check_refs(_rule, inner, rules),
+        Pattern::Catch {
+            inner, recovery, ..
+        } => {
+            check_refs(_rule, inner, rules)?;
+            check_refs(_rule, recovery, rules)
+        }
         Pattern::NonTerminal(name) => {
             if rules.contains_key(name) {
                 Ok(())
@@ -493,6 +561,12 @@ fn pattern_nullable(pat: &Pattern, nullable: &HashSet<String>) -> bool {
         Pattern::NotPredicate(_) | Pattern::AndPredicate(_) => true,
         Pattern::Capture(_, inner) => pattern_nullable(inner, nullable),
         Pattern::RecoverRepeat { .. } => true,
+        // Catch succeeds-as-inner when inner succeeds, or
+        // succeeds-as-recovery when inner fails. The recovery branch
+        // only runs on inner's failure, so it never contributes a
+        // "matches empty after success" path — nullability follows
+        // inner.
+        Pattern::Catch { inner, .. } => pattern_nullable(inner, nullable),
         Pattern::NonTerminal(name) => nullable.contains(name),
     }
 }
@@ -535,6 +609,18 @@ fn collect_first_calls(pat: &Pattern, nullable: &HashSet<String>, out: &mut Hash
         | Pattern::AndPredicate(inner)
         | Pattern::Capture(_, inner) => collect_first_calls(inner, nullable, out),
         Pattern::RecoverRepeat { inner, .. } => collect_first_calls(inner, nullable, out),
+        Pattern::Catch {
+            inner, recovery, ..
+        } => {
+            // Both branches are reachable at baseline sp: inner
+            // unconditionally; recovery whenever inner fails at
+            // baseline (i.e. without consuming) — possible regardless
+            // of inner's nullability. Recurse into both, like
+            // OrderedChoice, so the LR analysis doesn't miss cycles
+            // routed through a catch's recovery body.
+            collect_first_calls(inner, nullable, out);
+            collect_first_calls(recovery, nullable, out);
+        }
         Pattern::NonTerminal(name) => {
             out.insert(name.clone());
         }

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use syntax_highlighter::pegc::{compile_pattern, Grammar, Pattern};
 use syntax_highlighter::pegvm::{
-    Capture, CaptureKind, CharSet, Instruction, Label, MatchResult, MemoId, RuleKind, VM,
+    Capture, CaptureKind, CharSet, Instruction, Label, LabelId, MatchResult, MemoId, RuleKind, VM,
 };
 
 fn run_pattern(pat: &Pattern, input: &[u8]) -> MatchResult {
@@ -464,6 +464,209 @@ fn recover_repeat_inside_called_rule_returns_cleanly() {
     assert_eq!(r.captures, vec![cap(0, 4, 5)]);
 }
 
+fn catch(inner: Pattern, label: &str, recovery: Pattern) -> Pattern {
+    Pattern::catch(inner, label, recovery)
+}
+
+#[test]
+fn catch_inner_success_does_not_run_recovery() {
+    // inner = @open{"ab"}, recovery = @err{(!';' .)*}
+    // Input matches inner cleanly; recovery branch must not fire.
+    let p = catch(
+        Pattern::Capture("open".into(), Box::new(Pattern::literal("ab"))),
+        "lbl",
+        Pattern::Capture(
+            "err".into(),
+            Box::new(Pattern::Repeat(Box::new(Pattern::seq(vec![
+                Pattern::NotPredicate(Box::new(Pattern::literal(";"))),
+                Pattern::AnyChar,
+            ])))),
+        ),
+    );
+    let r = run_pattern(&p, b"ab");
+    assert!(r.complete);
+    assert_eq!(r.matched, 2);
+    // Inner enters first → "open" interns to id 0, "err" to id 1.
+    assert_eq!(
+        r.captures,
+        vec![cap(0, 0, 2)],
+        "only the inner's @open capture; recovery's @err must not fire",
+    );
+}
+
+#[test]
+fn catch_inner_failure_runs_recovery() {
+    // inner = @open{"ab"} fails at sp=0; recovery = @err{.} consumes one byte.
+    let p = catch(
+        Pattern::Capture("open".into(), Box::new(Pattern::literal("ab"))),
+        "lbl",
+        Pattern::Capture("err".into(), Box::new(Pattern::AnyChar)),
+    );
+    let r = run_pattern(&p, b"xy");
+    assert!(r.complete);
+    assert_eq!(r.matched, 1);
+    assert_eq!(
+        r.captures,
+        vec![cap(1, 0, 1)],
+        "@err captures the single byte the recovery consumed",
+    );
+}
+
+#[test]
+fn catch_preserves_failed_inner_attempt_deepest_captures() {
+    // The whole point of `^` over `/`: when inner fails after partial
+    // progress, the deepest-reach captures from the failed attempt are
+    // re-materialized (via RecoverToScopedMax) and recovery runs from
+    // that resync point — not from baseline sp.
+    //
+    // inner = @open{"a"} "b" — opens an @open over the leading 'a',
+    // then requires 'b' which fails on input "ax". recovery = @err{.}
+    // consumes one byte starting at the failed attempt's deepest sp
+    // (sp=1, after the 'a'), not at baseline (sp=0).
+    let p = catch(
+        Pattern::seq(vec![
+            Pattern::Capture("open".into(), Box::new(Pattern::literal("a"))),
+            Pattern::literal("b"),
+        ]),
+        "lbl",
+        Pattern::Capture("err".into(), Box::new(Pattern::AnyChar)),
+    );
+    let r = run_pattern(&p, b"ax");
+    assert!(r.complete);
+    assert_eq!(r.matched, 2);
+    assert_eq!(
+        r.captures,
+        vec![
+            cap(0, 0, 1), // @open: re-materialized from the failed attempt's deepest reach
+            cap(1, 1, 2), // @err: starts at sp=1 (deepest reach), not at baseline sp=0
+        ],
+        "failed inner's @open survives; recovery's @err starts at scoped_max_sp",
+    );
+}
+
+#[test]
+fn catch_recovery_failure_propagates() {
+    // Both branches fail: inner needs "ab", recovery needs "yz", input
+    // is "ax". The catch as a whole must fail. Wrap it in an outer
+    // OrderedChoice with a literal fallback to observe the failure
+    // visibly via the fallback running.
+    let p = Pattern::choice(vec![
+        catch(Pattern::literal("ab"), "lbl", Pattern::literal("yz")),
+        Pattern::literal("ax"),
+    ]);
+    let r = run_pattern(&p, b"ax");
+    assert!(r.complete);
+    assert_eq!(
+        r.matched, 2,
+        "catch failed (both branches), so the OrderedChoice fell through to the 'ax' literal",
+    );
+}
+
+#[test]
+fn catch_emits_recover_scope_skeleton() {
+    let p = catch(Pattern::literal("a"), "lbl", Pattern::literal("b"));
+    let prog = compile_pattern(&p);
+    // 0:  RecoverScopeBegin(LabelId(0))
+    // 1:  Choice rec(4)
+    // 2:  Char 'a'                ; <inner>
+    // 3:  Commit done(6)          ; pops outer Backtrack
+    // 4:  rec: RecoverToScopedMax
+    // 5:  Char 'b'                ; <recovery>
+    // 6:  done: RecoverScopeEnd
+    // 7:  End
+    //
+    // Smaller than RecoverRepeat's loop: no inner Choice (the recovery
+    // body is author-written; if it fails, the VM's `fail()` cleans up
+    // the RecoverScope frame via the same arm that handles `*^`
+    // escapes — see src/pegvm/vm.rs). No synthetic recovery-byte
+    // capture either.
+    assert_eq!(
+        prog.code,
+        vec![
+            Instruction::RecoverScopeBegin(LabelId(0)),
+            Instruction::Choice(Label(4)),
+            Instruction::Char(b'a'),
+            Instruction::Commit(Label(6)),
+            Instruction::RecoverToScopedMax,
+            Instruction::Char(b'b'),
+            Instruction::RecoverScopeEnd,
+            Instruction::End,
+        ]
+    );
+    assert_eq!(prog.capture_kinds, Vec::<String>::new());
+    assert_eq!(prog.label_kinds, vec!["lbl".to_string()]);
+}
+
+#[test]
+fn catch_nested_inside_recover_repeat() {
+    // Nested RecoverScope frames: outer `*^` loop wraps a `^` catch.
+    // The catch's frame is pushed and popped each iteration; the
+    // outer's frame stays live across iterations. Regression-tests
+    // that both frames stay balanced under nested capture
+    // re-materialization. Like recover_repeat_nested_loops_do_not_panic
+    // we lock in the operational invariant (no panic, complete parse)
+    // rather than exact capture spans.
+    let inner_catch = catch(
+        Pattern::seq(vec![
+            Pattern::Capture("open".into(), Box::new(Pattern::literal("a"))),
+            Pattern::literal("b"),
+        ]),
+        "lbl",
+        Pattern::Capture("err".into(), Box::new(Pattern::AnyChar)),
+    );
+    let p = recover(inner_catch, "recovery");
+    let r = run_pattern(&p, b"abaxabZ");
+    assert!(
+        r.complete,
+        "nested catch inside *^ must complete without panic"
+    );
+    assert_eq!(r.matched, 7);
+}
+
+#[test]
+fn label_interning_dedups_across_catches() {
+    // Two catches using the same label name share one `LabelId`,
+    // with exactly one entry in `label_kinds`. Confirms
+    // `intern_label` is idempotent.
+    let p = catch(
+        catch(Pattern::literal("a"), "missing", Pattern::literal("x")),
+        "missing",
+        Pattern::literal("y"),
+    );
+    let prog = compile_pattern(&p);
+    let scope_begin_count = prog
+        .code
+        .iter()
+        .filter(|i| matches!(i, Instruction::RecoverScopeBegin(_)))
+        .count();
+    assert_eq!(scope_begin_count, 2);
+    assert_eq!(prog.label_kinds, vec!["missing".to_string()]);
+    for ins in &prog.code {
+        if let Instruction::RecoverScopeBegin(lid) = ins {
+            assert_eq!(lid.0, 0, "both scopes resolve to LabelId(0)");
+        }
+    }
+}
+
+#[test]
+fn label_intern_shared_with_recover_repeat_recovery_kind() {
+    // `*^` interns its `recovery_kind` as a label too, so a catch
+    // using the same string lands on the same `LabelId`. Confirms
+    // the intern is by name, not by emission site — useful so
+    // `pegdb explain-recoveries` can cluster `*^` recoveries and
+    // matching `^lbl` catches under one bucket when the author
+    // chose identical names.
+    let p = Pattern::seq(vec![
+        Pattern::RecoverRepeat {
+            inner: Box::new(Pattern::literal("a")),
+            recovery_kind: "shared".into(),
+        },
+        catch(Pattern::literal("b"), "shared", Pattern::literal("c")),
+    ]);
+    let prog = compile_pattern(&p);
+    assert_eq!(prog.label_kinds, vec!["shared".to_string()]);
+}
+
 #[test]
 fn optional_pattern() {
     let p = Pattern::seq(vec![
@@ -683,11 +886,11 @@ fn recover_repeat_emits_choice_commit_skeleton() {
     assert_eq!(
         prog.code,
         vec![
-            Instruction::RecoverScopeBegin, // loop_top
-            Instruction::Choice(Label(4)),  // → rec
-            Instruction::Char(b'a'),        // <inner>
-            Instruction::Commit(Label(10)), // → next_iter
-            Instruction::Choice(Label(12)), // rec: → exit_inner
+            Instruction::RecoverScopeBegin(LabelId(0)), // loop_top
+            Instruction::Choice(Label(4)),              // → rec
+            Instruction::Char(b'a'),                    // <inner>
+            Instruction::Commit(Label(10)),             // → next_iter
+            Instruction::Choice(Label(12)),             // rec: → exit_inner
             Instruction::RecoverToScopedMax,
             Instruction::CaptureBegin(CaptureKind(0)), // recovery
             Instruction::Any(1),
