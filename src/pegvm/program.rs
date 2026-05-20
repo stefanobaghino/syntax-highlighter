@@ -17,4 +17,11 @@ pub struct Program {
     /// [`crate::pegb::decode`] reconstructs the value from the
     /// instruction stream rather than carrying it on the wire.
     pub rule_count: usize,
+    /// Compile-time rule names, indexed by `MemoId.0`. Populated by
+    /// [`crate::pegc`] in the same order rules receive their `MemoId`s
+    /// (start rule first, then alphabetical). Used by diagnostic
+    /// consumers (e.g. `pegdb dump-captures`'s `farthest_reach.rule_stack`
+    /// and `pegdb explain-recoveries`) to render rule-stack snapshots
+    /// back into human-readable names. Length is exactly `rule_count`.
+    pub rule_names: Vec<String>,
 }

@@ -28,6 +28,7 @@ fn literal_pattern() {
             matched: 2,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert!(!run_pattern(&p, b"ho").complete);
@@ -42,6 +43,7 @@ fn char_class_pattern() {
             matched: 1,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert!(!run_pattern(&p, b"x").complete);
@@ -56,6 +58,7 @@ fn any_char_pattern() {
             matched: 1,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert!(!run_pattern(&p, b"").complete);
@@ -70,6 +73,7 @@ fn sequence_pattern() {
             matched: 4,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert!(!run_pattern(&p, b"abce").complete);
@@ -84,6 +88,7 @@ fn ordered_choice_two() {
             matched: 2,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert_eq!(
@@ -92,6 +97,7 @@ fn ordered_choice_two() {
             matched: 2,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert!(!run_pattern(&p, b"ay").complete);
@@ -110,6 +116,7 @@ fn ordered_choice_three() {
             matched: 3,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert_eq!(
@@ -118,6 +125,7 @@ fn ordered_choice_three() {
             matched: 3,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert_eq!(
@@ -126,6 +134,7 @@ fn ordered_choice_three() {
             matched: 3,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert!(!run_pattern(&p, b"qux").complete);
@@ -140,6 +149,7 @@ fn repeat_zero_or_more() {
             matched: 0,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert_eq!(
@@ -148,6 +158,7 @@ fn repeat_zero_or_more() {
             matched: 3,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert_eq!(
@@ -156,6 +167,7 @@ fn repeat_zero_or_more() {
             matched: 2,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
 }
@@ -170,6 +182,7 @@ fn repeat_one_or_more() {
             matched: 1,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert_eq!(
@@ -178,6 +191,7 @@ fn repeat_one_or_more() {
             matched: 3,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
 }
@@ -198,6 +212,7 @@ fn recover_repeat_empty_input() {
             matched: 0,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
 }
@@ -211,6 +226,7 @@ fn recover_repeat_all_inner_matches_emit_no_recovery_captures() {
             matched: 3,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
 }
@@ -460,6 +476,7 @@ fn optional_pattern() {
             matched: 1,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert_eq!(
@@ -468,6 +485,7 @@ fn optional_pattern() {
             matched: 2,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert!(!run_pattern(&p, b"--x").complete);
@@ -485,6 +503,7 @@ fn not_predicate_pattern() {
             matched: 1,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert!(!run_pattern(&p, b"a").complete);
@@ -504,6 +523,7 @@ fn and_predicate_pattern() {
             matched: 2,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert!(!run_pattern(&p, b"bb").complete);
@@ -520,6 +540,7 @@ fn capture_records_kind_and_span() {
             matched: 2,
             captures: vec![cap(0, 0, 2)],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
 }
@@ -550,6 +571,7 @@ fn nested_captures_flow_through_compile() {
                 cap(1, 1, 2), // @inner "b"
             ],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
 }
@@ -574,6 +596,7 @@ fn grammar_with_nonterminals() {
             matched: 3,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert!(!VM::new(&prog.code, b"abc").run().complete);

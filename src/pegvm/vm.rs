@@ -94,6 +94,26 @@ enum StackEntry {
         /// via `iter().rev()` by `RecoverToScopedMax`. Mirrors the
         /// global `saved_above`.
         scoped_saved_above: Vec<OpenCapture>,
+        /// Snapshot of the rule-call stack at the moment `scoped_max_sp`
+        /// was last bumped. Populated only when
+        /// `VM::track_recovery_diagnostics` is set (via
+        /// `VM::with_track_recovery_diagnostics`); stays `None`
+        /// otherwise. `Option<Box<…>>` (8 bytes, niche-optimised) keeps
+        /// `StackEntry` from growing — a bare `Vec<MemoId>` would add
+        /// 24 bytes to every variant on the backtrack stack and
+        /// measurably regress the highlighter hot path (memo bench
+        /// showed ~5–10% across the corpus before this shape).
+        /// Cloned from `VM::current_rule_stack` inside `maybe_snapshot`
+        /// whenever the scope's `scoped_max_sp` advances. Drives the
+        /// `farthest_reach.rule_stack` field that `pegdb dump-captures`
+        /// emits on recovery rows.
+        ///
+        /// `Box<Vec<…>>` (vs `Vec<…>`) is deliberate: paired with the
+        /// `Option` it gives niche optimisation down to 8 bytes for
+        /// the `None` (highlighter) path. `clippy::box_collection`
+        /// would otherwise reject this shape on style grounds.
+        #[allow(clippy::box_collection)]
+        scoped_max_rule_stack: Option<Box<Vec<MemoId>>>,
     },
 }
 
@@ -123,6 +143,38 @@ pub struct MatchResult {
     pub matched: usize,
     pub captures: Vec<Capture>,
     pub complete: bool,
+    /// Per-recovery diagnostic records, one per `kind == recovery`
+    /// capture, in the same order as `captures`'s `kind == recovery`
+    /// entries. Populated only when the VM was built with
+    /// [`VM::with_track_recovery_diagnostics(true)`]; otherwise empty.
+    /// Consumed by `pegdb dump-captures` to emit the `farthest_reach`
+    /// field and by `pegdb explain-recoveries` to cluster by rule
+    /// stack.
+    pub recovery_diagnostics: Vec<RecoveryDiagnostic>,
+}
+
+/// Diagnostic record attached to a single `recovery`-kind capture emitted
+/// inside `p*^`'s recovery branch. Reports the farthest input position
+/// reached during the failed iteration that produced this recovery byte,
+/// plus the rule-call stack at the moment that farthest reach was
+/// recorded. Aggregated across an adjacent recovery span by consumers
+/// (`pegdb dump-captures` / `explain-recoveries`).
+///
+/// Only produced when the VM is built with
+/// [`VM::with_track_recovery_diagnostics(true)`]; the default path emits
+/// nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveryDiagnostic {
+    /// Index into [`MatchResult::captures`] of the recovery-kind capture
+    /// this diagnostic describes.
+    pub capture_index: usize,
+    /// `scoped_max_sp` at the moment `RecoverToScopedMax` fired — the
+    /// deepest input position the failed iteration reached.
+    pub pos: usize,
+    /// Rule-call stack at the moment `scoped_max_sp` was last bumped
+    /// during the failed iteration. Indexed values can be resolved to
+    /// names via [`crate::pegvm::Program::rule_names`].
+    pub rule_stack: Vec<MemoId>,
 }
 
 /// Diagnostic counters for the memoization cache, exposed via
@@ -228,6 +280,35 @@ pub struct VM<'p, 'i> {
     /// the inner walks stay O(scope-depth) (≤ 1 for non-nested `*^`)
     /// regardless of rule-call nesting.
     recover_scope_indices: Vec<usize>,
+    /// All diagnostic-tracking state behind one nullable indirection so
+    /// the highlighter VM stays the same size as pre-#76. `None` (the
+    /// default, niche-optimised to 8 bytes) means the diagnostic is
+    /// off; `Some(box)` means [`VM::with_track_recovery_diagnostics(true)`]
+    /// was called and the boxed state holds the rule-stack mirror plus
+    /// the per-recovery records. Bench note: a flat shape (two `Vec`s +
+    /// a `bool` on `VM`) added ~50 bytes to the struct and showed a
+    /// measurable cold-parse regression on the memo bench (likely
+    /// cache-line shifts on hot fields below); this consolidation gets
+    /// us back to noise.
+    diag: Option<Box<DiagState>>,
+}
+
+/// Per-VM state used only while the recovery-diagnostic knob is on.
+/// Lives behind a [`Box`] in [`VM::diag`] so the cold parse path
+/// pays nothing beyond an 8-byte slot for the discriminant.
+#[derive(Debug)]
+struct DiagState {
+    /// Mirror of the rule-call subset of `self.stack`. Pushed on
+    /// `RuleEnter`'s miss path (both `Memo` and `Lr` arms), popped at
+    /// `MemoClose`, `LRTail`'s commit branch, the `Memo` arm of `fail()`,
+    /// and the `LFrame` arm of `fail()` — i.e. exactly the sites that
+    /// push or remove a `StackEntry::Memo` / `StackEntry::LFrame`.
+    /// Read by `maybe_snapshot` to snapshot the live rule-call context
+    /// into each `RecoverScope`'s `scoped_max_rule_stack`.
+    current_rule_stack: Vec<MemoId>,
+    /// Per-recovery diagnostic records, in capture-emission order.
+    /// Drained into [`MatchResult::recovery_diagnostics`] at finalize.
+    recovery_diagnostics: Vec<RecoveryDiagnostic>,
 }
 
 /// A memo-table entry for a rule invocation at a specific input position.
@@ -288,6 +369,7 @@ impl<'p, 'i> VM<'p, 'i> {
             memo_threshold: Self::DEFAULT_MEMO_THRESHOLD,
             memo_examined: Vec::new(),
             recover_scope_indices: Vec::new(),
+            diag: None,
         }
     }
 
@@ -297,6 +379,28 @@ impl<'p, 'i> VM<'p, 'i> {
     /// `memo_threshold` field doc for the rationale.
     pub fn with_memo_threshold(mut self, bytes: usize) -> Self {
         self.memo_threshold = bytes;
+        self
+    }
+
+    /// Opt into per-recovery diagnostic capture. When enabled, every
+    /// `kind == recovery` capture emitted by `p*^`'s recovery branch is
+    /// paired with a [`RecoveryDiagnostic`] reporting the failed
+    /// iteration's farthest input position and the rule-call stack at
+    /// that point. Records land in [`MatchResult::recovery_diagnostics`].
+    ///
+    /// Default `false`. Consumers like `pegdb dump-captures` /
+    /// `pegdb explain-recoveries` opt in; the highlighter path leaves it
+    /// off so its hot loop pays nothing beyond the (already cheap)
+    /// `current_rule_stack` push/pop maintenance.
+    pub fn with_track_recovery_diagnostics(mut self, enable: bool) -> Self {
+        self.diag = if enable {
+            Some(Box::new(DiagState {
+                current_rule_stack: Vec::new(),
+                recovery_diagnostics: Vec::new(),
+            }))
+        } else {
+            None
+        };
         self
     }
 
@@ -526,6 +630,14 @@ impl<'p, 'i> VM<'p, 'i> {
                             // executes. Popped together with the `Memo` frame
                             // at `MemoClose` or in `fail()`'s `Memo` arm.
                             self.memo_examined.push(self.sp);
+                            // Mirror the rule-call subset of `self.stack`
+                            // for diagnostic snapshots; paired pop in
+                            // `MemoClose` / `fail()`'s Memo arm.
+                            // Gated so the highlighter hot path skips
+                            // the push entirely.
+                            if let Some(diag) = &mut self.diag {
+                                diag.current_rule_stack.push(*memo_id);
+                            }
                             self.ip += 1;
                         }
                         RuleKind::Lr => {
@@ -588,6 +700,12 @@ impl<'p, 'i> VM<'p, 'i> {
                                         seed: None,
                                     });
                                     self.memo_examined.push(self.sp);
+                                    // Mirror push for diagnostics; paired
+                                    // pop in `LRTail` (commit branch) /
+                                    // `fail()`'s LFrame arm.
+                                    if let Some(diag) = &mut self.diag {
+                                        diag.current_rule_stack.push(*memo_id);
+                                    }
                                     self.ip += 1;
                                 }
                             }
@@ -631,6 +749,15 @@ impl<'p, 'i> VM<'p, 'i> {
                         .memo_examined
                         .pop()
                         .expect("MemoClose: memo_examined underflow");
+                    // Paired pop with the `current_rule_stack` push in
+                    // `RuleEnter`'s Memo-kind miss path. Same gate so
+                    // the mirror stays balanced — both push and pop
+                    // are skipped together when the knob is off.
+                    if let Some(diag) = &mut self.diag {
+                        diag.current_rule_stack
+                            .pop()
+                            .expect("MemoClose: current_rule_stack underflow");
+                    }
                     debug_assert!(
                         examined_max >= self.sp,
                         "MemoClose: examined_max ({}) fell behind end_sp ({})",
@@ -730,6 +857,14 @@ impl<'p, 'i> VM<'p, 'i> {
                             .memo_examined
                             .pop()
                             .expect("LRTail: memo_examined underflow");
+                        // Paired pop with the `current_rule_stack` push
+                        // in `RuleEnter`'s Lr-kind miss path's first-entry
+                        // case. Gated together with the push.
+                        if let Some(diag) = &mut self.diag {
+                            diag.current_rule_stack
+                                .pop()
+                                .expect("LRTail: current_rule_stack underflow");
+                        }
                         self.bump_top_memo_examined(examined);
                         // Replay seed captures (if any), restore sp, and
                         // extract the captures vec for the cache write so
@@ -791,6 +926,14 @@ impl<'p, 'i> VM<'p, 'i> {
                     let cur_sp = self.sp;
                     let cur_len = self.captures.len();
                     let scope_idx = self.stack.len();
+                    // The rule-stack slot is only allocated when the
+                    // diagnostic is enabled — `None` otherwise keeps
+                    // the field at its niche-optimised 8 bytes and the
+                    // highlighter pays nothing per iteration.
+                    let initial_rule_stack = self
+                        .diag
+                        .as_ref()
+                        .map(|d| Box::new(d.current_rule_stack.clone()));
                     self.stack.push(StackEntry::RecoverScope {
                         baseline_sp: cur_sp,
                         baseline_capture_len: cur_len,
@@ -798,6 +941,7 @@ impl<'p, 'i> VM<'p, 'i> {
                         scoped_max_captures_len: cur_len,
                         scoped_saved_lower: cur_len,
                         scoped_saved_above: Vec::new(),
+                        scoped_max_rule_stack: initial_rule_stack,
                     });
                     self.recover_scope_indices.push(scope_idx);
                     self.ip += 1;
@@ -832,6 +976,7 @@ impl<'p, 'i> VM<'p, 'i> {
                         scoped_max_captures_len,
                         scoped_saved_lower,
                         scoped_saved_above,
+                        scoped_max_rule_stack: _,
                     } = &mut self.stack[scope_idx]
                     else {
                         unreachable!("rposition matched RecoverScope")
@@ -878,6 +1023,26 @@ impl<'p, 'i> VM<'p, 'i> {
                     // shorter than `scoped_max_captures_len`). The
                     // recovery byte's subsequent `maybe_snapshot` will
                     // lift them again from here.
+                    let rule_stack_for_diag: Vec<MemoId> = if self.diag.is_some() {
+                        if let StackEntry::RecoverScope {
+                            scoped_max_rule_stack,
+                            ..
+                        } = &self.stack[scope_idx]
+                        {
+                            // Box is `Some(...)` whenever tracking is
+                            // on (set at `RecoverScopeBegin`); cloning
+                            // the inner Vec is cheaper than dropping
+                            // the Box ownership.
+                            scoped_max_rule_stack
+                                .as_ref()
+                                .map(|b| (**b).clone())
+                                .unwrap_or_default()
+                        } else {
+                            unreachable!("scope_idx no longer points at RecoverScope")
+                        }
+                    } else {
+                        Vec::new()
+                    };
                     if let StackEntry::RecoverScope {
                         scoped_max_captures_len,
                         scoped_saved_lower,
@@ -888,6 +1053,21 @@ impl<'p, 'i> VM<'p, 'i> {
                         *scoped_saved_lower = spliced_len;
                     } else {
                         unreachable!("scope_idx no longer points at RecoverScope")
+                    }
+
+                    // Emit a per-recovery diagnostic when tracking is
+                    // on. The next instructions emitted by the compiler
+                    // are CaptureBegin / Any(1) / CaptureEnd for the
+                    // recovery byte, so `self.captures.len()` here is
+                    // the index where the recovery capture will land
+                    // after CaptureBegin pushes it.
+                    let capture_index = self.captures.len();
+                    if let Some(diag) = &mut self.diag {
+                        diag.recovery_diagnostics.push(RecoveryDiagnostic {
+                            capture_index,
+                            pos: scoped_max_sp,
+                            rule_stack: rule_stack_for_diag,
+                        });
                     }
 
                     self.sp = scoped_max_sp;
@@ -912,11 +1092,17 @@ impl<'p, 'i> VM<'p, 'i> {
                         hits: self.memo_hits,
                         misses: self.memo_misses,
                     };
+                    let captures = close_captures(self.captures, self.sp);
+                    let recovery_diagnostics = self
+                        .diag
+                        .map(|d| finalize_recovery_diagnostics(d.recovery_diagnostics, &captures))
+                        .unwrap_or_default();
                     return (
                         MatchResult {
                             matched: self.sp,
-                            captures: close_captures(self.captures, self.sp),
+                            captures,
                             complete: true,
+                            recovery_diagnostics,
                         },
                         stats,
                         self.memo,
@@ -964,6 +1150,14 @@ impl<'p, 'i> VM<'p, 'i> {
                         .memo_examined
                         .pop()
                         .expect("fail(): memo_examined underflow on Memo frame");
+                    // Paired pop with `RuleEnter`'s `current_rule_stack`
+                    // push on the Memo miss path. Gated together with
+                    // the push.
+                    if let Some(diag) = &mut self.diag {
+                        diag.current_rule_stack
+                            .pop()
+                            .expect("fail(): current_rule_stack underflow on Memo frame");
+                    }
                     // Cache the failure so a future call at the same sp
                     // short-circuits into `fail()` without re-executing the
                     // body. Captures produced inside the rule will be
@@ -1020,6 +1214,14 @@ impl<'p, 'i> VM<'p, 'i> {
                         .memo_examined
                         .pop()
                         .expect("fail(): memo_examined underflow on LFrame");
+                    // Paired pop with `RuleEnter`'s `current_rule_stack`
+                    // push on the Lr miss path's first-entry case.
+                    // Gated together with the push.
+                    if let Some(diag) = &mut self.diag {
+                        diag.current_rule_stack
+                            .pop()
+                            .expect("fail(): current_rule_stack underflow on LFrame");
+                    }
                     self.bump_top_memo_examined(examined_max);
                     if let Some(s) = seed {
                         // Body failed on a re-iteration after the seed
@@ -1166,12 +1368,43 @@ impl<'p, 'i> VM<'p, 'i> {
         }
         let cur_sp = self.sp;
         let cur_len = self.captures.len();
+        // Two paths so the diagnostic-off (highlighter) hot loop is
+        // byte-identical to pre-#76: no rule-stack clone, no extra
+        // local, no branch for the unused snapshot.
+        let Some(diag) = &self.diag else {
+            for &idx in &self.recover_scope_indices {
+                if let StackEntry::RecoverScope {
+                    scoped_max_sp,
+                    scoped_max_captures_len,
+                    scoped_saved_lower,
+                    scoped_saved_above,
+                    ..
+                } = &mut self.stack[idx]
+                {
+                    if cur_sp > *scoped_max_sp {
+                        *scoped_max_sp = cur_sp;
+                        *scoped_max_captures_len = cur_len;
+                        *scoped_saved_lower = cur_len;
+                        scoped_saved_above.clear();
+                    }
+                } else {
+                    debug_assert!(false, "recover_scope_indices points to non-RecoverScope");
+                }
+            }
+            return;
+        };
+        // Diagnostic on: snapshot the rule-call stack once and write
+        // it through each scope's `scoped_max_rule_stack` (allocated
+        // at `RecoverScopeBegin` whenever tracking is on, so always
+        // `Some` here).
+        let rule_stack_snapshot = diag.current_rule_stack.clone();
         for &idx in &self.recover_scope_indices {
             if let StackEntry::RecoverScope {
                 scoped_max_sp,
                 scoped_max_captures_len,
                 scoped_saved_lower,
                 scoped_saved_above,
+                scoped_max_rule_stack,
                 ..
             } = &mut self.stack[idx]
             {
@@ -1180,6 +1413,10 @@ impl<'p, 'i> VM<'p, 'i> {
                     *scoped_max_captures_len = cur_len;
                     *scoped_saved_lower = cur_len;
                     scoped_saved_above.clear();
+                    if let Some(inner) = scoped_max_rule_stack {
+                        inner.clear();
+                        inner.extend_from_slice(&rule_stack_snapshot);
+                    }
                 }
             } else {
                 debug_assert!(false, "recover_scope_indices points to non-RecoverScope");
@@ -1266,10 +1503,16 @@ impl<'p, 'i> VM<'p, 'i> {
         let mut max_captures: Vec<OpenCapture> = Vec::with_capacity(self.max_captures_len);
         max_captures.extend_from_slice(&self.captures[..self.saved_lower]);
         max_captures.extend(self.saved_above.iter().rev().copied());
+        let captures = close_captures(max_captures, self.max_sp);
+        let recovery_diagnostics = self
+            .diag
+            .map(|d| finalize_recovery_diagnostics(d.recovery_diagnostics, &captures))
+            .unwrap_or_default();
         let result = MatchResult {
             matched: self.max_sp,
-            captures: close_captures(max_captures, self.max_sp),
+            captures,
             complete: false,
+            recovery_diagnostics,
         };
         (result, stats, self.memo)
     }
@@ -1281,6 +1524,31 @@ fn close_captures(open: Vec<OpenCapture>, close_at: usize) -> Vec<Capture> {
             kind: c.kind,
             start: c.start,
             end: c.end.unwrap_or(close_at),
+        })
+        .collect()
+}
+
+/// Drop phantom diagnostics whose `capture_index` doesn't point at a
+/// capture that survived to the final result. `RecoverToScopedMax`
+/// pushes a diagnostic *before* the recovery byte's `CaptureBegin` /
+/// `Any(1)` / `CaptureEnd` triple runs; on the loop's EOF-exit
+/// iteration the recovery `Any(1)` fails and the inner
+/// `Choice exit_inner` backtrack restores the capture buffer to its
+/// pre-emission shape — but the diagnostic was pushed onto
+/// `recovery_diagnostics`, which has no paired backtrack slot. We
+/// recognise a surviving recovery byte by shape: one byte wide,
+/// starting at the iteration's `scoped_max_sp` (= `pos`).
+fn finalize_recovery_diagnostics(
+    diagnostics: Vec<RecoveryDiagnostic>,
+    captures: &[Capture],
+) -> Vec<RecoveryDiagnostic> {
+    diagnostics
+        .into_iter()
+        .filter(|d| {
+            captures
+                .get(d.capture_index)
+                .map(|c| c.start == d.pos && c.end == c.start + 1)
+                .unwrap_or(false)
         })
         .collect()
 }
@@ -1473,6 +1741,118 @@ mod examined_max_tests {
             entry.examined_max >= 5,
             "recovery-loop reads must propagate to enclosing rule's watermark; got {}",
             entry.examined_max
+        );
+    }
+}
+
+#[cfg(test)]
+mod recovery_diagnostic_tests {
+    //! Verify per-recovery diagnostic capture: when the VM runs with
+    //! [`VM::with_track_recovery_diagnostics`], every `kind == recovery`
+    //! capture has a paired [`RecoveryDiagnostic`] reporting the
+    //! iteration's farthest reach and the rule-call stack at that
+    //! point. Drives `pegdb dump-captures`'s `farthest_reach` field and
+    //! the `explain-recoveries` cluster output.
+
+    use super::*;
+    use crate::pegc;
+
+    #[test]
+    fn diagnostics_empty_when_knob_off() {
+        // Grammar that triggers recovery but no opt-in to diagnostics.
+        let prog = pegc::compile("start <- ([a-z]+)*^").unwrap();
+        let result = VM::new(&prog.code, b"abc!!def").run();
+        assert!(result.complete);
+        assert!(
+            result
+                .captures
+                .iter()
+                .any(|c| prog.capture_kinds[c.kind.0 as usize] == "recovery"),
+            "expected at least one recovery capture in: {:?}",
+            result.captures
+        );
+        assert!(
+            result.recovery_diagnostics.is_empty(),
+            "diagnostics must stay empty when the knob is off: {:?}",
+            result.recovery_diagnostics
+        );
+    }
+
+    #[test]
+    fn diagnostics_one_per_recovery_byte_when_knob_on() {
+        let prog = pegc::compile("start <- ([a-z]+)*^").unwrap();
+        let result = VM::new(&prog.code, b"abc!!def")
+            .with_track_recovery_diagnostics(true)
+            .run();
+        assert!(result.complete);
+        let recovery_count = result
+            .captures
+            .iter()
+            .filter(|c| prog.capture_kinds[c.kind.0 as usize] == "recovery")
+            .count();
+        assert!(recovery_count > 0);
+        assert_eq!(
+            result.recovery_diagnostics.len(),
+            recovery_count,
+            "one diagnostic per recovery byte"
+        );
+        // Each diagnostic's capture_index must point to a recovery
+        // capture and the pos must equal that capture's start (the
+        // recovery byte is one byte wide, emitted at scoped_max_sp).
+        let recovery_kind_idx = prog
+            .capture_kinds
+            .iter()
+            .position(|k| k == "recovery")
+            .expect("recovery kind interned");
+        for diag in &result.recovery_diagnostics {
+            let cap = &result.captures[diag.capture_index];
+            assert_eq!(
+                cap.kind.0 as usize, recovery_kind_idx,
+                "capture_index must point at a recovery capture"
+            );
+            assert_eq!(
+                diag.pos, cap.start,
+                "pos should match the recovery capture's start"
+            );
+        }
+    }
+
+    #[test]
+    fn diagnostics_record_rule_stack_at_deepest_reach() {
+        // Two-rule grammar: outer `*^` of a rule that descends into
+        // `inner`. When `inner`'s body fails, the failed iteration
+        // reached deepest *inside* `inner`, so the recorded rule_stack
+        // must include `inner`.
+        let src = "\
+            start <- (item)*^\n\
+            item <- inner\n\
+            inner <- [a-z]+\n";
+        let prog = pegc::compile(src).unwrap();
+        let result = VM::new(&prog.code, b"abc!!def")
+            .with_track_recovery_diagnostics(true)
+            .run();
+        assert!(result.complete);
+        assert!(!result.recovery_diagnostics.is_empty());
+        // The rule-stack names: resolve MemoIds to names via
+        // `prog.rule_names`.
+        let names_for = |stack: &[MemoId]| -> Vec<String> {
+            stack
+                .iter()
+                .map(|id| prog.rule_names[id.0 as usize].clone())
+                .collect()
+        };
+        // At least one diagnostic's rule_stack should descend through
+        // `start` / `item` / `inner` (the failure happens trying to
+        // start `inner` again at the `!`).
+        let stacks: Vec<Vec<String>> = result
+            .recovery_diagnostics
+            .iter()
+            .map(|d| names_for(&d.rule_stack))
+            .collect();
+        assert!(
+            stacks.iter().any(|s| s.contains(&"start".to_string())),
+            "expected at least one rule stack to start with `start`; got {:?}",
+            stacks
         );
     }
 }

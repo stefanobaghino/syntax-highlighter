@@ -29,6 +29,7 @@ fn match_literal_abc() {
             matched: 3,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert_eq!(
@@ -37,6 +38,7 @@ fn match_literal_abc() {
             matched: 3,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert_eq!(
@@ -45,6 +47,7 @@ fn match_literal_abc() {
             matched: 2,
             captures: vec![],
             complete: false,
+            recovery_diagnostics: vec![],
         }
     );
     assert_eq!(
@@ -53,6 +56,7 @@ fn match_literal_abc() {
             matched: 2,
             captures: vec![],
             complete: false,
+            recovery_diagnostics: vec![],
         }
     );
 }
@@ -67,6 +71,7 @@ fn match_charset() {
             matched: 1,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert_eq!(
@@ -75,6 +80,7 @@ fn match_charset() {
             matched: 0,
             captures: vec![],
             complete: false,
+            recovery_diagnostics: vec![],
         }
     );
     assert_eq!(
@@ -83,6 +89,7 @@ fn match_charset() {
             matched: 0,
             captures: vec![],
             complete: false,
+            recovery_diagnostics: vec![],
         }
     );
 }
@@ -96,6 +103,7 @@ fn any_skips_n_bytes() {
             matched: 3,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert_eq!(
@@ -104,6 +112,7 @@ fn any_skips_n_bytes() {
             matched: 0,
             captures: vec![],
             complete: false,
+            recovery_diagnostics: vec![],
         }
     );
 }
@@ -127,6 +136,7 @@ fn ordered_choice_first_alternative() {
             matched: 2,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert_eq!(
@@ -135,6 +145,7 @@ fn ordered_choice_first_alternative() {
             matched: 2,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     let r = run(&prog, b"ay");
@@ -158,6 +169,7 @@ fn repetition_zero_or_more() {
             matched: 0,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert_eq!(
@@ -166,6 +178,7 @@ fn repetition_zero_or_more() {
             matched: 1,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert_eq!(
@@ -174,6 +187,7 @@ fn repetition_zero_or_more() {
             matched: 4,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert_eq!(
@@ -182,6 +196,7 @@ fn repetition_zero_or_more() {
             matched: 3,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
 }
@@ -203,6 +218,7 @@ fn not_predicate() {
             matched: 1,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     let r_a = run(&prog, b"a");
@@ -234,6 +250,7 @@ fn call_and_return() {
             matched: 2,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     let r = run(&prog, b"ab");
@@ -262,6 +279,7 @@ fn captures_recorded_on_success() {
             matched: 2,
             captures: vec![cap(7, 0, 2)],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
 }
@@ -298,6 +316,7 @@ fn captures_truncated_on_backtrack() {
             matched: 2,
             captures: vec![], // discarded during backtrack
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
 }
@@ -335,6 +354,7 @@ fn nested_captures_kept_in_order() {
                 cap(2, 1, 2), // inner 2
             ],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
 }

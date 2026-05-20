@@ -286,6 +286,7 @@ pub fn compile_pattern(pat: &Pattern) -> Program {
         code: c.code,
         capture_kinds: c.capture_names,
         rule_count: 0,
+        rule_names: Vec::new(),
     }
 }
 
@@ -329,10 +330,12 @@ pub(crate) fn compile_rules(
     }
 
     let mut rule_addrs: HashMap<String, usize> = HashMap::new();
+    let mut rule_names: Vec<String> = Vec::new();
     let mut rule_count: u32 = 0;
     for name in ordered {
         rule_addrs.insert(name.clone(), c.pos());
         let memo_id = MemoId(rule_count);
+        rule_names.push(name.clone());
         rule_count += 1;
         let kind = if lr_rules.contains(name.as_str()) {
             RuleKind::Lr
@@ -376,6 +379,7 @@ pub(crate) fn compile_rules(
         code: c.code,
         capture_kinds: c.capture_names,
         rule_count: rule_count as usize,
+        rule_names,
     })
 }
 

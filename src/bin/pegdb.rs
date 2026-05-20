@@ -11,6 +11,7 @@ use std::io::{Read, Write};
 use std::process::ExitCode;
 
 use syntax_highlighter::parser::Parser;
+use syntax_highlighter::pegvm::{Capture, RecoveryDiagnostic};
 
 const TOP_HELP: &str = "\
 pegdb — grammar-developer debug surface for syntax-highlighter
@@ -21,6 +22,8 @@ Usage:
 Subcommands:
     dump-captures -g <grammar.peg> [--max-literal=N] [<path>]
                                                  Print captures as JSONL (one object per capture).
+    explain-recoveries -g <grammar.peg> [<path>]
+                                                 Cluster `*^` recoveries by rule-stack suffix.
 
 Options:
     -h, --help                                   Show this help.
@@ -34,8 +37,20 @@ const DUMP_HELP: &str = "\
 Usage: pegdb dump-captures -g <grammar.peg> [--max-literal=N] [<path>]
 
 Print one capture per line as a JSON object (keys: start, end, kind,
-literal). Exits 1 with a stderr partial-match marker on incomplete
-parses. The grammar source is required.
+literal, plus farthest_reach on recovery rows). Exits 1 with a stderr
+partial-match marker on incomplete parses. The grammar source is
+required.
+
+See TOOLS.md for the full contract.
+";
+
+const EXPLAIN_HELP: &str = "\
+Usage: pegdb explain-recoveries -g <grammar.peg> [<path>]
+
+Cluster `*^` recoveries by rule-stack suffix and print one line per
+cluster, sorted by count descending. Each cluster reports the number
+of recovery captures and the deepest rule reached during the failed
+iterations that produced them. The grammar source is required.
 
 See TOOLS.md for the full contract.
 ";
@@ -49,6 +64,7 @@ fn main() -> ExitCode {
     let (sub, rest) = args.split_first().unwrap();
     match sub.as_str() {
         "dump-captures" => run_dump_captures(rest),
+        "explain-recoveries" => run_explain_recoveries(rest),
         "-h" | "--help" => {
             print!("{}", TOP_HELP);
             ExitCode::SUCCESS
@@ -87,15 +103,32 @@ fn run_dump_captures(args: &[String]) -> ExitCode {
             return ExitCode::from(3);
         }
     };
+    p = p.with_track_recovery_diagnostics(true);
     p.set_input(input.into_bytes());
     let kinds = p.capture_kinds();
+    let rule_names = p.rule_names();
     let complete = p.is_complete();
     let (matched, captures) = p.captures();
+    let diagnostics = p.recovery_diagnostics();
     let view_bytes = p.input();
     // Input arrived through `read_to_string` (or a `String` literal in
     // tests), so `Parser` only ever held valid UTF-8 — no failure path.
     let view = std::str::from_utf8(view_bytes)
         .expect("Parser input originated as String; bytes must round-trip as UTF-8");
+
+    // Pre-pass for the `farthest_reach` field. A recovery span is a
+    // maximal contiguous run of `kind == "recovery"` captures where
+    // `cap[i].end == cap[i+1].start` (the `*^` loop emits one
+    // single-byte recovery capture per failed iteration). For each
+    // span, take the diagnostic with the largest `pos` — that's the
+    // worst dive that contributed to this run, and the rule stack
+    // there is the most actionable signal for "what broke?". Every
+    // row in the span carries the same span-level value, so consumers
+    // can either dedup with `jq` or pull the canonical record from
+    // `pegdb explain-recoveries`.
+    let recovery_kind_idx = kinds.iter().position(|k| k == "recovery");
+    let span_aggregates =
+        compute_recovery_span_aggregates(captures, diagnostics, recovery_kind_idx);
 
     let mut out = std::io::stdout().lock();
     // Captures arrive in CaptureBegin order — start-ascending, with a
@@ -104,7 +137,7 @@ fn run_dump_captures(args: &[String]) -> ExitCode {
     // nesting depth: pop entries whose end has already passed our start
     // (siblings/ancestors that closed), then `depth = stack.len()`.
     let mut open_ends: Vec<usize> = Vec::new();
-    for cap in captures {
+    for (idx, cap) in captures.iter().enumerate() {
         while open_ends.last().is_some_and(|&end| end <= cap.start) {
             open_ends.pop();
         }
@@ -120,15 +153,37 @@ fn run_dump_captures(args: &[String]) -> ExitCode {
             Some(n) => truncate_with_ellipsis(raw, n),
             None => Cow::Borrowed(raw),
         };
-        let _ = writeln!(
-            out,
-            "{{\"start\":{},\"end\":{},\"kind\":{},\"depth\":{},\"literal\":{}}}",
-            cap.start,
-            cap.end,
-            json_string(kind),
-            depth,
-            json_string(&truncated),
-        );
+        // `farthest_reach` appears only on recovery rows. Encoded
+        // unconditionally when the row's span has a diagnostic — the
+        // existing `recovery_baseline_tests.rs` consumer filters on
+        // `kind` and ignores additive fields, so the JSONL contract is
+        // backwards-compatible.
+        let farthest_reach = span_aggregates.get(idx).and_then(|opt| opt.as_ref());
+        match farthest_reach {
+            Some(reach) => {
+                let _ = writeln!(
+                    out,
+                    "{{\"start\":{},\"end\":{},\"kind\":{},\"depth\":{},\"literal\":{},\"farthest_reach\":{}}}",
+                    cap.start,
+                    cap.end,
+                    json_string(kind),
+                    depth,
+                    json_string(&truncated),
+                    format_farthest_reach(reach, rule_names),
+                );
+            }
+            None => {
+                let _ = writeln!(
+                    out,
+                    "{{\"start\":{},\"end\":{},\"kind\":{},\"depth\":{},\"literal\":{}}}",
+                    cap.start,
+                    cap.end,
+                    json_string(kind),
+                    depth,
+                    json_string(&truncated),
+                );
+            }
+        }
     }
     if !complete {
         eprintln!(
@@ -136,6 +191,85 @@ fn run_dump_captures(args: &[String]) -> ExitCode {
             source_label,
             matched,
             view.len()
+        );
+        return ExitCode::from(1);
+    }
+    ExitCode::SUCCESS
+}
+
+fn run_explain_recoveries(args: &[String]) -> ExitCode {
+    if wants_help(args) {
+        print!("{}", EXPLAIN_HELP);
+        return ExitCode::SUCCESS;
+    }
+    let parsed = match parse_fixture_args(args, "explain-recoveries", EXPLAIN_HELP) {
+        FixtureArgs::Help => return ExitCode::SUCCESS,
+        FixtureArgs::Err(code) => return code,
+        FixtureArgs::Ok(p) => p,
+    };
+    let (grammar, input, source_label) = match load_fixture(&parsed, "explain-recoveries") {
+        Ok(t) => t,
+        Err(code) => return code,
+    };
+    let mut p = match Parser::new(&grammar) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("pegdb explain-recoveries: grammar error: {}", e);
+            return ExitCode::from(3);
+        }
+    };
+    p = p.with_track_recovery_diagnostics(true);
+    p.set_input(input.into_bytes());
+    let kinds = p.capture_kinds();
+    let rule_names = p.rule_names();
+    let complete = p.is_complete();
+    let (matched, captures) = p.captures();
+    let diagnostics = p.recovery_diagnostics();
+
+    let recovery_kind_idx = kinds.iter().position(|k| k == "recovery");
+    let span_aggregates =
+        compute_recovery_span_aggregates(captures, diagnostics, recovery_kind_idx);
+
+    // Cluster by full rule-stack. v1 uses the entire stack as the key;
+    // suffix-clustering is a follow-up. Map preserves insertion order
+    // for stable output across runs.
+    let mut clusters: std::collections::BTreeMap<Vec<String>, usize> =
+        std::collections::BTreeMap::new();
+    for slot in &span_aggregates {
+        let Some(reach) = slot else {
+            continue;
+        };
+        let key: Vec<String> = reach
+            .rule_stack
+            .iter()
+            .filter_map(|id| rule_names.get(id.0 as usize).cloned())
+            .collect();
+        *clusters.entry(key).or_insert(0) += 1;
+    }
+
+    let mut entries: Vec<(Vec<String>, usize)> = clusters.into_iter().collect();
+    // Sort by count descending, then by stack lexicographically for
+    // determinism on ties.
+    entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    let mut out = std::io::stdout().lock();
+    for (stack, count) in &entries {
+        let leaf = stack.last().map(String::as_str).unwrap_or("<empty>");
+        let _ = writeln!(
+            out,
+            "{} recoveries — farthest reach ends at {}",
+            count, leaf
+        );
+    }
+    if entries.is_empty() {
+        let _ = writeln!(out, "no recoveries");
+    }
+    if !complete {
+        eprintln!(
+            "partial-match {}: matched {} of {} bytes",
+            source_label,
+            matched,
+            p.input().len()
         );
         return ExitCode::from(1);
     }
@@ -156,6 +290,105 @@ fn truncate_with_ellipsis(s: &str, max: usize) -> Cow<'_, str> {
     let mut out = s[..end].to_string();
     out.push('…');
     Cow::Owned(out)
+}
+
+/// Per-capture span-aggregate slot. `Some(diag)` on every capture in
+/// a recovery span carries the same diagnostic (the one with the
+/// largest `pos` across the span); `None` everywhere else. The
+/// aggregate is the most actionable signal: the worst dive that
+/// contributed to this contiguous recovery run.
+type RecoverySpanAggregates = Vec<Option<RecoveryDiagnostic>>;
+
+/// Walk `captures` and produce one slot per capture: the span's
+/// argmax-`pos` diagnostic for recovery rows, `None` for everything
+/// else. A span is a maximal contiguous run of `kind == "recovery"`
+/// captures where adjacent members touch (`cap[i].end ==
+/// cap[i+1].start`). Diagnostics arrive aligned to recovery captures
+/// in emission order; we step a single index through them.
+fn compute_recovery_span_aggregates(
+    captures: &[Capture],
+    diagnostics: &[RecoveryDiagnostic],
+    recovery_kind_idx: Option<usize>,
+) -> RecoverySpanAggregates {
+    let mut out: RecoverySpanAggregates = vec![None; captures.len()];
+    let Some(recovery_idx) = recovery_kind_idx else {
+        return out;
+    };
+    let is_recovery = |c: &Capture| c.kind.0 as usize == recovery_idx;
+
+    // Diagnostics align with recovery captures in emission (= start)
+    // order. Build a parallel lookup keyed by capture_index so we
+    // tolerate any drift (e.g. a partial-match path that drops some
+    // captures) without crashing.
+    let mut diag_by_index: std::collections::HashMap<usize, &RecoveryDiagnostic> =
+        std::collections::HashMap::with_capacity(diagnostics.len());
+    for d in diagnostics {
+        diag_by_index.insert(d.capture_index, d);
+    }
+
+    let mut i = 0;
+    while i < captures.len() {
+        if !is_recovery(&captures[i]) {
+            i += 1;
+            continue;
+        }
+        // Found the start of a recovery span. Walk forward while the
+        // next capture is also recovery and adjacent.
+        let span_start = i;
+        let mut span_end = i + 1;
+        while span_end < captures.len()
+            && is_recovery(&captures[span_end])
+            && captures[span_end - 1].end == captures[span_end].start
+        {
+            span_end += 1;
+        }
+        // Argmax over the span's diagnostics by `pos`.
+        let mut best: Option<&RecoveryDiagnostic> = None;
+        for j in span_start..span_end {
+            if let Some(d) = diag_by_index.get(&j).copied() {
+                best = match best {
+                    None => Some(d),
+                    Some(prev) if d.pos > prev.pos => Some(d),
+                    Some(prev) => Some(prev),
+                };
+            }
+        }
+        if let Some(b) = best {
+            let cloned = b.clone();
+            for slot in out.iter_mut().take(span_end).skip(span_start) {
+                *slot = Some(cloned.clone());
+            }
+        }
+        i = span_end;
+    }
+    out
+}
+
+/// Format a [`RecoveryDiagnostic`] as the inner JSON object of the
+/// `farthest_reach` field — `{"pos":N,"rule_stack":["name",...]}`.
+/// `rule_names` resolves [`crate::pegvm::MemoId`] indices back to
+/// human-readable rule names; ids outside the table are skipped (a
+/// hand-built [`crate::pegvm::Program`] could in principle leave
+/// `rule_names` shorter than the highest live `MemoId`).
+fn format_farthest_reach(reach: &RecoveryDiagnostic, rule_names: &[String]) -> String {
+    let mut s = String::with_capacity(48 + reach.rule_stack.len() * 16);
+    s.push_str("{\"pos\":");
+    use std::fmt::Write as _;
+    let _ = write!(s, "{}", reach.pos);
+    s.push_str(",\"rule_stack\":[");
+    let mut first = true;
+    for id in &reach.rule_stack {
+        let Some(name) = rule_names.get(id.0 as usize) else {
+            continue;
+        };
+        if !first {
+            s.push(',');
+        }
+        first = false;
+        s.push_str(&json_string(name));
+    }
+    s.push_str("]}");
+    s
 }
 
 /// Encode `s` as a JSON string literal (surrounding double quotes

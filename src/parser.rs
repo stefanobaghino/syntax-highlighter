@@ -22,7 +22,9 @@
 //! the UTF-8 invariant at their own boundary.
 
 use crate::pegc;
-use crate::pegvm::{incremental::Edit, Capture, MemoCache, MemoStats, Program, VM};
+use crate::pegvm::{
+    incremental::Edit, Capture, MemoCache, MemoStats, Program, RecoveryDiagnostic, VM,
+};
 
 /// Failure mode for [`Parser::new`]. A thin wrapper around
 /// [`pegc::Error`] so callers learn one parser-shaped type rather
@@ -57,6 +59,13 @@ pub struct Parser {
     complete: bool,
     captures: Vec<Capture>,
     last_stats: MemoStats,
+    /// When `true`, `reparse` builds the VM with
+    /// [`VM::with_track_recovery_diagnostics`] and the resulting
+    /// per-recovery records land in [`Parser::recovery_diagnostics`].
+    /// Default `false`; consumers (e.g. `pegdb`) opt in via
+    /// [`Parser::with_track_recovery_diagnostics`].
+    track_recovery_diagnostics: bool,
+    recovery_diagnostics: Vec<RecoveryDiagnostic>,
 }
 
 impl Parser {
@@ -82,7 +91,20 @@ impl Parser {
             complete: true,
             captures: Vec::new(),
             last_stats: MemoStats::default(),
+            track_recovery_diagnostics: false,
+            recovery_diagnostics: Vec::new(),
         }
+    }
+
+    /// Opt into per-recovery diagnostic capture. When enabled,
+    /// subsequent `set_input` / `edit` / `append` calls populate
+    /// [`Parser::recovery_diagnostics`] with one
+    /// [`RecoveryDiagnostic`] per `kind == "recovery"` capture. The
+    /// flag is sticky — set it once at construction and every reparse
+    /// honours it. Default is `false` (highlighter behaviour).
+    pub fn with_track_recovery_diagnostics(mut self, enable: bool) -> Self {
+        self.track_recovery_diagnostics = enable;
+        self
     }
 
     /// Replace the entire input and perform a cold parse. Discards any
@@ -147,6 +169,25 @@ impl Parser {
         &self.program.capture_kinds
     }
 
+    /// Rule names indexed by `MemoId.0` — see
+    /// [`crate::pegvm::Program::rule_names`]. Used by diagnostic
+    /// consumers to resolve [`RecoveryDiagnostic::rule_stack`] entries
+    /// back to source-grammar names.
+    pub fn rule_names(&self) -> &[String] {
+        &self.program.rule_names
+    }
+
+    /// Per-recovery diagnostic records from the most recent parse.
+    /// Empty unless the parser was built with
+    /// [`Parser::with_track_recovery_diagnostics(true)`]. Aligned with
+    /// the `kind == "recovery"` captures in
+    /// [`Parser::captures`] in emission order; each diagnostic's
+    /// [`RecoveryDiagnostic::capture_index`] points back into the
+    /// captures slice.
+    pub fn recovery_diagnostics(&self) -> &[RecoveryDiagnostic] {
+        &self.recovery_diagnostics
+    }
+
     /// Memo cache diagnostics from the most recent parse. `hits` /
     /// `misses` reflect the warm re-parse's consumption of the seeded
     /// cache; `entries` is the post-parse cache size.
@@ -157,11 +198,14 @@ impl Parser {
     fn reparse(&mut self) {
         let seeded = std::mem::take(&mut self.cache);
         let (result, stats, cache_after) =
-            VM::new_with_cache(&self.program.code, &self.input, seeded).run_with_cache();
+            VM::new_with_cache(&self.program.code, &self.input, seeded)
+                .with_track_recovery_diagnostics(self.track_recovery_diagnostics)
+                .run_with_cache();
         self.cache = cache_after;
         self.matched = result.matched;
         self.complete = result.complete;
         self.captures = result.captures;
+        self.recovery_diagnostics = result.recovery_diagnostics;
         self.last_stats = stats;
     }
 }

@@ -25,6 +25,10 @@
 //!   u16 LE      n = capture_kinds.len()
 //!   for each name: NUL-terminated UTF-8 bytes
 //!
+//! rule-name table:
+//!   u16 LE      n = rule_names.len()
+//!   for each name: NUL-terminated UTF-8 bytes
+//!
 //! instruction stream:
 //!   u32 LE      k = code.len()
 //!   for each instruction: u8 tag, then variant-specific payload
@@ -65,6 +69,8 @@ pub enum Error {
     MalformedVarint { position: usize },
     /// Capture name bytes were not valid UTF-8.
     InvalidCaptureName(std::str::Utf8Error),
+    /// Rule name bytes were not valid UTF-8.
+    InvalidRuleName(std::str::Utf8Error),
     /// Decoder reached a sensible stopping point but bytes remain in the
     /// buffer — usually means the producer wrote a slightly different
     /// format than the one this decoder reads.
@@ -102,6 +108,7 @@ impl std::fmt::Display for Error {
                 write!(f, "malformed varint at position {}", position)
             }
             Error::InvalidCaptureName(e) => write!(f, "invalid capture name UTF-8: {}", e),
+            Error::InvalidRuleName(e) => write!(f, "invalid rule name UTF-8: {}", e),
             Error::TrailingBytes { remaining } => {
                 write!(f, "{} trailing byte(s) after end of program", remaining)
             }
@@ -176,22 +183,25 @@ pub const MAX_INSTRUCTION_COUNT: u32 = 1 << 24;
 /// wire format.
 pub fn encode(program: &Program) -> Vec<u8> {
     let mut out = Vec::new();
-    write_capture_table(&mut out, &program.capture_kinds);
+    write_name_table(&mut out, &program.capture_kinds, "capture");
+    write_name_table(&mut out, &program.rule_names, "rule");
     write_instructions(&mut out, &program.code);
     out
 }
 
-fn write_capture_table(out: &mut Vec<u8>, kinds: &[String]) {
+fn write_name_table(out: &mut Vec<u8>, names: &[String], label: &str) {
     debug_assert!(
-        kinds.len() <= u16::MAX as usize,
-        "capture_kinds.len() ({}) exceeds u16::MAX",
-        kinds.len()
+        names.len() <= u16::MAX as usize,
+        "{}_names.len() ({}) exceeds u16::MAX",
+        label,
+        names.len()
     );
-    out.extend_from_slice(&(kinds.len() as u16).to_le_bytes());
-    for name in kinds {
+    out.extend_from_slice(&(names.len() as u16).to_le_bytes());
+    for name in names {
         debug_assert!(
             !name.as_bytes().contains(&0),
-            "capture name {:?} contains embedded NUL",
+            "{} name {:?} contains embedded NUL",
+            label,
             name
         );
         out.extend_from_slice(name.as_bytes());
@@ -307,7 +317,8 @@ fn write_varint_u32(out: &mut Vec<u8>, mut v: u32) {
 /// requires the buffer to be exactly consumed.
 pub fn decode(bytes: &[u8]) -> Result<Program, Error> {
     let mut cur = Cursor::new(bytes);
-    let capture_kinds = read_capture_table(&mut cur)?;
+    let capture_kinds = read_name_table(&mut cur, Error::InvalidCaptureName)?;
+    let rule_names = read_name_table(&mut cur, Error::InvalidRuleName)?;
     let code = read_instructions(&mut cur)?;
     if cur.pos != bytes.len() {
         return Err(Error::TrailingBytes {
@@ -319,18 +330,22 @@ pub fn decode(bytes: &[u8]) -> Result<Program, Error> {
         code,
         capture_kinds,
         rule_count,
+        rule_names,
     })
 }
 
-fn read_capture_table(cur: &mut Cursor<'_>) -> Result<Vec<String>, Error> {
+fn read_name_table(
+    cur: &mut Cursor<'_>,
+    err_ctor: fn(std::str::Utf8Error) -> Error,
+) -> Result<Vec<String>, Error> {
     let n = cur.read_u16_le()? as usize;
-    let mut kinds = Vec::with_capacity(n);
+    let mut names = Vec::with_capacity(n);
     for _ in 0..n {
         let bytes = cur.read_until_nul()?;
-        let s = std::str::from_utf8(bytes).map_err(Error::InvalidCaptureName)?;
-        kinds.push(s.to_string());
+        let s = std::str::from_utf8(bytes).map_err(err_ctor)?;
+        names.push(s.to_string());
     }
-    Ok(kinds)
+    Ok(names)
 }
 
 fn read_instructions(cur: &mut Cursor<'_>) -> Result<Vec<Instruction>, Error> {
@@ -594,6 +609,10 @@ mod tests {
             "capture_kinds mismatch after round-trip"
         );
         assert_eq!(
+            p.rule_names, p2.rule_names,
+            "rule_names mismatch after round-trip"
+        );
+        assert_eq!(
             p.rule_count, p2.rule_count,
             "rule_count mismatch after round-trip (encoder vs derived-on-decode)"
         );
@@ -645,6 +664,7 @@ mod tests {
             ],
             capture_kinds: vec!["alpha".to_string()],
             rule_count: 2,
+            rule_names: vec!["start".to_string(), "other".to_string()],
         };
         assert_roundtrip(&p);
     }
@@ -685,9 +705,10 @@ mod tests {
 
     #[test]
     fn invalid_opcode_errors() {
-        // Empty capture table + one instruction with a bogus tag.
+        // Empty capture table + empty rule table + one instruction with a bogus tag.
         let buf = [
             0x00u8, 0x00, // capture count = 0
+            0x00, 0x00, // rule count = 0
             0x01, 0x00, 0x00, 0x00, // instruction count = 1
             0x77, // unknown opcode
         ];
@@ -701,6 +722,8 @@ mod tests {
         let buf = [
             0x00u8,
             0x00, // capture count = 0
+            0x00,
+            0x00, // rule count = 0
             0x01,
             0x00,
             0x00,
@@ -723,6 +746,14 @@ mod tests {
     }
 
     #[test]
+    fn invalid_rule_name_utf8_errors() {
+        // Empty capture table, then rule table with one bad-UTF-8 name.
+        let buf = [0x00u8, 0x00, 0x01, 0x00, 0xFF, 0x00];
+        let err = decode(&buf).unwrap_err();
+        assert!(matches!(err, Error::InvalidRuleName(_)));
+    }
+
+    #[test]
     fn trailing_bytes_errors() {
         let mut bytes = json_program_bytes();
         bytes.push(0x42);
@@ -736,7 +767,7 @@ mod tests {
     #[test]
     fn instruction_count_above_cap_errors() {
         let count = MAX_INSTRUCTION_COUNT + 1;
-        let mut buf = vec![0x00u8, 0x00]; // empty capture table
+        let mut buf = vec![0x00u8, 0x00, 0x00, 0x00]; // empty capture table + empty rule table
         buf.extend_from_slice(&count.to_le_bytes());
         let err = decode(&buf).unwrap_err();
         assert!(
@@ -751,6 +782,7 @@ mod tests {
             code: vec![],
             capture_kinds: vec![],
             rule_count: 0,
+            rule_names: vec![],
         };
         assert_roundtrip(&p);
     }
@@ -770,6 +802,7 @@ mod tests {
             ],
             capture_kinds: vec![],
             rule_count: 99, // intentionally inconsistent with the code
+            rule_names: vec![],
         };
         let bytes = encode(&p);
         let decoded = decode(&bytes).expect("decode succeeds");
