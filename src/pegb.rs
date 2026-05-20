@@ -145,6 +145,13 @@ const TAG_LR_TAIL: u8 = 0x24;
 const TAG_CAPTURE_BEGIN: u8 = 0x30;
 const TAG_CAPTURE_END: u8 = 0x31;
 
+// Per-iteration recovery-scope opcodes for `p*^`. See `Instruction`
+// docs and `src/pegc/compiler.rs` for usage. No payload: all state is
+// on the VM stack.
+const TAG_RECOVER_SCOPE_BEGIN: u8 = 0x40;
+const TAG_RECOVER_TO_SCOPED_MAX: u8 = 0x41;
+const TAG_RECOVER_SCOPE_END: u8 = 0x42;
+
 // `End` is the program-termination sentinel; placing it at the top of the
 // `u8` range (rather than in a grouped sub-range) keeps the
 // "I'm done, no more instructions" tag visually distinct from the
@@ -278,6 +285,9 @@ fn write_instruction(out: &mut Vec<u8>, ins: &Instruction) {
             out.extend_from_slice(&kind.0.to_le_bytes());
         }
         Instruction::CaptureEnd => out.push(TAG_CAPTURE_END),
+        Instruction::RecoverScopeBegin => out.push(TAG_RECOVER_SCOPE_BEGIN),
+        Instruction::RecoverToScopedMax => out.push(TAG_RECOVER_TO_SCOPED_MAX),
+        Instruction::RecoverScopeEnd => out.push(TAG_RECOVER_SCOPE_END),
         Instruction::End => out.push(TAG_END),
     }
 }
@@ -390,6 +400,9 @@ fn read_instruction(cur: &mut Cursor<'_>) -> Result<Instruction, Error> {
             Instruction::CaptureBegin(kind)
         }
         TAG_CAPTURE_END => Instruction::CaptureEnd,
+        TAG_RECOVER_SCOPE_BEGIN => Instruction::RecoverScopeBegin,
+        TAG_RECOVER_TO_SCOPED_MAX => Instruction::RecoverToScopedMax,
+        TAG_RECOVER_SCOPE_END => Instruction::RecoverScopeEnd,
         TAG_END => Instruction::End,
         _ => {
             return Err(Error::InvalidOpcode {
@@ -625,6 +638,9 @@ mod tests {
                 Instruction::LRTail(MemoId(1), Label(43)),
                 Instruction::CaptureBegin(CaptureKind(0)),
                 Instruction::CaptureEnd,
+                Instruction::RecoverScopeBegin,
+                Instruction::RecoverToScopedMax,
+                Instruction::RecoverScopeEnd,
                 Instruction::End,
             ],
             capture_kinds: vec!["alpha".to_string()],

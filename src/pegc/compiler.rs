@@ -193,37 +193,79 @@ impl Compiler {
                 inner,
                 recovery_kind,
             } => {
-                // loop_top: Choice rec
-                //           <inner>
-                //           Commit loop_top
-                // rec:      Choice exit       ; Any(1) at EOF exits cleanly
-                //           CaptureBegin <recovery_kind>
-                //           Any(1)
-                //           CaptureEnd
-                //           Commit loop_top
-                // exit:
+                // loop_top:    RecoverScopeBegin
+                //              Choice rec
+                //              <inner>
+                //              Commit next_iter       ; pops outer Backtrack
+                // rec:         Choice exit_inner      ; baseline frame: undoes
+                //                                     ;   materialization on EOF
+                //              RecoverToScopedMax     ; splice deepest-progress captures
+                //              CaptureBegin <recovery_kind>
+                //              Any(1)
+                //              CaptureEnd
+                //              Commit next_iter       ; pops inner Backtrack
+                // next_iter:   RecoverScopeEnd        ; pops RecoverScope
+                //              Jump loop_top
+                // exit_inner:  RecoverScopeEnd        ; EOF exit edge
                 //
-                // Uses fresh Choice/Commit per iteration (not PartialCommit) so
-                // each retry gets a backtrack baseline at the advanced sp; an
-                // in-place PartialCommit on a stale frame would violate the
-                // hazard documented in src/pegvm/README.md invariant 1.
+                // The success and recovery-success edges route through the
+                // shared `next_iter` epilogue: `Commit` first pops the
+                // enclosing `Choice`'s `Backtrack`, then `RecoverScopeEnd`
+                // pops the scope. The EOF-exit edge lands on `exit_inner`
+                // after the inner `Choice`'s `Backtrack` was already
+                // consumed by `fail()`, so a single `RecoverScopeEnd`
+                // suffices there.
+                //
+                // Crucially, the inner `Choice exit_inner` is pushed
+                // *before* `RecoverToScopedMax`. That way the inner
+                // `Backtrack`'s `(sp, capture_len)` capture the
+                // pre-materialization baseline: if `Any(1)` then fails
+                // (the failed attempt's deepest reach was already at
+                // EOF), `fail()` restores the buffer to baseline and the
+                // loop exits cleanly without the materialized captures
+                // being mistakenly accepted as a successful match. (This
+                // matters: the SQLite grammar's `assert_not_clean_parse`
+                // test wedges on inputs like `"SELECT SELECT"` whose
+                // failed top-level statement scans through EOF — without
+                // the undo edge they would be falsely reported as clean
+                // parses.)
+                //
+                // Fresh Choice/Commit per iteration (not PartialCommit) so
+                // each retry's backtrack baseline is at the advanced sp —
+                // see src/pegvm/README.md invariant 1.
+                //
+                // The RecoverScope frame brackets each iteration; every
+                // exit edge is paired with an explicit `RecoverScopeEnd`
+                // so each `RecoverScopeBegin` is brace-matched.
+                // `RecoverToScopedMax` materializes the iteration's
+                // deepest-progress captures into the live buffer before
+                // the recovery byte is emitted — see issue #16 and
+                // `StackEntry::RecoverScope` in src/pegvm/vm.rs.
                 let kind = self.intern_capture(recovery_kind);
                 let loop_top = self.pos();
+                self.emit(Instruction::RecoverScopeBegin);
                 let outer_choice = self.emit(Instruction::Choice(Label(0))); // → rec
                 self.compile_pat(inner);
-                self.emit(Instruction::Commit(pos_to_label(loop_top)));
+                let success_commit = self.emit(Instruction::Commit(Label(0))); // → next_iter
 
                 let rec = self.pos();
                 self.patch_jump(outer_choice, rec);
-
-                let inner_choice = self.emit(Instruction::Choice(Label(0))); // → exit
+                let inner_choice = self.emit(Instruction::Choice(Label(0))); // → exit_inner
+                self.emit(Instruction::RecoverToScopedMax);
                 self.emit(Instruction::CaptureBegin(kind));
                 self.emit(Instruction::Any(1));
                 self.emit(Instruction::CaptureEnd);
-                self.emit(Instruction::Commit(pos_to_label(loop_top)));
+                let recovery_commit = self.emit(Instruction::Commit(Label(0))); // → next_iter
 
-                let exit = self.pos();
-                self.patch_jump(inner_choice, exit);
+                let next_iter = self.pos();
+                self.patch_jump(success_commit, next_iter);
+                self.patch_jump(recovery_commit, next_iter);
+                self.emit(Instruction::RecoverScopeEnd);
+                self.emit(Instruction::Jump(pos_to_label(loop_top)));
+
+                let exit_inner = self.pos();
+                self.patch_jump(inner_choice, exit_inner);
+                self.emit(Instruction::RecoverScopeEnd);
             }
         }
     }
