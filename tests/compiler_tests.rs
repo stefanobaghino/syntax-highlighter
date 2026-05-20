@@ -383,6 +383,43 @@ fn recover_repeat_empty_capture_in_failed_inner_attempt_is_dropped() {
 }
 
 #[test]
+fn recover_repeat_drops_unclosed_capture_from_failed_inner_attempt() {
+    // inner = @kw{ "abc" / "abd" } — the @kw capture opens BEFORE the
+    // alternatives, and neither alternative reaches its CaptureEnd on
+    // input "abx" (both consume "ab" then fail on the third byte).
+    // The failed attempt's `scoped_max_sp` is at sp=2; the open @kw
+    // OpenCapture sits in `scoped_saved_above` with `end: None`.
+    //
+    // Pre-fix, `RecoverToScopedMax` manufactured a close at
+    // `scoped_max_sp`, leaking a phantom `@kw(0,2)="ab"` — the SQLite
+    // dump-captures "stutter" (e.g. `keyword(56,59)="rep"` from
+    // `replace_body` matching half of `repository`). The fix drops
+    // every entry whose `end.is_none()` during the splice: a still-
+    // open capture at the watermark belongs to a production that
+    // didn't complete and must not become a token.
+    let inner = Pattern::Capture(
+        "kw".into(),
+        Box::new(Pattern::choice(vec![
+            Pattern::literal("abc"),
+            Pattern::literal("abd"),
+        ])),
+    );
+    let p = recover(inner, "recovery");
+    let r = run_pattern(&p, b"abx");
+    assert!(r.complete);
+    assert_eq!(r.matched, 3);
+    // Kind interning order: "recovery" (id 0) interns first when
+    // RecoverRepeat is compiled, "kw" (id 1) second. Recovery byte is
+    // 'x' at sp=2 (Any(1) consumes from `scoped_max_sp`, not the
+    // iteration baseline). No @kw capture appears.
+    assert_eq!(
+        r.captures,
+        vec![cap(0, 2, 3)],
+        "an unclosed @kw from a failed inner attempt must not phantom-close at scoped_max_sp"
+    );
+}
+
+#[test]
 fn recover_repeat_inside_called_rule_returns_cleanly() {
     // start <- "PRE" loop
     // loop  <- "a"*^

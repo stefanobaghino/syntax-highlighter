@@ -852,11 +852,6 @@ impl<'p, 'i> VM<'p, 'i> {
                          scoped_saved_lower down to baseline_capture_len via protect_max_captures",
                     );
                     let displaced = std::mem::take(scoped_saved_above);
-                    // Mark the per-iteration tracking as fully drained.
-                    // Subsequent `maybe_snapshot` calls in this iteration's
-                    // recovery branch will start from the newly-spliced
-                    // length.
-                    *scoped_saved_lower = scoped_max_captures_len;
 
                     debug_assert_eq!(
                         self.captures.len(),
@@ -866,17 +861,34 @@ impl<'p, 'i> VM<'p, 'i> {
                     );
                     // `displaced` holds the alive-at-scoped-max captures in
                     // reverse order; iter().rev() restores original order.
-                    // Close any that were still open at scoped_max_sp so
-                    // the next CaptureEnd binds to the recovery span we're
-                    // about to open rather than to a re-materialized
-                    // straggler.
+                    // Drop entries with `end.is_none()`: a still-open capture
+                    // at the watermark means the production that opened it
+                    // never reached its `CaptureEnd` before the inner
+                    // attempt stalled. Manufacturing a close at
+                    // `scoped_max_sp` would invent a token boundary the
+                    // grammar never accepted — the "stutter" of phantom
+                    // keyword/comment fragments in the recovery tail.
                     self.captures
-                        .extend(displaced.iter().rev().map(|c| OpenCapture {
-                            kind: c.kind,
-                            start: c.start,
-                            end: Some(c.end.unwrap_or(scoped_max_sp)),
-                        }));
-                    debug_assert_eq!(self.captures.len(), scoped_max_captures_len);
+                        .extend(displaced.iter().rev().filter(|c| c.end.is_some()).cloned());
+                    let spliced_len = self.captures.len();
+                    debug_assert!(spliced_len <= scoped_max_captures_len);
+
+                    // Re-borrow the scope to commit the per-iteration
+                    // floor at the actual spliced length (filtered may be
+                    // shorter than `scoped_max_captures_len`). The
+                    // recovery byte's subsequent `maybe_snapshot` will
+                    // lift them again from here.
+                    if let StackEntry::RecoverScope {
+                        scoped_max_captures_len,
+                        scoped_saved_lower,
+                        ..
+                    } = &mut self.stack[scope_idx]
+                    {
+                        *scoped_max_captures_len = spliced_len;
+                        *scoped_saved_lower = spliced_len;
+                    } else {
+                        unreachable!("scope_idx no longer points at RecoverScope")
+                    }
 
                     self.sp = scoped_max_sp;
                     self.ip += 1;

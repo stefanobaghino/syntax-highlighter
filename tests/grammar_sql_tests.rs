@@ -518,6 +518,32 @@ fn attach_with_unknown_key_clause_keeps_prefix_kinded() {
             );
         }
     }
+    // Tail-clean check (stutter guard): every capture starting at or
+    // past the closing quote of `'name'` lives inside the unparseable
+    // ` KEY '';` suffix and must be `recovery`. Pre-fix,
+    // `RecoverToScopedMax` phantom-closed every still-open capture in
+    // `scoped_saved_above` at `scoped_max_sp`, producing fragments
+    // like `keyword(56,59)="rep"` (from `replace_body <- [rR][eE][pP]
+    // [lL]…` matching half of `repository` in the original SQLite
+    // repro). With the unclosed-production filter in
+    // `RecoverToScopedMax`, the tail contains only one-byte recovery
+    // spans.
+    let name_close = input.find("' KEY").expect("'name' is in the input") + 1;
+    for cap in &caps {
+        if cap.start >= name_close {
+            let kind = &kinds[cap.kind.0 as usize];
+            assert_eq!(
+                kind,
+                "recovery",
+                "tail capture at {}..{} = {:?} has kind {:?} but only `recovery` \
+                 is allowed past `'name'` (phantom-close regression)",
+                cap.start,
+                cap.end,
+                &input[cap.start..cap.end],
+                kind,
+            );
+        }
+    }
 }
 
 #[test]
