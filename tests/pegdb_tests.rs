@@ -292,3 +292,159 @@ fn unknown_subcommand_is_usage_error() {
     assert_eq!(code, 2);
     assert!(stderr.contains("unknown subcommand"), "stderr: {stderr}");
 }
+
+// ---------- farthest_reach on dump-captures ----------
+
+#[test]
+fn dump_captures_emits_farthest_reach_on_recovery_rows() {
+    // `@@@` is unparseable at item position; the rust grammar's top
+    // `*^` byte-eater emits a `recovery` row per skipped byte. Each
+    // recovery row must carry a `farthest_reach` object with a `pos`
+    // integer and a non-empty `rule_stack` array.
+    let (code, stdout, _) = run_stdin(
+        &["dump-captures", "-g", "grammars/rust.peg"],
+        b"fn ok() {}\n@@@\nfn ok2() {}\n",
+    );
+    assert_eq!(code, 0);
+    let mut saw_recovery_with_reach = false;
+    let mut saw_non_recovery_without_reach = false;
+    for line in stdout.lines() {
+        let kind = json_field_str(line, "kind").expect("kind present");
+        if kind == "\"recovery\"" {
+            let reach = json_field_str(line, "farthest_reach")
+                .unwrap_or_else(|| panic!("recovery row missing farthest_reach: {line}"));
+            assert!(
+                reach.starts_with('{') && reach.ends_with('}'),
+                "farthest_reach not a JSON object: {reach}"
+            );
+            assert!(
+                json_field_str(reach, "pos").is_some(),
+                "farthest_reach missing pos field: {reach}"
+            );
+            let rule_stack =
+                json_field_str(reach, "rule_stack").expect("farthest_reach has rule_stack");
+            assert!(
+                rule_stack.starts_with('[') && rule_stack.ends_with(']'),
+                "rule_stack not an array: {rule_stack}"
+            );
+            assert!(
+                rule_stack.contains("\"rust_file\""),
+                "rule_stack should at least mention the top rule (rust_file): {rule_stack}"
+            );
+            saw_recovery_with_reach = true;
+        } else if json_field_str(line, "farthest_reach").is_none() {
+            saw_non_recovery_without_reach = true;
+        }
+    }
+    assert!(
+        saw_recovery_with_reach,
+        "expected at least one recovery row with farthest_reach, got:\n{stdout}"
+    );
+    assert!(
+        saw_non_recovery_without_reach,
+        "expected non-recovery rows without farthest_reach, got:\n{stdout}"
+    );
+}
+
+#[test]
+fn dump_captures_recovery_span_shares_farthest_reach() {
+    // Adjacent recovery captures (no successful match between them)
+    // form one logical span and must carry the same `farthest_reach`.
+    let (code, stdout, _) = run_stdin(
+        &["dump-captures", "-g", "grammars/rust.peg"],
+        b"fn ok() {}\n@@@\nfn ok2() {}\n",
+    );
+    assert_eq!(code, 0);
+    let recovery_rows: Vec<&str> = stdout
+        .lines()
+        .filter(|line| json_field_str(line, "kind") == Some("\"recovery\""))
+        .collect();
+    assert!(recovery_rows.len() >= 2, "expected multiple recovery rows");
+    // Collect (start, end, farthest_reach) for adjacent grouping.
+    let parsed: Vec<(usize, usize, String)> = recovery_rows
+        .iter()
+        .map(|line| {
+            let start: usize = json_field_str(line, "start").unwrap().parse().unwrap();
+            let end: usize = json_field_str(line, "end").unwrap().parse().unwrap();
+            let reach = json_field_str(line, "farthest_reach")
+                .expect("recovery row carries farthest_reach")
+                .to_string();
+            (start, end, reach)
+        })
+        .collect();
+    // Within a contiguous run (end[i] == start[i+1]), all `farthest_reach`
+    // values must be identical.
+    for w in parsed.windows(2) {
+        if w[0].1 == w[1].0 {
+            assert_eq!(
+                w[0].2, w[1].2,
+                "adjacent recovery rows in the same span must share farthest_reach"
+            );
+        }
+    }
+}
+
+// ---------- explain-recoveries ----------
+
+#[test]
+fn explain_recoveries_clusters_by_rule_stack() {
+    // Multiple `@@@` runs should collapse into a single top-level
+    // cluster; non-trivial dive sites (e.g. `g` looking like the start
+    // of a comment) sit in their own cluster.
+    let (code, stdout, _) = run_stdin(
+        &["explain-recoveries", "-g", "grammars/rust.peg"],
+        b"fn ok() {}\n@@@ garbage @@@\nfn ok2() {}\n",
+    );
+    assert_eq!(code, 0);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(!lines.is_empty(), "expected at least one cluster line");
+    // Output shape: `<count> recoveries — farthest reach ends at <rule>`.
+    for line in &lines {
+        assert!(
+            line.contains("recoveries") && line.contains("farthest reach ends at"),
+            "unexpected cluster line shape: {line}"
+        );
+    }
+    // Counts are sorted descending; parse the first count and verify
+    // it's the largest.
+    let counts: Vec<usize> = lines
+        .iter()
+        .map(|l| {
+            l.split_whitespace()
+                .next()
+                .and_then(|tok| tok.parse().ok())
+                .unwrap_or_else(|| panic!("expected leading count in: {l}"))
+        })
+        .collect();
+    for w in counts.windows(2) {
+        assert!(
+            w[0] >= w[1],
+            "cluster output not sorted descending: {counts:?}"
+        );
+    }
+}
+
+#[test]
+fn explain_recoveries_reports_no_recoveries_on_clean_input() {
+    let (code, stdout, _) = run(&[
+        "explain-recoveries",
+        "-g",
+        "grammars/json.peg",
+        "benches/fixtures/small.json",
+    ]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.trim() == "no recoveries",
+        "expected \"no recoveries\" on a clean parse, got:\n{stdout}"
+    );
+}
+
+#[test]
+fn explain_recoveries_help_short_circuits() {
+    let (code, stdout, _) = run(&["explain-recoveries", "--help"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("explain-recoveries"),
+        "expected explain-recoveries help, got: {stdout}"
+    );
+}

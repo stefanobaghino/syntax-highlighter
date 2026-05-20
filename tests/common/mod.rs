@@ -63,13 +63,14 @@ pub fn is_complete(grammar: &str, input: &str) -> bool {
 
 /// Extract the value for a `"key":` substring out of a flat single-line
 /// JSON object, returning the raw substring (still JSON-encoded) up to
-/// the matching `,` or `}`. Adequate for the shapes `pegc` and `pegdb`
-/// emit today (no whitespace, no nested objects below the top level
-/// except the `capture_kinds` array). Not a general JSON parser.
+/// the matching `,` or `}`. Handles nested arrays and objects in the
+/// value, but not pretty-printed JSON. Adequate for the shapes `pegc`
+/// and `pegdb` emit today. Not a general JSON parser.
 pub fn json_field_str<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     let needle = format!("\"{key}\":");
     let start = line.find(&needle)? + needle.len();
     let mut depth_array = 0i32;
+    let mut depth_object = 0i32;
     let mut in_string = false;
     let mut escape = false;
     let bytes = line.as_bytes();
@@ -88,7 +89,9 @@ pub fn json_field_str<'a>(line: &'a str, key: &str) -> Option<&'a str> {
             b'"' => in_string = true,
             b'[' => depth_array += 1,
             b']' => depth_array -= 1,
-            b',' | b'}' if depth_array == 0 => return Some(&line[start..i]),
+            b'{' => depth_object += 1,
+            b'}' if depth_object > 0 => depth_object -= 1,
+            b',' | b'}' if depth_array == 0 && depth_object == 0 => return Some(&line[start..i]),
             _ => {}
         }
     }

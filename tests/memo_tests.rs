@@ -56,6 +56,7 @@ fn second_alternative_reuses_memoized_x() {
             matched: 3,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
     assert!(stats.hits >= 1, "expected ≥1 memo hit, got {}", stats.hits);
@@ -351,6 +352,7 @@ fn memoization_does_not_change_results_on_linear_parse() {
             matched: 5,
             captures: vec![],
             complete: true,
+            recovery_diagnostics: vec![],
         }
     );
 }
