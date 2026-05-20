@@ -45,7 +45,7 @@ atom       "abc"   [a-z]   .   ident   (...)   @name{...}
 postfix    p*      p+      p?  p*^     p+^
 prefix     !p      &p
 sequence   p1 p2 p3          (juxtaposition)
-catch      p1 ^ p2
+catch      p1 ^label p2
 choice     p1 / p2 / p3
 ```
 
@@ -147,7 +147,7 @@ iteration rather than `PartialCommit` — see the invariants section in
 forever — same hazard as plain `p*`. The compiler does not detect
 this; grammar authors must ensure `p` consumes input on success.
 
-### `inner ^ recovery` — catch with recovery
+### `inner ^label recovery` — labeled catch with recovery
 
 Tries `inner`; on failure, splices the failed attempt's deepest-reach
 captures back into the live buffer (via `RecoverToScopedMax`) and runs
@@ -155,36 +155,68 @@ captures back into the live buffer (via `RecoverToScopedMax`) and runs
 `inner` fails; on success the catch behaves exactly like its inner.
 
 ```peg
-stmt <- (assign / call) ^ @err{ (!';' .)* } ';'
+stmt <- (assign / call) ^bad_stmt @err{ (!';' .)* } ';'
 ```
+
+The `label` is mandatory: it tags this scope so `pegdb
+explain-recoveries` can cluster firings — the author's name for "what
+went wrong here." Labels intern into `Program::label_kinds` (a
+separate namespace from `capture_kinds`); `*^` interns its
+`recovery_kind` string as a label the same way, so a `^foo` catch and
+a `*^foo` resync at the same site end up in the same cluster.
+
+The label identifier must touch `^` — no whitespace between them.
+Anything else (`^ lbl`, `^_`, `^!lbl`) is a parse error today and
+reserved for future overlays (anonymous catches, throw atoms — see
+"Reserved syntax" below).
 
 If both branches fail the catch fails to its enclosing backtrack.
 
-Precedence: tighter than `/`, looser than sequence. So `a b ^ c d`
-parses as `(a b) ^ (c d)`, and `a ^ b / c` parses as `(a ^ b) / c`.
-Chained `^` is left-associative: `a ^ b ^ c` ≡ `(a ^ b) ^ c`.
+Precedence: tighter than `/`, looser than sequence. So `a b ^lbl c d`
+parses as `(a b) ^lbl (c d)`, and `a ^lbl b / c` parses as
+`(a ^lbl b) / c`. Chained `^` is left-associative: `a ^l1 b ^l2 c`
+≡ `(a ^l1 b) ^l2 c`.
 
 **Difference from `/`.** Ordered choice rewinds `sp` and discards
-inner's partial work before trying the alternative; `^` preserves the
-partial work (the failed attempt's deepest-reach captures and
+inner's partial work before trying the alternative; `^label` preserves
+the partial work (the failed attempt's deepest-reach captures and
 position) and runs recovery from there. Subsumes Yacc-style error
 productions:
 
 ```peg
-stmt <- alt1 / alt2 / error ';'      # error-production style
-stmt <- (alt1 / alt2) ^ (!';' .)* ';'  # same idea with `^`
+stmt <- alt1 / alt2 / error ';'              # error-production style
+stmt <- (alt1 / alt2) ^bad_stmt (!';' .)* ';'  # same idea with `^`
 ```
 
 **Difference from `*^`.** No loop and no synthetic single-byte
 `recovery` capture — the recovery body is author-written and emits
 whatever captures the author put in it. Wrap recovery in
 `@recovery{...}` (or any other capture name) if you want one. The
-natural two-tier composition is `^` inside a rule for known failure
-points and `*^` outside as the loop-level backstop.
+natural two-tier composition is `^label` inside a rule for known
+failure points and `*^` outside as the loop-level backstop.
 
 Implementation lives in `Pattern::Catch` (`src/pegc/pattern.rs`) and
 the emission in `src/pegc/compiler.rs`. Reuses the `RecoverScope*`
 opcodes introduced for `*^` — no new VM machinery.
+
+### Reserved syntax
+
+`^<non-ident-byte>` is a parse error today and reserved for future
+overlays. Two extensions have been sketched and dropped from the v1
+catch operator pending real-grammar evidence that they're needed:
+
+- **Anonymous catch (`^_` or similar).** A catch with no label.
+  Always emits a placeholder diagnostic. Today's mandatory-label
+  rule keeps `pegdb explain-recoveries` clusters meaningful by
+  forcing every recovery point to be named.
+- **Throw atom (`^!label`).** A zero-byte pattern that always fails
+  with `label`, with Maidl-style cross-rule routing semantics. Useful
+  for compiler frontends that want commitment semantics and
+  targeted "expected X" diagnostics; less load-bearing for syntax
+  highlighters where `*^` covers the common resync case.
+
+If you hit a grammar that needs either, open an issue with the
+concrete use case.
 
 ## Semantics notes
 

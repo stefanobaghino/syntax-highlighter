@@ -177,6 +177,14 @@ impl Parser {
         &self.program.rule_names
     }
 
+    /// Label names indexed by `LabelId.0` — see
+    /// [`crate::pegvm::Program::label_kinds`]. Used by diagnostic
+    /// consumers to resolve [`crate::pegvm::RecoveryDiagnostic::label`]
+    /// back to the source `^label` name.
+    pub fn label_kinds(&self) -> &[String] {
+        &self.program.label_kinds
+    }
+
     /// Per-recovery diagnostic records from the most recent parse.
     /// Empty unless the parser was built with
     /// [`Parser::with_track_recovery_diagnostics(true)`]. Aligned with

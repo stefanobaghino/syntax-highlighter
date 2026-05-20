@@ -425,6 +425,29 @@ fn explain_recoveries_clusters_by_rule_stack() {
 }
 
 #[test]
+fn explain_recoveries_emits_label_suffix_on_every_cluster() {
+    // After #91, every recovery firing carries a label — `*^` uses
+    // its `recovery_kind` string. The cluster output now includes a
+    // `(label: …)` suffix on every line, where before unlabeled
+    // recoveries had no suffix.
+    let (code, stdout, _) = run_stdin(
+        &["explain-recoveries", "-g", "grammars/rust.peg"],
+        b"fn ok() {}\n@@@ garbage @@@\nfn ok2() {}\n",
+    );
+    assert_eq!(code, 0);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(!lines.is_empty(), "expected at least one cluster line");
+    for line in &lines {
+        assert!(
+            line.contains("recoveries")
+                && line.contains("farthest reach ends at")
+                && line.contains("(label:"),
+            "unexpected cluster line (missing label suffix): {line}"
+        );
+    }
+}
+
+#[test]
 fn explain_recoveries_reports_no_recoveries_on_clean_input() {
     let (code, stdout, _) = run(&[
         "explain-recoveries",

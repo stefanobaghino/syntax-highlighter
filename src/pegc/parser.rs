@@ -105,21 +105,43 @@ impl<'a> Parser<'a> {
         Ok(Pattern::choice(alts))
     }
 
-    /// `inner ^ recovery` — binds tighter than `/`, looser than
-    /// sequence. Left-associative: `a ^ b ^ c` ≡ `(a ^ b) ^ c`. No
-    /// collision with the `*^` / `+^` postfixes — those only fire when
-    /// `^` directly follows `*` / `+` with no whitespace; an `^` at
-    /// infix position is always reached after `parse_postfix` returns.
+    /// `inner ^label recovery` — labeled catch. Binds tighter than
+    /// `/`, looser than sequence. Left-associative: `a ^l1 b ^l2 c`
+    /// ≡ `(a ^l1 b) ^l2 c`. The label identifier must touch `^` (no
+    /// `^ lbl` with whitespace) so any `^<non-ident-byte>` is reserved
+    /// for future overlays: `^!label` (throw atom), `^_` or similar
+    /// (anonymous catch). See `src/pegc/README.md` for the rationale.
+    ///
+    /// No collision with the `*^` / `+^` postfixes — those only fire
+    /// when `^` directly follows `*` / `+` with no whitespace; an `^`
+    /// at infix position is always reached after `parse_postfix`
+    /// returns.
     fn parse_catch(&mut self) -> Result<Pattern, ParseError> {
         let mut lhs = self.parse_sequence()?;
         loop {
             self.skip_ws();
             if self.peek() == Some(b'^') {
                 self.pos += 1;
+                // Label must touch `^`: no `skip_ws()` here. Anything
+                // other than an ident-start byte is currently a parse
+                // error and reserved for future syntactic slots.
+                let label = self.parse_ident().map_err(|_| {
+                    self.err(
+                        "expected label identifier immediately after `^` (no whitespace); \
+                         anonymous (`^_`) and throw (`^!lbl`) forms are reserved for future use"
+                            .into(),
+                    )
+                })?;
+                if label == "_" {
+                    return Err(self.err(
+                        "label name `_` is reserved for future use (anonymous catch)".into(),
+                    ));
+                }
                 self.skip_ws();
                 let rhs = self.parse_sequence()?;
                 lhs = Pattern::Catch {
                     inner: Box::new(lhs),
+                    label,
                     recovery: Box::new(rhs),
                 };
             } else {
@@ -149,6 +171,12 @@ impl<'a> Parser<'a> {
             None => false,
             Some(b'/') | Some(b')') | Some(b'}') => false,
             Some(b'<') => false, // start of next rule's "<-"
+            // `^` is the catch operator at infix position — leave it
+            // for `parse_catch`. Future overlays (e.g. `^!lbl` throw
+            // atom, `^_` anonymous catch) live in the reserved
+            // `^<non-ident-byte>` slot; when added, this function
+            // grows a one-byte lookahead.
+            Some(b'^') => false,
             Some(c) if is_ident_start(c) => !self.looks_like_rule_def(),
             Some(c) => is_atom_start(c),
         }

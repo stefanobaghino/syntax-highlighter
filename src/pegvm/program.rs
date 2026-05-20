@@ -24,4 +24,11 @@ pub struct Program {
     /// and `pegdb explain-recoveries`) to render rule-stack snapshots
     /// back into human-readable names. Length is exactly `rule_count`.
     pub rule_names: Vec<String>,
+    /// Compile-time label names, indexed by `LabelId.0`. Populated by
+    /// [`crate::pegc`] in the order labels are interned (which is
+    /// deterministic given a fixed compile-time pattern walk).
+    /// `pegdb explain-recoveries` resolves the label of a labeled
+    /// recovery firing back to its source name. Empty for grammars
+    /// that don't use labeled failures.
+    pub label_kinds: Vec<String>,
 }

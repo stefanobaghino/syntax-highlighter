@@ -92,11 +92,12 @@ fn recover_repeat_postfix_plus_caret_lowers_to_seq() {
 
 #[test]
 fn catch_basic_parses_to_pattern_catch() {
-    let g = parse("r <- 'a' ^ 'b'");
+    let g = parse("r <- 'a' ^lbl 'b'");
     assert_eq!(
         g.rules["r"],
         Pattern::Catch {
             inner: Box::new(Pattern::literal("a")),
+            label: "lbl".into(),
             recovery: Box::new(Pattern::literal("b")),
         }
     );
@@ -104,13 +105,14 @@ fn catch_basic_parses_to_pattern_catch() {
 
 #[test]
 fn catch_binds_tighter_than_choice() {
-    // 'a' ^ 'b' / 'c'   ≡   ('a' ^ 'b') / 'c'
-    let g = parse("r <- 'a' ^ 'b' / 'c'");
+    // 'a' ^lbl 'b' / 'c'   ≡   ('a' ^lbl 'b') / 'c'
+    let g = parse("r <- 'a' ^lbl 'b' / 'c'");
     assert_eq!(
         g.rules["r"],
         Pattern::OrderedChoice(vec![
             Pattern::Catch {
                 inner: Box::new(Pattern::literal("a")),
+                label: "lbl".into(),
                 recovery: Box::new(Pattern::literal("b")),
             },
             Pattern::literal("c"),
@@ -120,8 +122,8 @@ fn catch_binds_tighter_than_choice() {
 
 #[test]
 fn catch_binds_looser_than_sequence() {
-    // 'a' 'b' ^ 'c' 'd'   ≡   ('a' 'b') ^ ('c' 'd')
-    let g = parse("r <- 'a' 'b' ^ 'c' 'd'");
+    // 'a' 'b' ^lbl 'c' 'd'   ≡   ('a' 'b') ^lbl ('c' 'd')
+    let g = parse("r <- 'a' 'b' ^lbl 'c' 'd'");
     assert_eq!(
         g.rules["r"],
         Pattern::Catch {
@@ -129,6 +131,7 @@ fn catch_binds_looser_than_sequence() {
                 Pattern::literal("a"),
                 Pattern::literal("b"),
             ])),
+            label: "lbl".into(),
             recovery: Box::new(Pattern::Sequence(vec![
                 Pattern::literal("c"),
                 Pattern::literal("d"),
@@ -139,15 +142,17 @@ fn catch_binds_looser_than_sequence() {
 
 #[test]
 fn catch_is_left_associative() {
-    // 'a' ^ 'b' ^ 'c'   ≡   ('a' ^ 'b') ^ 'c'
-    let g = parse("r <- 'a' ^ 'b' ^ 'c'");
+    // 'a' ^l1 'b' ^l2 'c'   ≡   ('a' ^l1 'b') ^l2 'c'
+    let g = parse("r <- 'a' ^l1 'b' ^l2 'c'");
     assert_eq!(
         g.rules["r"],
         Pattern::Catch {
             inner: Box::new(Pattern::Catch {
                 inner: Box::new(Pattern::literal("a")),
+                label: "l1".into(),
                 recovery: Box::new(Pattern::literal("b")),
             }),
+            label: "l2".into(),
             recovery: Box::new(Pattern::literal("c")),
         }
     );
@@ -156,10 +161,9 @@ fn catch_is_left_associative() {
 #[test]
 fn catch_does_not_collide_with_star_caret() {
     // `'x'*^` stays as RecoverRepeat (postfix with no whitespace
-    // between `*` and `^`). `'x'* ^ 'y'` is a Catch of Repeat over a
-    // separate recovery branch — the whitespace breaks the `*^`
-    // postfix form.
-    let g = parse("a <- 'x'*^\nb <- 'x'* ^ 'y'");
+    // between `*` and `^`). `'x'* ^lbl 'y'` is a Catch of Repeat over
+    // a separate recovery branch.
+    let g = parse("a <- 'x'*^\nb <- 'x'* ^lbl 'y'");
     assert_eq!(
         g.rules["a"],
         Pattern::RecoverRepeat {
@@ -171,6 +175,7 @@ fn catch_does_not_collide_with_star_caret() {
         g.rules["b"],
         Pattern::Catch {
             inner: Box::new(Pattern::Repeat(Box::new(Pattern::literal("x")))),
+            label: "lbl".into(),
             recovery: Box::new(Pattern::literal("y")),
         }
     );
@@ -178,18 +183,74 @@ fn catch_does_not_collide_with_star_caret() {
 
 #[test]
 fn catch_parens_force_grouping_on_recovery() {
-    // Default `'a' ^ 'b' / 'c'` is `('a' ^ 'b') / 'c'` (catch tighter
-    // than choice); to put a choice in the recovery branch the author
-    // must parenthesize.
-    let g = parse("r <- 'a' ^ ('b' / 'c')");
+    // Default `'a' ^lbl 'b' / 'c'` is `('a' ^lbl 'b') / 'c'` (catch
+    // tighter than choice); to put a choice in the recovery branch
+    // the author must parenthesize.
+    let g = parse("r <- 'a' ^lbl ('b' / 'c')");
     assert_eq!(
         g.rules["r"],
         Pattern::Catch {
             inner: Box::new(Pattern::literal("a")),
+            label: "lbl".into(),
             recovery: Box::new(Pattern::OrderedChoice(vec![
                 Pattern::literal("b"),
                 Pattern::literal("c"),
             ])),
+        }
+    );
+}
+
+#[test]
+fn catch_label_touches_caret_whitespace_insensitive_on_left() {
+    // `foo ^lbl bar` and `foo^lbl bar` both parse identically — `^`
+    // is whitespace-insensitive on its *left* (same as today's other
+    // infix operators).
+    let with_space = parse("r <- 'a' ^lbl 'b'");
+    let glued = parse("r <- 'a'^lbl 'b'");
+    let expected = Pattern::Catch {
+        inner: Box::new(Pattern::literal("a")),
+        label: "lbl".into(),
+        recovery: Box::new(Pattern::literal("b")),
+    };
+    assert_eq!(with_space.rules["r"], expected);
+    assert_eq!(glued.rules["r"], expected);
+}
+
+#[test]
+fn catch_requires_label_without_whitespace() {
+    // `foo ^ bar` (whitespace between `^` and the label) is rejected
+    // — `^<non-ident-byte>` is a reserved syntactic slot for future
+    // overlays.
+    let err = parse_src("r <- 'a' ^ 'b'").unwrap_err();
+    assert!(
+        err.message.contains("label identifier"),
+        "expected a label-identifier error, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn catch_rejects_reserved_underscore_label() {
+    // Bare `_` as a label name is reserved for future use (anonymous
+    // catch).
+    let err = parse_src("r <- 'a' ^_ 'b'").unwrap_err();
+    assert!(
+        err.message.contains("reserved"),
+        "expected a reserved-label error, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn catch_accepts_underscore_prefixed_labels() {
+    // `_foo` (underscore prefix, not bare `_`) stays a valid label.
+    let g = parse("r <- 'a' ^_foo 'b'");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Catch {
+            inner: Box::new(Pattern::literal("a")),
+            label: "_foo".into(),
+            recovery: Box::new(Pattern::literal("b")),
         }
     );
 }
@@ -339,7 +400,9 @@ fn end_to_end_catch_compile_run() {
     // of the statement under an @err capture and consumes the closing
     // semicolon. Input is malformed (no FROM), so the inner fails and
     // the recovery branch fires.
-    let g = parse("stmt <- (@kw{'SELECT'} ' ' @kw{'FROM'} ' ' 'x' ';') ^ @err{(!';' .)*} ';'");
+    let g = parse(
+        "stmt <- (@kw{'SELECT'} ' ' @kw{'FROM'} ' ' 'x' ';') ^bad_select @err{(!';' .)*} ';'",
+    );
     let prog = g.compile().unwrap();
     let r = VM::new(&prog.code, b"SELECT bogus;").run();
     assert!(

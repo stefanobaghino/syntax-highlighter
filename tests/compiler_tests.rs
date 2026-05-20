@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use syntax_highlighter::pegc::{compile_pattern, Grammar, Pattern};
 use syntax_highlighter::pegvm::{
-    Capture, CaptureKind, CharSet, Instruction, Label, MatchResult, MemoId, RuleKind, VM,
+    Capture, CaptureKind, CharSet, Instruction, Label, LabelId, MatchResult, MemoId, RuleKind, VM,
 };
 
 fn run_pattern(pat: &Pattern, input: &[u8]) -> MatchResult {
@@ -464,11 +464,8 @@ fn recover_repeat_inside_called_rule_returns_cleanly() {
     assert_eq!(r.captures, vec![cap(0, 4, 5)]);
 }
 
-fn catch(inner: Pattern, recovery: Pattern) -> Pattern {
-    Pattern::Catch {
-        inner: Box::new(inner),
-        recovery: Box::new(recovery),
-    }
+fn catch(inner: Pattern, label: &str, recovery: Pattern) -> Pattern {
+    Pattern::catch(inner, label, recovery)
 }
 
 #[test]
@@ -477,6 +474,7 @@ fn catch_inner_success_does_not_run_recovery() {
     // Input matches inner cleanly; recovery branch must not fire.
     let p = catch(
         Pattern::Capture("open".into(), Box::new(Pattern::literal("ab"))),
+        "lbl",
         Pattern::Capture(
             "err".into(),
             Box::new(Pattern::Repeat(Box::new(Pattern::seq(vec![
@@ -501,6 +499,7 @@ fn catch_inner_failure_runs_recovery() {
     // inner = @open{"ab"} fails at sp=0; recovery = @err{.} consumes one byte.
     let p = catch(
         Pattern::Capture("open".into(), Box::new(Pattern::literal("ab"))),
+        "lbl",
         Pattern::Capture("err".into(), Box::new(Pattern::AnyChar)),
     );
     let r = run_pattern(&p, b"xy");
@@ -529,6 +528,7 @@ fn catch_preserves_failed_inner_attempt_deepest_captures() {
             Pattern::Capture("open".into(), Box::new(Pattern::literal("a"))),
             Pattern::literal("b"),
         ]),
+        "lbl",
         Pattern::Capture("err".into(), Box::new(Pattern::AnyChar)),
     );
     let r = run_pattern(&p, b"ax");
@@ -551,7 +551,7 @@ fn catch_recovery_failure_propagates() {
     // OrderedChoice with a literal fallback to observe the failure
     // visibly via the fallback running.
     let p = Pattern::choice(vec![
-        catch(Pattern::literal("ab"), Pattern::literal("yz")),
+        catch(Pattern::literal("ab"), "lbl", Pattern::literal("yz")),
         Pattern::literal("ax"),
     ]);
     let r = run_pattern(&p, b"ax");
@@ -564,9 +564,9 @@ fn catch_recovery_failure_propagates() {
 
 #[test]
 fn catch_emits_recover_scope_skeleton() {
-    let p = catch(Pattern::literal("a"), Pattern::literal("b"));
+    let p = catch(Pattern::literal("a"), "lbl", Pattern::literal("b"));
     let prog = compile_pattern(&p);
-    // 0:  RecoverScopeBegin
+    // 0:  RecoverScopeBegin(LabelId(0))
     // 1:  Choice rec(4)
     // 2:  Char 'a'                ; <inner>
     // 3:  Commit done(6)          ; pops outer Backtrack
@@ -583,7 +583,7 @@ fn catch_emits_recover_scope_skeleton() {
     assert_eq!(
         prog.code,
         vec![
-            Instruction::RecoverScopeBegin,
+            Instruction::RecoverScopeBegin(LabelId(0)),
             Instruction::Choice(Label(4)),
             Instruction::Char(b'a'),
             Instruction::Commit(Label(6)),
@@ -594,6 +594,7 @@ fn catch_emits_recover_scope_skeleton() {
         ]
     );
     assert_eq!(prog.capture_kinds, Vec::<String>::new());
+    assert_eq!(prog.label_kinds, vec!["lbl".to_string()]);
 }
 
 #[test]
@@ -610,6 +611,7 @@ fn catch_nested_inside_recover_repeat() {
             Pattern::Capture("open".into(), Box::new(Pattern::literal("a"))),
             Pattern::literal("b"),
         ]),
+        "lbl",
         Pattern::Capture("err".into(), Box::new(Pattern::AnyChar)),
     );
     let p = recover(inner_catch, "recovery");
@@ -619,6 +621,50 @@ fn catch_nested_inside_recover_repeat() {
         "nested catch inside *^ must complete without panic"
     );
     assert_eq!(r.matched, 7);
+}
+
+#[test]
+fn label_interning_dedups_across_catches() {
+    // Two catches using the same label name share one `LabelId`,
+    // with exactly one entry in `label_kinds`. Confirms
+    // `intern_label` is idempotent.
+    let p = catch(
+        catch(Pattern::literal("a"), "missing", Pattern::literal("x")),
+        "missing",
+        Pattern::literal("y"),
+    );
+    let prog = compile_pattern(&p);
+    let scope_begin_count = prog
+        .code
+        .iter()
+        .filter(|i| matches!(i, Instruction::RecoverScopeBegin(_)))
+        .count();
+    assert_eq!(scope_begin_count, 2);
+    assert_eq!(prog.label_kinds, vec!["missing".to_string()]);
+    for ins in &prog.code {
+        if let Instruction::RecoverScopeBegin(lid) = ins {
+            assert_eq!(lid.0, 0, "both scopes resolve to LabelId(0)");
+        }
+    }
+}
+
+#[test]
+fn label_intern_shared_with_recover_repeat_recovery_kind() {
+    // `*^` interns its `recovery_kind` as a label too, so a catch
+    // using the same string lands on the same `LabelId`. Confirms
+    // the intern is by name, not by emission site — useful so
+    // `pegdb explain-recoveries` can cluster `*^` recoveries and
+    // matching `^lbl` catches under one bucket when the author
+    // chose identical names.
+    let p = Pattern::seq(vec![
+        Pattern::RecoverRepeat {
+            inner: Box::new(Pattern::literal("a")),
+            recovery_kind: "shared".into(),
+        },
+        catch(Pattern::literal("b"), "shared", Pattern::literal("c")),
+    ]);
+    let prog = compile_pattern(&p);
+    assert_eq!(prog.label_kinds, vec!["shared".to_string()]);
 }
 
 #[test]
@@ -840,11 +886,11 @@ fn recover_repeat_emits_choice_commit_skeleton() {
     assert_eq!(
         prog.code,
         vec![
-            Instruction::RecoverScopeBegin, // loop_top
-            Instruction::Choice(Label(4)),  // → rec
-            Instruction::Char(b'a'),        // <inner>
-            Instruction::Commit(Label(10)), // → next_iter
-            Instruction::Choice(Label(12)), // rec: → exit_inner
+            Instruction::RecoverScopeBegin(LabelId(0)), // loop_top
+            Instruction::Choice(Label(4)),              // → rec
+            Instruction::Char(b'a'),                    // <inner>
+            Instruction::Commit(Label(10)),             // → next_iter
+            Instruction::Choice(Label(12)),             // rec: → exit_inner
             Instruction::RecoverToScopedMax,
             Instruction::CaptureBegin(CaptureKind(0)), // recovery
             Instruction::Any(1),
