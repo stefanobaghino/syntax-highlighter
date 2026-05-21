@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use super::analysis::{lint_partial_match, resolve_inferred_boundaries};
 use super::compiler::{compile_rules, CompileError};
 use super::pattern::Pattern;
 use crate::pegvm::{CharSet, Program};
@@ -25,8 +26,27 @@ impl Grammar {
     /// [`Program`](crate::pegvm::Program). For one-shot grammar source
     /// → [`Program`] callers, prefer the top-level
     /// [`compile`](super::compile) instead.
+    ///
+    /// Pipeline:
+    /// 1. Resolve `Pattern::InferBoundaryCatch` placeholders (`^^lbl`)
+    ///    via [`resolve_inferred_boundaries`] — synthesizes each
+    ///    boundary from FOLLOW.
+    /// 2. Run [`lint_partial_match`]; any finding is a fatal
+    ///    `CompileError::PartialMatchLeniency`. Anchor real bugs with
+    ///    `^^lbl B` (or `^^lbl`); mark intentional leniency with `~`
+    ///    at the call site or `~name <- body` at the rule definition.
+    /// 3. Emit bytecode via `compile_rules`.
     pub fn compile(&self) -> Result<Program, CompileError> {
-        compile_rules(&self.rules, &self.start)
+        let mut resolved = Grammar {
+            rules: self.rules.clone(),
+            start: self.start.clone(),
+        };
+        resolve_inferred_boundaries(&mut resolved)?;
+        let findings = lint_partial_match(&resolved);
+        if !findings.is_empty() {
+            return Err(CompileError::PartialMatchLeniency(findings));
+        }
+        compile_rules(&resolved.rules, &resolved.start)
     }
 }
 
@@ -72,11 +92,25 @@ impl<'a> Parser<'a> {
         let mut rules = HashMap::new();
         let mut order = Vec::new();
         while self.pos < self.src.len() {
+            // Definition-level lenient marker: `~name <- body` declares
+            // that every call to `name` is intentionally lenient and
+            // suppresses `lint_partial_match` findings at every call site
+            // of `name`. The marker touches the name (no whitespace);
+            // the rule's body is wrapped with `Pattern::Lenient` so the
+            // lint walker sees the same shape as a per-call-site `~p`.
+            let mut definition_lenient = false;
+            if self.peek() == Some(b'~') {
+                self.pos += 1;
+                definition_lenient = true;
+            }
             let name = self.parse_ident()?;
             self.skip_ws();
             self.expect_str("<-")?;
             self.skip_ws();
-            let pat = self.parse_choice()?;
+            let mut pat = self.parse_choice()?;
+            if definition_lenient {
+                pat = Pattern::Lenient(Box::new(pat));
+            }
             if rules.insert(name.clone(), pat).is_some() {
                 return Err(self.err(format!("rule '{}' defined twice", name)));
             }
@@ -105,12 +139,25 @@ impl<'a> Parser<'a> {
         Ok(Pattern::choice(alts))
     }
 
-    /// `inner ^label recovery` — labeled catch. Binds tighter than
-    /// `/`, looser than sequence. Left-associative: `a ^l1 b ^l2 c`
-    /// ≡ `(a ^l1 b) ^l2 c`. The label identifier must touch `^` (no
-    /// `^ lbl` with whitespace) so any `^<non-ident-byte>` is reserved
-    /// for future overlays: `^!label` (throw atom), `^_` or similar
-    /// (anonymous catch). See `src/pegc/README.md` for the rationale.
+    /// Two operators share the catch position, distinguished by a
+    /// single byte after the first `^`:
+    ///
+    /// - `inner ^label recovery` — **bare catch.** Author writes the
+    ///   recovery branch. Left-associative. See `src/pegc/README.md`.
+    /// - `inner ^^label B` / `inner ^^label` — **boundary-anchored
+    ///   catch.** The doubled caret marks a new operator family: the
+    ///   recovery branch is auto-synthesized as `@recovery{(!B .)*}`,
+    ///   and the inner is implicitly anchored with `&B`. The boundary
+    ///   `B` is parsed as one atom-with-prefix-postfix; if absent
+    ///   (no atom-start follows the label), the FOLLOW-inferred form
+    ///   emits `Pattern::InferBoundaryCatch { inner, label }` and the
+    ///   compile-time resolver synthesizes `B` from the call site's
+    ///   FOLLOW set.
+    ///
+    /// The label identifier must touch the discriminator `^` (bare)
+    /// or the second `^` of `^^` (anchored). `^_` / `^^_` are
+    /// reserved for anonymous-catch; `^!lbl` / `^^!lbl` are reserved
+    /// for the throw-atom slot.
     ///
     /// No collision with the `*^` / `+^` postfixes — those only fire
     /// when `^` directly follows `*` / `+` with no whitespace; an `^`
@@ -120,23 +167,41 @@ impl<'a> Parser<'a> {
         let mut lhs = self.parse_sequence()?;
         loop {
             self.skip_ws();
+            if self.peek() != Some(b'^') {
+                break;
+            }
+            self.pos += 1;
+            // Doubled-caret discriminator: a second `^` immediately
+            // after the first marks the boundary-anchored family.
             if self.peek() == Some(b'^') {
                 self.pos += 1;
-                // Label must touch `^`: no `skip_ws()` here. Anything
-                // other than an ident-start byte is currently a parse
-                // error and reserved for future syntactic slots.
-                let label = self.parse_ident().map_err(|_| {
-                    self.err(
-                        "expected label identifier immediately after `^` (no whitespace); \
-                         anonymous (`^_`) and throw (`^!lbl`) forms are reserved for future use"
-                            .into(),
-                    )
-                })?;
-                if label == "_" {
-                    return Err(self.err(
-                        "label name `_` is reserved for future use (anonymous catch)".into(),
-                    ));
+                let label = self.parse_catch_label("^^")?;
+                self.skip_ws();
+                let catch_pat = if self.at_prefix_start() {
+                    let boundary = self.parse_prefix()?;
+                    lower_boundary_catch(lhs, label, boundary)
+                } else {
+                    Pattern::InferBoundaryCatch {
+                        inner: Box::new(lhs),
+                        label,
+                    }
+                };
+                // Trailing sequence atoms after `^^lbl B` (or
+                // `^^lbl` inferred) belong to the enclosing sequence,
+                // not to the catch. `parse_sequence` above already
+                // returned when it hit the first `^`, so absorb the
+                // continuation here and rejoin under a Sequence.
+                let mut items = vec![catch_pat];
+                loop {
+                    self.skip_ws();
+                    if !self.at_prefix_start() {
+                        break;
+                    }
+                    items.push(self.parse_prefix()?);
                 }
+                lhs = Pattern::seq(items);
+            } else {
+                let label = self.parse_catch_label("^")?;
                 self.skip_ws();
                 let rhs = self.parse_sequence()?;
                 lhs = Pattern::Catch {
@@ -144,11 +209,28 @@ impl<'a> Parser<'a> {
                     label,
                     recovery: Box::new(rhs),
                 };
-            } else {
-                break;
             }
         }
         Ok(lhs)
+    }
+
+    /// Parse a catch label that must touch its sigil prefix
+    /// (no whitespace). `sigil` is the literal `^` or `^^` for the
+    /// error message. Reuses the existing `_`-reserved rule and the
+    /// `^!`-reserved-throw-atom rule.
+    fn parse_catch_label(&mut self, sigil: &str) -> Result<String, ParseError> {
+        let label = self.parse_ident().map_err(|_| {
+            self.err(format!(
+                "expected label identifier immediately after `{sigil}` (no whitespace); \
+                 anonymous (`{sigil}_`) and throw (`{sigil}!lbl`) forms are reserved for future use"
+            ))
+        })?;
+        if label == "_" {
+            return Err(
+                self.err("label name `_` is reserved for future use (anonymous catch)".into())
+            );
+        }
+        Ok(label)
     }
 
     fn parse_sequence(&mut self) -> Result<Pattern, ParseError> {
@@ -177,6 +259,11 @@ impl<'a> Parser<'a> {
             // `^<non-ident-byte>` slot; when added, this function
             // grows a one-byte lookahead.
             Some(b'^') => false,
+            // `~` is a definition-level marker on the NEXT rule. There
+            // is no call-site form, so `~` is never a valid in-body
+            // atom-start: fall through and let the sequence terminate
+            // here, letting `parse_grammar` consume `~name <- ...`.
+            Some(b'~') => false,
             Some(c) if is_ident_start(c) => !self.looks_like_rule_def(),
             Some(c) => is_atom_start(c),
         }
@@ -558,6 +645,25 @@ fn is_ident_cont(c: u8) -> bool {
 
 fn is_atom_start(c: u8) -> bool {
     matches!(c, b'(' | b'"' | b'\'' | b'[' | b'.' | b'@' | b'!' | b'&') || is_ident_start(c)
+}
+
+/// Lower `INNER ^^lbl B` to the explicit boundary-anchored catch
+/// shape: `Catch { Sequence([INNER, &B]), lbl, @recovery{(!B .)*} }`.
+/// Parse-time lowering — the compiler sees this as a regular `Catch`
+/// with an `AndPredicate` sibling, so the existing lint walker
+/// recognizes it as anchored without a new arm.
+fn lower_boundary_catch(inner: Pattern, label: String, boundary: Pattern) -> Pattern {
+    let lookahead = Pattern::AndPredicate(Box::new(boundary.clone()));
+    let stop_loop = Pattern::Repeat(Box::new(Pattern::Sequence(vec![
+        Pattern::NotPredicate(Box::new(boundary)),
+        Pattern::AnyChar,
+    ])));
+    let recovery = Pattern::Capture("recovery".into(), Box::new(stop_loop));
+    Pattern::Catch {
+        inner: Box::new(Pattern::Sequence(vec![inner, lookahead])),
+        label,
+        recovery: Box::new(recovery),
+    }
 }
 
 /// Desugar `p*^` and `p*^[cs]` to a labeled-catch loop. Both forms are

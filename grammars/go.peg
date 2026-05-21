@@ -44,7 +44,9 @@ top_decl      <- decl
                  / func_decl
                  / method_decl
 
-decl          <- @keyword{'var'} ws var_spec_group
+# Every alt below has trailing-optional leniency (opt_semi or block?)
+# absorbed by `go_file`'s `*^` and `block`'s `^block_close`.
+~decl         <- @keyword{'var'} ws var_spec_group
                / @keyword{'var'} ws var_spec ws opt_semi
                / @keyword{'const'} ws const_spec_group
                / @keyword{'const'} ws const_spec ws opt_semi
@@ -57,13 +59,15 @@ var_spec      <- ident_list ws type_expr ws @operator{'='} ws expr_list
                / ident_list ws @operator{'='} ws expr_list
 
 const_spec_group <- @punctuation{'('} ws (const_spec ws opt_semi)* ws @punctuation{')'}
-const_spec    <- const_ident_list (ws type_expr)? (ws @operator{'='} ws expr_list)?
+# Trailing `(= expr)?` absorbed by outer recovery.
+~const_spec   <- const_ident_list (ws type_expr)? (ws @operator{'='} ws expr_list)?
 
 type_spec_group <- @punctuation{'('} ws (type_spec ws opt_semi)* ws @punctuation{')'}
 type_spec     <- @type{ident} ws type_params? ws (@operator{'='})? ws type_expr
 
-func_decl     <- @keyword{'func'} ws @function{ident} type_params? ws fn_signature ws block?
-method_decl   <- @keyword{'func'} ws method_receiver ws @function{ident} ws fn_signature ws block?
+# Trailing `block?` absorbed by `*^` / `^block_close`.
+~func_decl    <- @keyword{'func'} ws @function{ident} type_params? ws fn_signature ws block?
+~method_decl  <- @keyword{'func'} ws method_receiver ws @function{ident} ws fn_signature ws block?
 method_receiver <- @punctuation{'('} ws (@variable{ident} ws)? type_expr ws @punctuation{')'}
 
 # Generics type parameters: `[T any, U comparable]`.
@@ -75,7 +79,8 @@ type_union    <- type_term (ws @operator{'|'} ws type_term)*
 type_term     <- @operator{'~'} ws type_expr
                / type_expr
 
-fn_signature  <- fn_params (ws fn_result)?
+# Trailing `(ws fn_result)?` absorbed by outer recovery.
+~fn_signature <- fn_params (ws fn_result)?
 fn_params     <- @punctuation{'('} ws fn_param_list? ws @punctuation{')'}
 fn_param_list <- fn_param (ws @punctuation{','} ws fn_param)* (ws @punctuation{','})?
 fn_param      <- ident_list ws (@operator{'...'} ws)? type_expr
@@ -111,12 +116,14 @@ interface_members <- interface_member (ws opt_semi ws interface_member)* (ws opt
 interface_member <- @function{ident} ws fn_signature
                   / type_term
 type_paren    <- @punctuation{'('} ws type_expr ws @punctuation{')'}
-type_name     <- @type{qualified_ident} type_args?
+# Trailing `type_args?` leniency absorbed by outer recovery.
+~type_name    <- @type{qualified_ident} type_args?
 type_args     <- @punctuation{'['} ws type_arg_list ws @punctuation{']'}
 type_arg_list <- type_expr (ws @punctuation{','} ws type_expr)* (ws @punctuation{','})?
 
 # `pkg.Name` or `Name`.
-qualified_ident <- ident (@punctuation{'.'} ident)?
+# Trailing `(.ident)?` leniency absorbed by outer recovery.
+~qualified_ident <- ident (@punctuation{'.'} ident)?
 
 # --- Statements ------------------------------------------------------
 
@@ -160,7 +167,8 @@ assign_op     <- @operator{'+='} / @operator{'-='} / @operator{'*='} / @operator
 
 labeled_stmt  <- @variable{ident} ws @punctuation{':'} ws stmt
 
-if_stmt       <- @keyword{'if'} ws (simple_stmt ws @punctuation{';'} ws)? expr_no_compound ws block
+# Trailing `(else (if | block))?` leniency absorbed by outer recovery.
+~if_stmt      <- @keyword{'if'} ws (simple_stmt ws @punctuation{';'} ws)? expr_no_compound ws block
                  (ws @keyword{'else'} ws (if_stmt / block))?
 for_stmt      <- @keyword{'for'} ws for_header? ws block
 for_header    <- for_range
@@ -190,9 +198,10 @@ recv_stmt     <- (ident_list ws (@operator{'='} / @operator{':='}) ws)? expr_no_
 
 go_stmt       <- @keyword{'go'} ws expr
 defer_stmt    <- @keyword{'defer'} ws expr
-return_stmt   <- @keyword{'return'} (ws expr_list)?
-break_stmt    <- @keyword{'break'} (ws @variable{ident})?
-continue_stmt <- @keyword{'continue'} (ws @variable{ident})?
+# Trailing-optional leniency absorbed by outer recovery.
+~return_stmt  <- @keyword{'return'} (ws expr_list)?
+~break_stmt   <- @keyword{'break'} (ws @variable{ident})?
+~continue_stmt <- @keyword{'continue'} (ws @variable{ident})?
 goto_stmt     <- @keyword{'goto'} ws @variable{ident}
 fallthrough_stmt <- @keyword{'fallthrough'}
 
@@ -378,7 +387,8 @@ predeclared_fn <- ('append' / 'cap' / 'close' / 'complex' / 'copy'
 
 # Go uses newlines as statement terminators (lexer-inserted `;`); here
 # we accept optional explicit `;` and let `ws` eat whitespace.
-opt_semi      <- (@punctuation{';'} ws)?
+# `~`-marked: ASI absorption is intentional everywhere this is called.
+~opt_semi     <- (@punctuation{';'} ws)?
 
 comment       <- @comment{line_comment / block_comment}
 line_comment  <- '//' (!'\n' .)*

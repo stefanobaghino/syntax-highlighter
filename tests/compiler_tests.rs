@@ -1724,3 +1724,141 @@ fn lint_partial_match_real_sqlite_grammar_unanchored_aliased_expr_flagged() {
         "load-bearing PR #101 case must be flagged when anchor is stripped; findings: {findings:?}"
     );
 }
+
+// ---- Definition-level lenient marker (~rule_name <- body) -----
+
+#[test]
+fn definition_lenient_marker_wraps_rule_body() {
+    // `~rule <- body` parses the body with a top-level `Pattern::Lenient`
+    // wrap, exposing the intent to the lint via the same AST node the
+    // call-site `~p` form produces.
+    let g = parse("~r <- 'a'?").expect("parse");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Lenient(Box::new(Pattern::Optional(Box::new(Pattern::literal("a"))))),
+    );
+}
+
+#[test]
+fn definition_lenient_marker_requires_touching_name() {
+    let err = parse("~ r <- 'a'?").expect_err("space between `~` and name must error");
+    assert!(
+        err.message.contains("expected identifier"),
+        "unexpected error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn definition_lenient_suppresses_lint_at_every_call_site() {
+    // Use the Catch-absorbed shape the lint reliably flags: a
+    // top-level `*^[;]` recovery loop calling a trailing-Optional rule.
+    let unmarked = parse("start <- (r)*^[;]\nr <- 'x' 'y'?").expect("parse unmarked");
+    assert!(
+        lint_partial_match(&unmarked)
+            .iter()
+            .any(|f| f.rule == "r" && f.caller == "start"),
+        "baseline: unmarked grammar should flag r"
+    );
+
+    let marked = parse("start <- (r)*^[;]\n~r <- 'x' 'y'?").expect("parse marked");
+    let findings = lint_partial_match(&marked);
+    assert!(
+        !findings.iter().any(|f| f.rule == "r"),
+        "definition-level `~r` should suppress all r-related findings, got: {findings:?}"
+    );
+}
+
+#[test]
+fn definition_lenient_marker_is_runtime_transparent() {
+    // The `~name <-` wrap compiles to the same bytecode as the bare form.
+    let plain = parse("r <- 'x'+")
+        .expect("parse plain")
+        .compile()
+        .expect("compile plain");
+    let marked = parse("~r <- 'x'+")
+        .expect("parse marked")
+        .compile()
+        .expect("compile marked");
+    assert_eq!(plain.code, marked.code);
+}
+
+// ---- Compile-fatal lint integration ---------------------------
+
+#[test]
+fn compile_errors_on_partial_match_leniency() {
+    // `*^[;]` Catch-absorbed shape — the lint reliably flags this.
+    let g = parse("start <- (r)*^[;]\nr <- 'x' 'y'?").expect("parse");
+    let err = g.compile().expect_err("compile should fail");
+    match err {
+        syntax_highlighter::pegc::CompileError::PartialMatchLeniency(findings) => {
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.rule == "r" && f.caller == "start"),
+                "expected r → start finding, got: {findings:?}"
+            );
+        }
+        other => panic!("expected PartialMatchLeniency, got: {other:?}"),
+    }
+}
+
+#[test]
+fn compile_succeeds_with_definition_lenient_on_flagged_rule() {
+    let g = parse("start <- (r)*^[;]\n~r <- 'x' 'y'?").expect("parse");
+    g.compile()
+        .expect("compile should succeed with definition-level `~r`");
+}
+
+#[test]
+fn compile_succeeds_with_boundary_catch_anchor() {
+    // `^^bad ';'` lowers to `Catch { Seq(a, &';'), bad, recovery }` —
+    // anchoring `a` by lookahead so the lint sees no leniency.
+    let g = parse("start <- (a ^^bad ';')*\na <- 'x' 'y'?").expect("parse");
+    g.compile()
+        .expect("compile should succeed with `^^bad ';'` anchor");
+}
+
+#[test]
+fn compile_error_display_lists_findings() {
+    let g = parse("start <- (r)*^[;]\nr <- 'x' 'y'?").expect("parse");
+    let err = g.compile().expect_err("compile should fail");
+    let msg = format!("{err}");
+    assert!(msg.contains("partial-match leniency"));
+    assert!(msg.contains("`r`"));
+    assert!(msg.contains("`start`"));
+}
+
+#[test]
+fn compile_errors_on_uninferable_boundary() {
+    // The start rule has no FOLLOW context other than EOF — for a
+    // rule with no callers at all, the inferred boundary would be
+    // empty. Construct that case via a non-start unreachable rule.
+    let g = parse("start <- 'x'\norphan <- 'a' ^^bad").expect("parse");
+    let err = g.compile().expect_err("compile should fail");
+    assert!(
+        matches!(
+            err,
+            syntax_highlighter::pegc::CompileError::CannotInferBoundary { .. }
+        ),
+        "expected CannotInferBoundary, got: {err:?}"
+    );
+}
+
+#[test]
+fn all_shipped_grammars_compile_clean() {
+    // Load-bearing: every grammar in `grammars/*.peg` must compile
+    // cleanly via `pegc::compile`. Re-introducing partial-match
+    // leniency without a `~` marker or `^^lbl` anchor breaks this.
+    for entry in std::fs::read_dir("grammars").expect("read grammars dir") {
+        let entry = entry.expect("dir entry");
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("peg") {
+            continue;
+        }
+        let src = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("read {path:?}"));
+        let g = parse(&src).unwrap_or_else(|e| panic!("parse {path:?}: {e}"));
+        g.compile()
+            .unwrap_or_else(|e| panic!("compile {path:?}: {e}"));
+    }
+}

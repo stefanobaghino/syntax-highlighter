@@ -85,26 +85,28 @@ statement_body  <- select_stmt
 
 # --- SELECT statement -------------------------------------------------
 
-select_stmt    <- with_clause? select_core compound_tail* order_clause? limit_clause?
+# Trailing `limit_clause?` absorbed by `sql_file`'s top-level `*^[;]`.
+~select_stmt   <- with_clause? select_core compound_tail* order_clause? limit_clause?
 
 with_clause    <- kw_with (ws kw_recursive)? ws cte_defn (ws @punctuation{','} ws cte_defn)* ws
 cte_defn       <- @type{bare_ident}
                   (ws @punctuation{'('} ws ident_list ws @punctuation{')'})?
                   ws kw_as ws @punctuation{'('} ws select_stmt ws @punctuation{')'}
 
-select_core    <- kw_select (ws (kw_distinct / kw_all))? ws result_list
+# Trailing `(window_clause)?` absorbed by `*^[;]`.
+~select_core   <- kw_select (ws (kw_distinct / kw_all))? ws result_list
                   (ws from_clause)? (ws where_clause)? (ws group_clause)? (ws having_clause)?
                   (ws window_clause)?
 
 result_list    <- result_column (ws @punctuation{','} ws result_column)*
 # A column expression that didn't reach a known boundary is treated
-# as malformed: the trailing `&(ws result_column_boundary)` lookahead
-# makes the inner branch fail when, e.g., `blob.rid IN leaf` parses
-# only `blob.rid` and leaves `IN leaf` dangling. The `^bad_column`
-# catch then resyncs by skipping (without consuming) up to the next
-# `,` / `)` / `;` or SELECT-clause keyword.
-result_column  <- ((table_star / @operator{'*'} / aliased_expr) &(ws result_column_boundary))
-                  ^bad_column @recovery{(!result_column_boundary .)*}
+# as malformed. The `^^bad_column (ws result_column_boundary)`
+# operator anchors the inner branch on the boundary (so e.g.
+# `blob.rid IN leaf` fails because `IN` isn't in the boundary set)
+# and synthesizes the recovery body `(!(ws result_column_boundary) .)*`
+# from the same argument.
+result_column  <- (table_star / @operator{'*'} / aliased_expr)
+                  ^^bad_column (ws result_column_boundary)
 result_column_boundary <- @punctuation{','} / @punctuation{')'} / @punctuation{';'}
                         / kw_from / kw_where / kw_group / kw_having
                         / kw_order / kw_limit / kw_offset / kw_window
@@ -119,11 +121,13 @@ compound_tail  <- ws (kw_union (ws kw_all)? / kw_intersect / kw_except) ws selec
 from_clause    <- kw_from ws table_or_subquery (ws join_clause)*
 table_or_subquery <- @punctuation{'('} ws select_stmt ws @punctuation{')'} (ws table_alias)?
                    / qualified_table_name (ws table_alias)?
-qualified_table_name <- @type{bare_ident_nonkw} (@punctuation{'.'} @type{bare_ident_nonkw})?
+# Trailing `(.ident)?` leniency absorbed by `sql_file`'s `*^[;]`.
+~qualified_table_name <- @type{bare_ident_nonkw} (@punctuation{'.'} @type{bare_ident_nonkw})?
 table_alias    <- kw_as ws @variable{bare_ident_nonkw}
                 / @variable{bare_ident_nonkw}
 
-join_clause    <- join_op ws table_or_subquery (ws join_constraint)?
+# Trailing `(join_constraint)?` absorbed by `*^[;]`.
+~join_clause   <- join_op ws table_or_subquery (ws join_constraint)?
 join_op        <- @punctuation{','}
                 / kw_natural (ws join_type)? ws kw_join
                 / join_type ws kw_join
@@ -137,14 +141,13 @@ join_constraint<- kw_on ws expr
                 / kw_using ws @punctuation{'('} ws ident_list ws @punctuation{')'}
 ident_list     <- @variable{bare_ident_nonkw} (ws @punctuation{','} ws @variable{bare_ident_nonkw})*
 
-# Like `result_column`, `where_clause` uses a boundary lookahead to
-# turn partial-parse leftovers (e.g. `WHERE x NOT IN phantom ORDER BY
-# …` where `NOT IN <ident>` is unsupported) into a `^bad_where`
-# failure. The catch sits *inside* the `kw_where` match so a missing
-# WHERE keyword still fails the rule cleanly (no spurious empty
-# recovery captures on clean SELECTs).
-where_clause   <- kw_where ws ((expr &(ws where_clause_boundary))
-                               ^bad_where @recovery{(!where_clause_boundary .)*})
+# Like `result_column`, `where_clause` uses `^^bad_where` to turn
+# partial-parse leftovers (e.g. `WHERE x NOT IN phantom ORDER BY …`
+# where `NOT IN <ident>` is unsupported) into a recoverable failure.
+# The operator sits *inside* the `kw_where` match so a missing WHERE
+# keyword still fails the rule cleanly (no spurious empty recovery
+# captures on clean SELECTs).
+where_clause   <- kw_where ws (expr ^^bad_where (ws where_clause_boundary))
 where_clause_boundary <- @punctuation{')'} / @punctuation{';'}
                        / kw_group / kw_having / kw_order / kw_limit
                        / kw_offset / kw_window / kw_returning
@@ -154,10 +157,12 @@ group_clause   <- kw_group ws kw_by ws expr (ws @punctuation{','} ws expr)*
 having_clause  <- kw_having ws expr
 
 order_clause   <- ws kw_order ws kw_by ws order_item (ws @punctuation{','} ws order_item)*
-order_item     <- expr (ws (kw_asc / kw_desc))?
+# Trailing `(asc/desc)?` absorbed by `*^[;]`.
+~order_item    <- expr (ws (kw_asc / kw_desc))?
 
-limit_clause   <- ws kw_limit ws expr (ws kw_offset ws expr
-                                     / ws @punctuation{','} ws expr)?
+# Trailing `(offset)?` absorbed by `*^[;]`.
+~limit_clause  <- ws kw_limit ws expr (ws kw_offset ws expr
+                                      / ws @punctuation{','} ws expr)?
 
 # --- Window functions & WINDOW clause --------------------------------
 # Not counted as reserved keywords in SQLite aside from WINDOW and
@@ -200,7 +205,8 @@ frame_exclude  <- kw_no ws kw_others
 # UPSERT's DO UPDATE path and UPDATE (added in a later commit) share
 # `update_set_list`, which is defined here.
 
-insert_stmt    <- with_clause? insert_prefix ws kw_into ws qualified_table_name
+# Trailing `(returning_clause)?` absorbed by `*^[;]`.
+~insert_stmt   <- with_clause? insert_prefix ws kw_into ws qualified_table_name
                   (ws kw_as ws @variable{bare_ident_nonkw})?
                   (ws @punctuation{'('} ws ident_list ws @punctuation{')'})?
                   ws insert_source
@@ -243,7 +249,8 @@ returning_clause <- kw_returning ws result_list
 # compiled without SQLITE_ENABLE_UPDATE_DELETE_LIMIT — highlighting
 # should not pretend the syntax doesn't exist.
 
-update_stmt <- with_clause? kw_update (ws kw_or ws conflict_action)? ws
+# Trailing `(returning_clause)?` absorbed by `*^[;]`.
+~update_stmt <- with_clause? kw_update (ws kw_or ws conflict_action)? ws
                qualified_table_name (ws table_alias)?
                ws kw_set ws update_set_list
                (ws from_clause)?
@@ -252,7 +259,7 @@ update_stmt <- with_clause? kw_update (ws kw_or ws conflict_action)? ws
                limit_clause?
                (ws returning_clause)?
 
-delete_stmt <- with_clause? kw_delete ws kw_from ws qualified_table_name (ws table_alias)?
+~delete_stmt <- with_clause? kw_delete ws kw_from ws qualified_table_name (ws table_alias)?
                (ws where_clause)?
                order_clause?
                limit_clause?
@@ -275,13 +282,15 @@ create_table_stmt <- kw_create (ws (kw_temporary / kw_temp))? ws kw_table
                          (ws table_option (ws @punctuation{','} ws table_option)*)?
                        / kw_as ws select_stmt)
 
-column_def     <- @variable{bare_ident_nonkw}
+# Trailing `(column_constraint)*` leniency absorbed by `*^[;]`.
+~column_def    <- @variable{bare_ident_nonkw}
                   (ws type_name)?
                   (ws column_constraint)*
 
 # SQLite accepts multi-word type names like `DOUBLE PRECISION` and
 # `UNSIGNED BIG INT`. Consume consecutive non-keyword identifiers.
-type_name      <- @type{bare_ident_nonkw} (ws @type{bare_ident_nonkw})*
+# Trailing `(...)?` leniency absorbed by `*^[;]`.
+~type_name     <- @type{bare_ident_nonkw} (ws @type{bare_ident_nonkw})*
                   (ws @punctuation{'('} ws signed_number
                        (ws @punctuation{','} ws signed_number)? ws @punctuation{')'})?
 
@@ -308,7 +317,8 @@ table_constraint_body <-
     / kw_foreign ws kw_key ws @punctuation{'('} ws ident_list ws @punctuation{')'}
           ws foreign_key_clause
 
-foreign_key_clause <- kw_references ws @type{bare_ident_nonkw}
+# Trailing `(fk_deferrable)?` absorbed by `*^[;]`.
+~foreign_key_clause <- kw_references ws @type{bare_ident_nonkw}
                       (ws @punctuation{'('} ws ident_list ws @punctuation{')'})?
                       (ws fk_action)*
                       (ws fk_deferrable)?
@@ -318,7 +328,8 @@ fk_action_body <- kw_set ws (kw_null / kw_default)
                 / kw_cascade
                 / kw_restrict
                 / kw_no ws kw_action
-fk_deferrable  <- (kw_not ws)? kw_deferrable (ws kw_initially ws (kw_immediate / kw_deferred))?
+# Trailing `(initially)?` absorbed by `*^[;]`.
+~fk_deferrable <- (kw_not ws)? kw_deferrable (ws kw_initially ws (kw_immediate / kw_deferred))?
 
 conflict_clause <- kw_on ws kw_conflict ws conflict_action
 
@@ -336,7 +347,8 @@ alter_table_stmt <- kw_alter ws kw_table ws qualified_table_name ws (
 
 # --- DDL: CREATE / DROP INDEX and VIEW -------------------------------
 
-create_index_stmt <- kw_create (ws kw_unique)? ws kw_index
+# Trailing `(where_clause)?` absorbed by `*^[;]`.
+~create_index_stmt <- kw_create (ws kw_unique)? ws kw_index
                      (ws kw_if ws kw_not ws kw_exists)?
                      ws qualified_table_name
                      ws kw_on ws @type{bare_ident_nonkw}
@@ -378,10 +390,12 @@ drop_trigger_stmt <- kw_drop ws kw_trigger (ws kw_if ws kw_exists)? ws qualified
 
 # --- Transactions & savepoints ---------------------------------------
 
-begin_stmt     <- kw_begin (ws (kw_deferred / kw_immediate / kw_exclusive))?
+# Trailing `(transaction-mode)?` absorbed by `*^[;]`.
+~begin_stmt    <- kw_begin (ws (kw_deferred / kw_immediate / kw_exclusive))?
                   (ws kw_transaction)?
-commit_stmt    <- (kw_commit / kw_end) (ws kw_transaction)?
-rollback_stmt  <- kw_rollback (ws kw_transaction)?
+# Trailing `(transaction)?` absorbed by `*^[;]`.
+~commit_stmt   <- (kw_commit / kw_end) (ws kw_transaction)?
+~rollback_stmt <- kw_rollback (ws kw_transaction)?
                   (ws kw_to (ws kw_savepoint)? ws @variable{bare_ident_nonkw})?
 savepoint_stmt <- kw_savepoint ws @variable{bare_ident_nonkw}
 release_stmt   <- kw_release (ws kw_savepoint)? ws @variable{bare_ident_nonkw}
@@ -393,23 +407,27 @@ release_stmt   <- kw_release (ws kw_savepoint)? ws @variable{bare_ident_nonkw}
 # CREATE VIRTUAL TABLE's module name after USING is @function —
 # the module is invoked, not merely referenced.
 
-pragma_stmt     <- kw_pragma ws qualified_table_name
+# Trailing `(value)?` absorbed by `*^[;]`.
+~pragma_stmt    <- kw_pragma ws qualified_table_name
                    (ws @operator{'='} ws pragma_value
                     / ws @punctuation{'('} ws pragma_value ws @punctuation{')'})?
 pragma_value    <- signed_number / string_lit / @variable{bare_ident}
 
-vacuum_stmt     <- kw_vacuum (ws @type{bare_ident_nonkw})? (ws kw_into ws string_lit)?
+# Trailing `(into)?` absorbed by `*^[;]`.
+~vacuum_stmt    <- kw_vacuum (ws @type{bare_ident_nonkw})? (ws kw_into ws string_lit)?
 
 attach_stmt     <- kw_attach (ws kw_database)? ws expr ws kw_as
                    ws @type{bare_ident_nonkw}
 detach_stmt     <- kw_detach (ws kw_database)? ws @type{bare_ident_nonkw}
 
-reindex_stmt    <- kw_reindex (ws qualified_table_name)?
-analyze_stmt    <- kw_analyze (ws qualified_table_name)?
+# Trailing `(target)?` absorbed by `*^[;]`.
+~reindex_stmt   <- kw_reindex (ws qualified_table_name)?
+~analyze_stmt   <- kw_analyze (ws qualified_table_name)?
 
 explain_stmt    <- kw_explain (ws kw_query ws kw_plan)? ws statement_body
 
-create_virtual_table_stmt <-
+# Trailing `(args)?` absorbed by `*^[;]`.
+~create_virtual_table_stmt <-
     kw_create ws kw_virtual ws kw_table
     (ws kw_if ws kw_not ws kw_exists)?
     ws qualified_table_name
@@ -467,7 +485,8 @@ primary     <- literal
 
 paren_primary <- @punctuation{'('} ws (select_stmt / expr) ws @punctuation{')'}
 
-function_call <- @function{bare_ident_nonkw} ws @punctuation{'('} ws func_args? ws @punctuation{')'}
+# Trailing `(filter)? (over window)?` absorbed by `*^[;]`.
+~function_call <- @function{bare_ident_nonkw} ws @punctuation{'('} ws func_args? ws @punctuation{')'}
                  (ws filter_clause)?
                  (ws kw_over ws window_ref)?
 func_args   <- @operator{'*'}

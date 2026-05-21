@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::analysis::analyze_left_recursion;
+use super::analysis::{analyze_left_recursion, LintFinding};
 use super::pattern::Pattern;
 use crate::pegvm::{CaptureKind, Instruction, Label, LabelId, MemoId, Program, RuleKind};
 
@@ -8,6 +8,18 @@ use crate::pegvm::{CaptureKind, Instruction, Label, LabelId, MemoId, Program, Ru
 pub enum CompileError {
     UndefinedRule(String),
     UnknownStartRule(String),
+    /// One or more `^^lbl` catches have no following context to infer
+    /// their boundary from. Emitted by `resolve_inferred_boundaries`.
+    CannotInferBoundary {
+        rule: String,
+        label: String,
+    },
+    /// `lint_partial_match` returned a non-empty result. Each finding
+    /// names a `(rule, caller)` pair where a trailing-nullable rule's
+    /// partial-match leniency reaches an unguarded scope. Anchor with
+    /// `^^lbl B` (or `^^lbl`) when the leniency is a bug, or wrap the
+    /// call site with `~p` when the leniency is intentional.
+    PartialMatchLeniency(Vec<LintFinding>),
 }
 
 impl std::fmt::Display for CompileError {
@@ -15,6 +27,23 @@ impl std::fmt::Display for CompileError {
         match self {
             CompileError::UndefinedRule(name) => write!(f, "undefined rule: {}", name),
             CompileError::UnknownStartRule(name) => write!(f, "unknown start rule: {}", name),
+            CompileError::CannotInferBoundary { rule, label } => write!(
+                f,
+                "cannot infer boundary for `^^{label}` in rule `{rule}`: no following context. \
+                 Either delete the unreachable catch or specify an explicit boundary `^^{label} B`."
+            ),
+            CompileError::PartialMatchLeniency(findings) => {
+                writeln!(f, "partial-match leniency detected:")?;
+                for finding in findings {
+                    writeln!(
+                        f,
+                        "  - rule `{}` is called unanchored by `{}`; its trailing optional \
+                         can succeed on a prefix, leaving bytes the caller does not validate",
+                        finding.rule, finding.caller
+                    )?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -249,6 +278,17 @@ impl Compiler {
                 self.patch_jump(success_commit, done);
                 self.emit(Instruction::RecoverScopeEnd);
             }
+            // Transparent at runtime — the `~` marker affects only
+            // the lint walker. See `Pattern::Lenient` documentation.
+            Pattern::Lenient(inner) => self.compile_pat(inner),
+            // The FOLLOW-inferred resolver must run before bytecode
+            // emission; reaching this arm is a bug.
+            Pattern::InferBoundaryCatch { .. } => {
+                unreachable!(
+                    "Pattern::InferBoundaryCatch must be resolved by \
+                     analysis::resolve_inferred_boundaries before compilation"
+                )
+            }
         }
     }
 }
@@ -388,13 +428,15 @@ fn check_refs(
         | Pattern::Optional(inner)
         | Pattern::NotPredicate(inner)
         | Pattern::AndPredicate(inner)
-        | Pattern::Capture(_, inner) => check_refs(_rule, inner, rules),
+        | Pattern::Capture(_, inner)
+        | Pattern::Lenient(inner) => check_refs(_rule, inner, rules),
         Pattern::Catch {
             inner, recovery, ..
         } => {
             check_refs(_rule, inner, rules)?;
             check_refs(_rule, recovery, rules)
         }
+        Pattern::InferBoundaryCatch { inner, .. } => check_refs(_rule, inner, rules),
         Pattern::NonTerminal(name) => {
             if rules.contains_key(name) {
                 Ok(())
