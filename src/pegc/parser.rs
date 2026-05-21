@@ -237,10 +237,8 @@ impl<'a> Parser<'a> {
                     self.pos += 1;
                     if self.peek() == Some(b'^') {
                         self.pos += 1;
-                        atom = Pattern::RecoverRepeat {
-                            inner: Box::new(atom),
-                            recovery_kind: "recovery".into(),
-                        };
+                        let charset = self.parse_optional_sync_set()?;
+                        atom = build_recover_repeat(atom, charset);
                     } else {
                         atom = Pattern::Repeat(Box::new(atom));
                     }
@@ -249,15 +247,10 @@ impl<'a> Parser<'a> {
                     self.pos += 1;
                     if self.peek() == Some(b'^') {
                         self.pos += 1;
+                        let charset = self.parse_optional_sync_set()?;
                         // p+^  ≡  p (p*^)  — at least one inner success required.
                         let head = atom.clone();
-                        atom = Pattern::seq(vec![
-                            head,
-                            Pattern::RecoverRepeat {
-                                inner: Box::new(atom),
-                                recovery_kind: "recovery".into(),
-                            },
-                        ]);
+                        atom = Pattern::seq(vec![head, build_recover_repeat(atom, charset)]);
                     } else {
                         atom = Pattern::RepeatOne(Box::new(atom));
                     }
@@ -270,6 +263,22 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(atom)
+    }
+
+    /// If the byte following `*^` / `+^` is `[`, parse a delimiter set
+    /// (the sync set) using the same charclass syntax as a normal
+    /// `[abc]` atom. The bracket must touch `^` — `^ [...]` parses as
+    /// `^` then a separate atom and is rejected by the surrounding
+    /// sequence rules. Returns the parsed `CharSet`, or `None` if the
+    /// next byte is not `[`.
+    fn parse_optional_sync_set(&mut self) -> Result<Option<CharSet>, ParseError> {
+        if self.peek() != Some(b'[') {
+            return Ok(None);
+        }
+        match self.parse_charclass()? {
+            Pattern::CharClass(set) => Ok(Some(set)),
+            _ => unreachable!("parse_charclass always returns Pattern::CharClass"),
+        }
     }
 
     fn parse_atom(&mut self) -> Result<Pattern, ParseError> {
@@ -523,4 +532,36 @@ fn is_ident_cont(c: u8) -> bool {
 
 fn is_atom_start(c: u8) -> bool {
     matches!(c, b'(' | b'"' | b'\'' | b'[' | b'.' | b'@' | b'!' | b'&') || is_ident_start(c)
+}
+
+/// Desugar `p*^` and `p*^[cs]` to a labeled-catch loop. Both forms are
+/// `(p ^recovery @recovery{<body>})*` where `<body>` is `.` for the
+/// plain form and `(!cs .)* cs` for the sync-set form. The label and
+/// capture name are both the hardcoded literal `"recovery"`, matching
+/// the `recovery_kind` value the parser used to attach to
+/// `Pattern::RecoverRepeat`.
+///
+/// One implementation, two surface forms — see `parse_postfix`. The
+/// EOF clean-exit behavior of the old `RecoverRepeat` opcode shape
+/// emerges naturally here: when the recovery body fails (e.g. `.` at
+/// EOF, or `cs` missing before EOF), the failure propagates to the
+/// enclosing `*`'s Backtrack frame and the loop terminates without
+/// consuming further input.
+fn build_recover_repeat(inner: Pattern, charset: Option<CharSet>) -> Pattern {
+    let body = match charset {
+        None => Pattern::AnyChar,
+        Some(cs) => Pattern::Sequence(vec![
+            Pattern::Repeat(Box::new(Pattern::Sequence(vec![
+                Pattern::NotPredicate(Box::new(Pattern::CharClass(cs))),
+                Pattern::AnyChar,
+            ]))),
+            Pattern::CharClass(cs),
+        ]),
+    };
+    let recovery = Pattern::Capture("recovery".into(), Box::new(body));
+    Pattern::Repeat(Box::new(Pattern::Catch {
+        inner: Box::new(inner),
+        label: "recovery".into(),
+        recovery: Box::new(recovery),
+    }))
 }

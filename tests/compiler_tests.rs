@@ -196,11 +196,18 @@ fn repeat_one_or_more() {
     );
 }
 
+/// Builds the desugared AST that `p*^` lowers to: a `Repeat` over a
+/// `Catch(inner, kind, @kind{.})`. Mirrors `build_recover_repeat` in
+/// `src/pegc/parser.rs`. The `kind` argument controls both the
+/// `Catch` label and the capture name — historically the parser
+/// always picked `"recovery"`, and tests parameterize to exercise the
+/// label/capture-interning pipeline.
 fn recover(inner: Pattern, kind: &str) -> Pattern {
-    Pattern::RecoverRepeat {
+    Pattern::Repeat(Box::new(Pattern::Catch {
         inner: Box::new(inner),
-        recovery_kind: kind.into(),
-    }
+        label: kind.into(),
+        recovery: Box::new(Pattern::Capture(kind.into(), Box::new(Pattern::AnyChar))),
+    }))
 }
 
 #[test]
@@ -266,8 +273,10 @@ fn recover_repeat_preserves_failed_inner_attempt_deepest_captures() {
     // only the byte where parsing actually broke (not the iteration's
     // whole baseline-to-failure window).
     //
-    // Kind interning order: RecoverRepeat enters before recursing into
-    // inner, so "recovery" interns first (id 0), "open" second (id 1).
+    // Kind interning order: `*^` desugars to `Repeat(Catch(inner,
+    // "recovery", @recovery{.}))`; the `Catch` arm compiles inner
+    // before the recovery body, so @open interns first (id 0) and
+    // @recovery second (id 1).
     let inner = Pattern::seq(vec![
         Pattern::Capture("open".into(), Box::new(Pattern::literal("a"))),
         Pattern::literal("b"),
@@ -279,9 +288,9 @@ fn recover_repeat_preserves_failed_inner_attempt_deepest_captures() {
     assert_eq!(
         r.captures,
         vec![
-            cap(1, 0, 1), // @open: re-materialized from the failed iteration's deepest reach
-            cap(0, 1, 2), // recovery: 'x' (Any(1) consumes from scoped_max_sp=1, not baseline_sp=0)
-            cap(1, 2, 3), // @open: the successful 'a' at sp=2
+            cap(0, 0, 1), // @open: re-materialized from the failed iteration's deepest reach
+            cap(1, 1, 2), // recovery: 'x' (Any(1) consumes from scoped_max_sp=1, not baseline_sp=0)
+            cap(0, 2, 3), // @open: the successful 'a' at sp=2
         ],
         "the failed inner attempt's deepest-progress @open capture survives into the result",
     );
@@ -386,14 +395,15 @@ fn recover_repeat_empty_capture_in_failed_inner_attempt_is_dropped() {
     let r = run_pattern(&p, b"by");
     assert!(r.complete);
     assert_eq!(r.matched, 2);
-    // Kind interning order: "recovery" (id 0), "x" (id 1). No @x
+    // Kind interning order: "x" (id 0, inner compiled first), then
+    // "recovery" (id 1, the desugared `@recovery{.}` body). No @x
     // captures survive — both iterations produced only empty ones at
     // their baseline sp, which don't enter the watermark.
     assert_eq!(
         r.captures,
         vec![
-            cap(0, 0, 1), // recovery: 'b'
-            cap(0, 1, 2), // recovery: 'y'
+            cap(1, 0, 1), // recovery: 'b'
+            cap(1, 1, 2), // recovery: 'y'
         ],
     );
 }
@@ -424,13 +434,14 @@ fn recover_repeat_drops_unclosed_capture_from_failed_inner_attempt() {
     let r = run_pattern(&p, b"abx");
     assert!(r.complete);
     assert_eq!(r.matched, 3);
-    // Kind interning order: "recovery" (id 0) interns first when
-    // RecoverRepeat is compiled, "kw" (id 1) second. Recovery byte is
-    // 'x' at sp=2 (Any(1) consumes from `scoped_max_sp`, not the
-    // iteration baseline). No @kw capture appears.
+    // Kind interning order: "kw" (id 0, inner compiled first), then
+    // "recovery" (id 1, from the desugared `@recovery{.}` body).
+    // Recovery byte is 'x' at sp=2 (Any(1) consumes from
+    // `scoped_max_sp`, not the iteration baseline). No @kw capture
+    // appears.
     assert_eq!(
         r.captures,
-        vec![cap(0, 2, 3)],
+        vec![cap(1, 2, 3)],
         "an unclosed @kw from a failed inner attempt must not phantom-close at scoped_max_sp"
     );
 }
@@ -650,17 +661,14 @@ fn label_interning_dedups_across_catches() {
 
 #[test]
 fn label_intern_shared_with_recover_repeat_recovery_kind() {
-    // `*^` interns its `recovery_kind` as a label too, so a catch
-    // using the same string lands on the same `LabelId`. Confirms
-    // the intern is by name, not by emission site — useful so
-    // `pegdb explain-recoveries` can cluster `*^` recoveries and
-    // matching `^lbl` catches under one bucket when the author
-    // chose identical names.
+    // `*^` desugars to a `Catch` labeled with its `recovery_kind`,
+    // so a hand-written catch using the same string lands on the
+    // same `LabelId`. Confirms the intern is by name, not by
+    // emission site — useful so `pegdb explain-recoveries` can
+    // cluster `*^` recoveries and matching `^lbl` catches under one
+    // bucket when the author chose identical names.
     let p = Pattern::seq(vec![
-        Pattern::RecoverRepeat {
-            inner: Box::new(Pattern::literal("a")),
-            recovery_kind: "shared".into(),
-        },
+        recover(Pattern::literal("a"), "shared"),
         catch(Pattern::literal("b"), "shared", Pattern::literal("c")),
     ]);
     let prog = compile_pattern(&p);
@@ -855,54 +863,128 @@ fn repeat_emits_partial_commit() {
 
 #[test]
 fn recover_repeat_emits_choice_commit_skeleton() {
+    // `*^` desugars to `(p ^recovery @recovery{.})*` at parse time —
+    // the emit is the natural concatenation of the `Repeat` arm's
+    // Choice/PartialCommit skeleton and the `Catch` arm's
+    // RecoverScope/Choice/RecoverToScopedMax/RecoverScopeEnd shape.
+    //
+    //   Choice exit              ; Repeat outer Backtrack
+    // body: RecoverScopeBegin     ; Catch start
+    //       Choice rec            ; Catch inner Backtrack
+    //       Char 'a'
+    //       Commit done           ; on inner success
+    // rec:  RecoverToScopedMax    ; on inner failure: splice + advance
+    //       CaptureBegin recovery
+    //       Any(1)
+    //       CaptureEnd
+    // done: RecoverScopeEnd
+    //       PartialCommit body    ; loop edge — reuses outer Backtrack
+    // exit: End
+    //
+    // The EOF clean-exit edge that the old `RecoverRepeat` shape
+    // emitted explicitly is now implicit: when the recovery body's
+    // `Any(1)` fails at EOF, `fail()` unwinds past the
+    // `RecoverScope` frame and lands on the Repeat's `Choice exit`
+    // Backtrack — the loop terminates cleanly.
     let p = recover(Pattern::literal("a"), "recovery");
     let prog = compile_pattern(&p);
-    // loop_top:   RecoverScopeBegin
-    //             Choice rec
-    //             Char 'a'
-    //             Commit next_iter           ; pops outer Backtrack
-    // rec:        Choice exit_inner          ; pre-materialization baseline
-    //             RecoverToScopedMax         ; splice & advance sp
-    //             CaptureBegin recovery
-    //             Any(1)
-    //             CaptureEnd
-    //             Commit next_iter           ; pops inner Backtrack
-    // next_iter:  RecoverScopeEnd            ; pops RecoverScope
-    //             Jump loop_top
-    // exit_inner: RecoverScopeEnd            ; EOF exit edge
-    //             End
-    //
-    // Per #16: the RecoverScopeBegin/RecoverScopeEnd pair tracks the
-    // iteration-local farthest-failure watermark; RecoverToScopedMax
-    // splices those captures into the live buffer before the recovery
-    // byte. The inner Choice is pushed *before* RecoverToScopedMax so
-    // its Backtrack captures the pre-materialization baseline — that
-    // way an EOF inside the recovery's Any(1) discards the
-    // materialization instead of leaking a failed attempt's captures
-    // out as a clean parse. Success and recovery-success edges share
-    // the `next_iter` epilogue. Fresh Choice/Commit per iteration (not
-    // PartialCommit) so each retry's backtrack baseline is at the
-    // advanced sp — see src/pegvm/README.md invariant 1.
     assert_eq!(
         prog.code,
         vec![
-            Instruction::RecoverScopeBegin(LabelId(0)), // loop_top
-            Instruction::Choice(Label(4)),              // → rec
-            Instruction::Char(b'a'),                    // <inner>
-            Instruction::Commit(Label(10)),             // → next_iter
-            Instruction::Choice(Label(12)),             // rec: → exit_inner
-            Instruction::RecoverToScopedMax,
-            Instruction::CaptureBegin(CaptureKind(0)), // recovery
+            Instruction::Choice(Label(11)),             // → exit
+            Instruction::RecoverScopeBegin(LabelId(0)), // body: Catch start
+            Instruction::Choice(Label(5)),              // → rec
+            Instruction::Char(b'a'),
+            Instruction::Commit(Label(9)),   // → done
+            Instruction::RecoverToScopedMax, // rec:
+            Instruction::CaptureBegin(CaptureKind(0)),
             Instruction::Any(1),
             Instruction::CaptureEnd,
-            Instruction::Commit(Label(10)), // → next_iter
-            Instruction::RecoverScopeEnd,   // next_iter: pop scope
-            Instruction::Jump(Label(0)),    // → loop_top
-            Instruction::RecoverScopeEnd,   // exit_inner: EOF exit edge
-            Instruction::End,
+            Instruction::RecoverScopeEnd,         // done:
+            Instruction::PartialCommit(Label(1)), // → body
+            Instruction::End,                     // exit:
         ]
     );
     assert_eq!(prog.capture_kinds, vec!["recovery".to_string()]);
+    assert_eq!(prog.label_kinds, vec!["recovery".to_string()]);
+}
+
+/// Builds the desugared AST that `p*^[cs]` lowers to: a `Repeat` over
+/// `Catch(inner, "recovery", @recovery{(!cs .)* cs})`. Mirrors
+/// `build_recover_repeat` in `src/pegc/parser.rs`.
+fn sync_set_recover(inner: Pattern, charset: CharSet) -> Pattern {
+    let skip_loop = Pattern::Repeat(Box::new(Pattern::Sequence(vec![
+        Pattern::NotPredicate(Box::new(Pattern::CharClass(charset))),
+        Pattern::AnyChar,
+    ])));
+    let recovery_body = Pattern::Sequence(vec![skip_loop, Pattern::CharClass(charset)]);
+    Pattern::Repeat(Box::new(Pattern::Catch {
+        inner: Box::new(inner),
+        label: "recovery".into(),
+        recovery: Box::new(Pattern::Capture("recovery".into(), Box::new(recovery_body))),
+    }))
+}
+
+#[test]
+fn sync_set_emits_skip_to_delim_loop() {
+    // The recovery body of `*^[;]` is `@recovery{(![;] .)* [;]}` —
+    // a skip-until-delim loop followed by a delimiter consume, both
+    // wrapped in a single `recovery` capture. The skeleton verifies
+    // the structural pieces are present rather than nailing exact
+    // Label values (which would entangle the test with the host
+    // Catch/Repeat emit shape).
+    let semi = CharSet::from_bytes(b";");
+    let p = sync_set_recover(Pattern::literal("a"), semi);
+    let prog = compile_pattern(&p);
+    let has = |needle: &Instruction| prog.code.iter().any(|i| i == needle);
+    assert!(has(&Instruction::RecoverScopeBegin(LabelId(0))));
+    assert!(has(&Instruction::RecoverToScopedMax));
+    assert!(has(&Instruction::CaptureBegin(CaptureKind(0))));
+    assert!(has(&Instruction::Set(semi)));
+    assert!(prog
+        .code
+        .iter()
+        .any(|i| matches!(i, Instruction::FailTwice)));
+    assert_eq!(prog.capture_kinds, vec!["recovery".to_string()]);
+    assert_eq!(prog.label_kinds, vec!["recovery".to_string()]);
+}
+
+#[test]
+fn sync_set_one_recovery_capture_per_region() {
+    // Input `aXY;c` with `('a'/'c')*^[;]`: iter 1 matches 'a', iter 2
+    // fails on 'X', recovery skips "XY" then consumes ";" — one big
+    // recovery capture covering [1, 4]. Iter 3 matches 'c'.
+    let semi = CharSet::from_bytes(b";");
+    let p = sync_set_recover(
+        Pattern::choice(vec![Pattern::literal("a"), Pattern::literal("c")]),
+        semi,
+    );
+    let r = run_pattern(&p, b"aXY;c");
+    assert!(r.complete);
+    assert_eq!(r.matched, 5);
+    assert_eq!(
+        r.captures,
+        vec![cap(0, 1, 4)],
+        "exactly one recovery capture spanning the skipped region plus the delimiter",
+    );
+}
+
+#[test]
+fn sync_set_terminates_cleanly_at_eof_without_delim() {
+    // Input `aXY` (no `;`): iter 1 matches 'a', iter 2 fails on 'X',
+    // recovery's `(!; .)* ;` skips XY then expects ';' at EOF → fails.
+    // The catch fails, the outer `*` terminates. The parse is
+    // structurally complete (the `End` after `*` always succeeds),
+    // but `matched` reports only the bytes the loop committed: 'a'.
+    let semi = CharSet::from_bytes(b";");
+    let p = sync_set_recover(Pattern::literal("a"), semi);
+    let r = run_pattern(&p, b"aXY");
+    assert!(r.complete);
+    assert_eq!(r.matched, 1, "must not advance past the unrecoverable tail");
+    assert!(
+        r.captures.is_empty(),
+        "no recovery span emitted when the delimiter is missing"
+    );
 }
 
 #[test]
