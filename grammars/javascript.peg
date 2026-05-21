@@ -26,7 +26,9 @@
 #   - TypeScript type annotations.
 #
 # Recovery: top-level uses `*^` so malformed statements don't abort
-# the whole file.
+# the whole file; `block` uses a `^block_close` catch so malformed
+# function/control-flow bodies resync at the closing `}` instead of
+# failing the enclosing statement.
 
 js_file        <- ws (stmt ws)*^ !.
 
@@ -147,7 +149,7 @@ continue_stmt  <- @keyword{'continue'} (ws @variable{ident})? ws opt_semi
 debugger_stmt  <- @keyword{'debugger'} ws opt_semi
 labeled_stmt   <- @variable{ident} ws @punctuation{':'} ws stmt
 block_stmt     <- block
-block          <- @punctuation{'{'} ws (stmt ws)* @punctuation{'}'}
+block          <- @punctuation{'{'} ws ((stmt ws)* @punctuation{'}'} ^block_close @recovery{(!'}' .)*} @punctuation{'}'})
 
 # --- Function params and patterns -------------------------------------
 

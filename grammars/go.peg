@@ -21,7 +21,9 @@
 #     lowercase → @variable or @function by context).
 #
 # Recovery: top-level uses `*^` so malformed top-level declarations
-# don't abort the whole file.
+# don't abort the whole file; `block` uses a `^block_close` catch so
+# malformed function/control-flow bodies resync at the closing `}`
+# instead of failing the enclosing declaration.
 
 go_file       <- ws package_clause ws (import_decl ws)* (top_decl ws)*^ !.
 
@@ -118,7 +120,7 @@ qualified_ident <- ident (@punctuation{'.'} ident)?
 
 # --- Statements ------------------------------------------------------
 
-block         <- @punctuation{'{'} ws (stmt ws)* @punctuation{'}'}
+block         <- @punctuation{'{'} ws ((stmt ws)* @punctuation{'}'} ^block_close @recovery{(!'}' .)*} @punctuation{'}'})
 
 stmt          <- decl ws opt_semi
                / block

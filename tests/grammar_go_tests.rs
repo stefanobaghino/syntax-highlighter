@@ -307,6 +307,22 @@ fn recovery_absorbs_malformed_item() {
 }
 
 #[test]
+fn recovery_absorbs_malformed_block_body() {
+    // `block`'s `^block_close` catch resyncs at the closing `}` when
+    // the body contains garbage before the brace.
+    let input = "package main\nfunc main() { x := 1; @@@; }\n";
+    let (matched, caps, kinds, complete) = run(input);
+    assert!(complete, "block_close catch should keep parse complete");
+    assert_eq!(matched, input.len());
+    let k = kinds_for(&caps, &kinds);
+    assert!(
+        k.contains(&"recovery"),
+        "expected a @recovery capture inside the block, got: {:?}",
+        k
+    );
+}
+
+#[test]
 fn blank_lines_between_top_decls_emit_no_recovery() {
     // Regression: file-root `(top_decl)*^` used to drop inter-iteration ws,
     // sending blank-line bytes through the recovery byte-eater. See #71.

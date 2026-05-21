@@ -1201,3 +1201,101 @@ fn window_captures_include_over_and_partition() {
         "expected >=7 keywords, got {kw_count}: {ks:?}"
     );
 }
+
+#[test]
+fn result_column_catch_collapses_garbled_expression_into_one_span() {
+    // `result_column` carries a `^bad_column` catch with a recovery
+    // body that skips up to (without consuming) the next `,`, `)`,
+    // `;`, or SELECT-clause keyword. A garbled column expression
+    // therefore collapses into a single `@recovery` capture, and
+    // following columns + the FROM clause keep their normal
+    // captures instead of being scattered through byte-by-byte
+    // recovery.
+    let input = "SELECT x, %%%, z, w FROM u WHERE z=1;\n";
+    let (matched, caps, kinds, complete) = run(input);
+    assert!(complete, "catch should keep the parse complete");
+    assert_eq!(matched, input.len());
+    let recovery_spans = spans_for(&caps, &kinds, "recovery", input);
+    assert_eq!(
+        recovery_spans,
+        vec!["%%%"],
+        "expected one recovery span covering the garbled column expression"
+    );
+    // The columns after the garbled one and the FROM/WHERE
+    // keywords should still parse normally.
+    let keyword_spans = spans_for(&caps, &kinds, "keyword", input);
+    for kw in ["SELECT", "FROM", "WHERE"] {
+        assert!(
+            keyword_spans.contains(&kw),
+            "expected `{kw}` keyword to be captured; got keywords {keyword_spans:?}"
+        );
+    }
+}
+
+#[test]
+fn result_column_catch_handles_unsupported_in_table_syntax() {
+    // SQLite accepts `column IN <table-name>` (set-membership against
+    // a one-column table) but this grammar's expression rules only
+    // support `IN (subquery|list)`. The `result_column` boundary
+    // lookahead turns the partial parse (`blob.rid` matches but `IN
+    // leaf` is dangling) into a `^bad_column` failure: the catch
+    // produces a single `recovery` span for `leaf AS leaf` and the
+    // surrounding column list keeps its normal captures.
+    let input = "INSERT OR IGNORE INTO timeline SELECT blob.rid AS blobRid, blob.rid IN leaf AS leaf, bgcolor AS bgColor FROM event;\n";
+    let (matched, caps, kinds, complete) = run(input);
+    assert!(complete, "catch should keep the parse complete");
+    assert_eq!(matched, input.len());
+    let recovery_spans = spans_for(&caps, &kinds, "recovery", input);
+    assert_eq!(
+        recovery_spans,
+        vec!["leaf AS leaf"],
+        "expected one recovery span covering the unsupported `IN <table-name>` tail"
+    );
+    // The `IN` keyword survives the failed attempt via the deepest-
+    // reach splice, and the following column `bgcolor AS bgColor`
+    // keeps its normal captures.
+    let kw_spans = spans_for(&caps, &kinds, "keyword", input);
+    assert!(
+        kw_spans.contains(&"IN"),
+        "expected `IN` keyword from deepest-reach splice; got {kw_spans:?}"
+    );
+    let var_spans = spans_for(&caps, &kinds, "variable", input);
+    assert!(
+        var_spans.contains(&"bgcolor"),
+        "expected `bgcolor` to parse normally after recovery; got {var_spans:?}"
+    );
+}
+
+#[test]
+fn where_clause_catch_recovers_at_clause_boundary() {
+    // Mirror of the `result_column` catch but on `where_clause`:
+    // SQLite accepts `NOT IN <table-name>`, this grammar doesn't,
+    // and the partial parse leaves `NOT IN phantom ORDER BY …`
+    // dangling. The `^bad_where` catch resyncs at the next clause
+    // keyword (here `ORDER`) so the trailing `ORDER BY isprim DESC`
+    // parses normally instead of being absorbed into recovery.
+    let input = "SELECT pid FROM plink WHERE cid=42 AND pid NOT IN phantom ORDER BY isprim DESC;\n";
+    let (matched, caps, kinds, complete) = run(input);
+    assert!(complete, "catch should keep the parse complete");
+    assert_eq!(matched, input.len());
+    let recovery_spans = spans_for(&caps, &kinds, "recovery", input);
+    assert_eq!(
+        recovery_spans.len(),
+        1,
+        "expected exactly one recovery span; got {recovery_spans:?}"
+    );
+    // ORDER BY and its tail should highlight normally after the
+    // recovery resyncs.
+    let kw_spans = spans_for(&caps, &kinds, "keyword", input);
+    for kw in ["NOT", "IN", "ORDER", "BY", "DESC"] {
+        assert!(
+            kw_spans.contains(&kw),
+            "expected `{kw}` keyword to be captured; got {kw_spans:?}"
+        );
+    }
+    let var_spans = spans_for(&caps, &kinds, "variable", input);
+    assert!(
+        var_spans.contains(&"isprim"),
+        "expected `isprim` to parse normally after recovery; got {var_spans:?}"
+    );
+}

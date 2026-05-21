@@ -36,10 +36,25 @@
 # column_ref; paren_expr vs scalar subquery) and in the CREATE-family
 # top-level alternatives (CREATE [TEMP] [VIRTUAL] TABLE / INDEX / VIEW
 # / TRIGGER). These patterns motivate the memoization layer.
+#
+# Recovery: top-level uses `*^[;]` sync-set recovery, anchored by
+# inner `^label` catches at the structural boundaries where this
+# grammar's partial parses can leave content dangling — currently
+# `^bad_column` on `result_column` and `^bad_where` on
+# `where_clause`. Each catch resyncs at the next `,` / `)` / clause
+# keyword without consuming it, so a malformed sub-expression
+# collapses into one labelled `recovery` span and the surrounding
+# columns / clauses keep their normal captures. Statements that
+# fail outside these catches fall through to the top-level
+# `*^[;]`, producing one recovery span up to the next `;`. The
+# pattern extends naturally to other list rules (`order_item`,
+# `update_set_item`, `values_row` exprs, `func_args`, `in_args`,
+# `group_clause` exprs) — add catches there as new failure modes
+# show up.
 
 # --- Top level --------------------------------------------------------
 
-sql_file   <- ws (statement stmt_sep?)*^ ws !.
+sql_file   <- (ws statement stmt_sep?)*^[;] ws !.
 stmt_sep   <- ws @punctuation{';'} ws
 statement       <- explain_stmt / statement_body
 statement_body  <- select_stmt
@@ -82,7 +97,19 @@ select_core    <- kw_select (ws (kw_distinct / kw_all))? ws result_list
                   (ws window_clause)?
 
 result_list    <- result_column (ws @punctuation{','} ws result_column)*
-result_column  <- table_star / @operator{'*'} / aliased_expr
+# A column expression that didn't reach a known boundary is treated
+# as malformed: the trailing `&(ws result_column_boundary)` lookahead
+# makes the inner branch fail when, e.g., `blob.rid IN leaf` parses
+# only `blob.rid` and leaves `IN leaf` dangling. The `^bad_column`
+# catch then resyncs by skipping (without consuming) up to the next
+# `,` / `)` / `;` or SELECT-clause keyword.
+result_column  <- ((table_star / @operator{'*'} / aliased_expr) &(ws result_column_boundary))
+                  ^bad_column @recovery{(!result_column_boundary .)*}
+result_column_boundary <- @punctuation{','} / @punctuation{')'} / @punctuation{';'}
+                        / kw_from / kw_where / kw_group / kw_having
+                        / kw_order / kw_limit / kw_offset / kw_window
+                        / kw_union / kw_intersect / kw_except
+                        / !.
 table_star     <- @type{bare_ident_nonkw} @punctuation{'.'} @operator{'*'}
 aliased_expr   <- expr (ws kw_as ws @variable{bare_ident_nonkw}
                       / ws @variable{bare_ident_nonkw})?
@@ -110,7 +137,19 @@ join_constraint<- kw_on ws expr
                 / kw_using ws @punctuation{'('} ws ident_list ws @punctuation{')'}
 ident_list     <- @variable{bare_ident_nonkw} (ws @punctuation{','} ws @variable{bare_ident_nonkw})*
 
-where_clause   <- kw_where ws expr
+# Like `result_column`, `where_clause` uses a boundary lookahead to
+# turn partial-parse leftovers (e.g. `WHERE x NOT IN phantom ORDER BY
+# …` where `NOT IN <ident>` is unsupported) into a `^bad_where`
+# failure. The catch sits *inside* the `kw_where` match so a missing
+# WHERE keyword still fails the rule cleanly (no spurious empty
+# recovery captures on clean SELECTs).
+where_clause   <- kw_where ws ((expr &(ws where_clause_boundary))
+                               ^bad_where @recovery{(!where_clause_boundary .)*})
+where_clause_boundary <- @punctuation{')'} / @punctuation{';'}
+                       / kw_group / kw_having / kw_order / kw_limit
+                       / kw_offset / kw_window / kw_returning
+                       / kw_union / kw_intersect / kw_except
+                       / !.
 group_clause   <- kw_group ws kw_by ws expr (ws @punctuation{','} ws expr)*
 having_clause  <- kw_having ws expr
 

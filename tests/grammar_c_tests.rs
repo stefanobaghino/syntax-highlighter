@@ -327,3 +327,19 @@ fn recovery_absorbs_malformed_item() {
         k
     );
 }
+
+#[test]
+fn recovery_absorbs_malformed_block_body() {
+    // `compound_stmt`'s `^block_close` catch resyncs at the closing `}`
+    // when the body contains garbage before the brace.
+    let input = "int main(void) { x = 1; @@@; return 0; }\n";
+    let (matched, caps, kinds, complete) = run(input);
+    assert!(complete, "block_close catch should keep parse complete");
+    assert_eq!(matched, input.len());
+    let k = kinds_for(&caps, &kinds);
+    assert!(
+        k.contains(&"recovery"),
+        "expected a @recovery capture inside the block, got: {:?}",
+        k
+    );
+}
