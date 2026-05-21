@@ -43,3 +43,8 @@ harness = false
 name = "follow_set"
 path = "benches/follow_set.rs"
 harness = false
+
+[[bench]]
+name = "lint"
+path = "benches/lint.rs"
+harness = false

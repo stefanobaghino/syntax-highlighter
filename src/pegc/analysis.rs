@@ -479,3 +479,499 @@ fn extend_follow(
         }
     }
 }
+
+// -- Partial-match-leniency lint -----------------------------------------
+
+/// The kind of lint that produced a [`LintFinding`]. Named even though
+/// v1 has a single variant, so future lints can be added as discriminated
+/// kinds without restructuring the API.
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+pub enum LintKind {
+    PartialMatchLeniency,
+}
+
+/// One static-lint finding: a rule that can succeed on a prefix of its
+/// expected match, called from a site that does not anchor the boundary.
+///
+/// The fix shape (per PR #101) is a `&(ws <boundary_rule>)` lookahead at
+/// the caller's site; once #103 lands, that lookahead is rewritten into
+/// the boundary-anchored-catch operator.
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+pub struct LintFinding {
+    pub kind: LintKind,
+    /// The rule whose body has a trailing-nullable position; the lenient one.
+    pub rule: String,
+    /// The rule whose body contains an unanchored call site to [`Self::rule`].
+    pub caller: String,
+}
+
+/// Static lint for the partial-match-leniency antipattern from PR #101.
+///
+/// A rule `R` is flagged at a call site in some rule `R'` when:
+///
+/// 1. R has a non-empty `trailing_first` — there's a tail-position
+///    `Optional` in R's body whose FIRST is non-empty.
+/// 2. Walking outward from the call site through R's call chain, no
+///    "validator" rejects bytes that R's trailing could have consumed.
+///    A validator is either an `AndPredicate` (explicit lookahead anchor)
+///    or a non-nullable consumer whose FIRST is disjoint from
+///    `trailing_first(R)` (would fail if R left wrong bytes).
+///
+/// The reachability analysis differs from a local FIRST/FOLLOW overlap
+/// check: it propagates outward through call sites of R's enclosing
+/// rule, looking for the first hard validator. Only sites where no
+/// validator exists anywhere along the outward chain are flagged.
+///
+/// Findings are returned sorted by `(rule, caller)`.
+pub fn lint_partial_match(grammar: &Grammar) -> Vec<LintFinding> {
+    let nullable = compute_nullable(&grammar.rules);
+
+    let trailing: HashMap<String, FollowSet> = grammar
+        .rules
+        .iter()
+        .map(|(name, body)| (name.clone(), trailing_first(body, &nullable)))
+        .collect();
+
+    let mut findings: Vec<LintFinding> = Vec::new();
+    let mut rule_names: Vec<&String> = grammar.rules.keys().collect();
+    rule_names.sort();
+    let ctx = LintCtx {
+        grammar,
+        nullable: &nullable,
+        trailing: &trailing,
+    };
+    for caller in rule_names {
+        let body = &grammar.rules[caller];
+        let mut cont_stack: Vec<&[Pattern]> = Vec::new();
+        walk_for_call_sites(body, caller, &mut cont_stack, false, &ctx, &mut findings);
+    }
+
+    findings.sort();
+    findings.dedup();
+    findings
+}
+
+/// Immutable shared context for the lint's reachability walk.
+struct LintCtx<'a> {
+    grammar: &'a Grammar,
+    nullable: &'a HashSet<String>,
+    trailing: &'a HashMap<String, FollowSet>,
+}
+
+/// FIRST set of any trailing-Optional position in `pat`.
+///
+/// Restricted to `Optional` (not `Repeat` / `RepeatOne`): operator-chain
+/// Repeats (`expr (binop expr)*`) are intentionally greedy and don't
+/// exhibit the silent-leniency shape from PR #101, where a trailing
+/// `(modifier)?` could fail to match and leave bytes the caller didn't
+/// validate.
+///
+/// - Pattern is `Optional(inner)`: returns FIRST(inner).
+/// - Pattern is a `Sequence`: walks items from the end; for each
+///   trailing nullable item, includes FIRST only if the item is
+///   directly an `Optional` (transparent through `Capture`/`Catch`).
+///   Stops at the first non-nullable item.
+/// - `Capture(_, inner)` / `Catch { inner, .. }`: recurse into inner.
+/// - Otherwise: empty.
+fn trailing_first(pat: &Pattern, nullable: &HashSet<String>) -> FollowSet {
+    let mut out = FollowSet::new();
+    match pat {
+        Pattern::Optional(inner) => {
+            out.extend(pattern_first(inner, nullable));
+        }
+        Pattern::Sequence(items) => {
+            for item in items.iter().rev() {
+                if pattern_nullable(item, nullable) {
+                    if is_trailing_optional_like(item) {
+                        out.extend(pattern_first(item, nullable));
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
+        Pattern::Capture(_, inner) => {
+            out.extend(trailing_first(inner, nullable));
+        }
+        Pattern::Catch { inner, .. } => {
+            out.extend(trailing_first(inner, nullable));
+        }
+        _ => {}
+    }
+    out
+}
+
+/// Is `pat` an `Optional` (possibly wrapped in transparent `Capture` /
+/// `Catch`)? Used to restrict trailing-nullable detection to the
+/// `(modifier)?` shape from PR #101, excluding `Repeat` operator
+/// chains.
+fn is_trailing_optional_like(pat: &Pattern) -> bool {
+    match pat {
+        Pattern::Optional(_) => true,
+        Pattern::Capture(_, inner) => is_trailing_optional_like(inner),
+        Pattern::Catch { inner, .. } => is_trailing_optional_like(inner),
+        _ => false,
+    }
+}
+
+/// Walk `pat` looking for `NonTerminal` call sites to rules with
+/// non-empty `trailing_first`. Maintains a stack of `continuations` —
+/// each frame is the slice of patterns sibling-after the current
+/// position in some enclosing `Sequence`. At each call site, decide
+/// whether the leniency is contained (validated outward) by examining
+/// the continuation stack and recursively descending into call sites
+/// of the enclosing rule when the stack is exhausted.
+fn walk_for_call_sites<'a>(
+    pat: &'a Pattern,
+    caller: &str,
+    continuations: &mut Vec<&'a [Pattern]>,
+    inside_catch: bool,
+    ctx: &LintCtx<'a>,
+    findings: &mut Vec<LintFinding>,
+) {
+    match pat {
+        Pattern::Literal(_) | Pattern::CharClass(_) | Pattern::AnyChar => {}
+        Pattern::NonTerminal(name) => {
+            let Some(t) = ctx.trailing.get(name) else {
+                return;
+            };
+            if t.is_empty() {
+                return;
+            }
+            if !leniency_reaches_unguarded(
+                t,
+                caller,
+                continuations,
+                inside_catch,
+                ctx,
+                &mut HashSet::new(),
+            ) {
+                return;
+            }
+            findings.push(LintFinding {
+                kind: LintKind::PartialMatchLeniency,
+                rule: name.clone(),
+                caller: caller.to_string(),
+            });
+        }
+        Pattern::Sequence(items) => {
+            for i in 0..items.len() {
+                continuations.push(&items[i + 1..]);
+                walk_for_call_sites(
+                    &items[i],
+                    caller,
+                    continuations,
+                    inside_catch,
+                    ctx,
+                    findings,
+                );
+                continuations.pop();
+            }
+        }
+        Pattern::OrderedChoice(alts) => {
+            for alt in alts {
+                walk_for_call_sites(alt, caller, continuations, inside_catch, ctx, findings);
+            }
+        }
+        Pattern::Optional(inner)
+        | Pattern::Capture(_, inner)
+        | Pattern::Repeat(inner)
+        | Pattern::RepeatOne(inner) => {
+            walk_for_call_sites(inner, caller, continuations, inside_catch, ctx, findings);
+        }
+        Pattern::NotPredicate(inner) | Pattern::AndPredicate(inner) => {
+            let mut isolated: Vec<&[Pattern]> = Vec::new();
+            walk_for_call_sites(inner, caller, &mut isolated, inside_catch, ctx, findings);
+        }
+        Pattern::Catch {
+            inner, recovery, ..
+        } => {
+            // Inside the Catch's `inner`: leniency that leaks past `inner`
+            // is absorbed by `recovery` (the recovery body fires whenever
+            // the next outer-context matching step fails on the leftover).
+            walk_for_call_sites(inner, caller, continuations, true, ctx, findings);
+            let mut isolated: Vec<&[Pattern]> = Vec::new();
+            walk_for_call_sites(recovery, caller, &mut isolated, false, ctx, findings);
+        }
+    }
+}
+
+/// Returns `true` iff bytes that `target_trailing` could match can reach
+/// an unguarded position from the current continuation stack outward
+/// through call sites of `caller`. "Unguarded" means no `AndPredicate`
+/// anchor and no non-nullable consumer with a FIRST disjoint from
+/// `target_trailing` is encountered along the way.
+fn leniency_reaches_unguarded(
+    target_trailing: &FollowSet,
+    caller: &str,
+    continuations: &[&[Pattern]],
+    inside_catch: bool,
+    ctx: &LintCtx<'_>,
+    visited_callers: &mut HashSet<String>,
+) -> bool {
+    for frame in continuations.iter().rev() {
+        match scan_frame_for_validator(frame, target_trailing, ctx.nullable) {
+            FrameOutcome::Validated => {
+                // A non-Catch validator only saves the call site if we
+                // haven't already passed through a Catch absorber on the
+                // path — a Catch's recovery body would consume the
+                // leniency bytes before a downstream validator fires.
+                if inside_catch {
+                    continue;
+                }
+                return false;
+            }
+            FrameOutcome::Anchored => return false,
+            FrameOutcome::PassedThrough => continue,
+        }
+    }
+
+    if !visited_callers.insert(caller.to_string()) {
+        return true;
+    }
+
+    let mut rule_names: Vec<&String> = ctx.grammar.rules.keys().collect();
+    rule_names.sort();
+
+    if caller == ctx.grammar.start && !target_trailing.contains(&FollowElement::Eof) {
+        visited_callers.remove(caller);
+        return inside_catch;
+    }
+
+    let mut found_call_site = false;
+    for other_rule in rule_names {
+        let body = &ctx.grammar.rules[other_rule];
+        let mut local_findings = false;
+        let mut new_continuations: Vec<&[Pattern]> = Vec::new();
+        let probe = CallsiteProbe {
+            target_caller: caller,
+            target_trailing,
+            in_rule: other_rule,
+        };
+        if find_callsite_unguarded(
+            body,
+            &probe,
+            &mut new_continuations,
+            inside_catch,
+            ctx,
+            visited_callers,
+            &mut local_findings,
+        ) {
+            visited_callers.remove(caller);
+            return true;
+        }
+        found_call_site |= local_findings;
+    }
+    visited_callers.remove(caller);
+
+    if !found_call_site {
+        return inside_catch;
+    }
+
+    false
+}
+
+/// Per-target parameters that don't change as we descend through the
+/// AST in `find_callsite_unguarded`. Bundled to keep the function
+/// signature tight.
+struct CallsiteProbe<'a> {
+    target_caller: &'a str,
+    target_trailing: &'a FollowSet,
+    in_rule: &'a str,
+}
+
+/// Walks the body of `in_rule` searching for occurrences of
+/// `target_caller` (a NonTerminal whose name matches). For each
+/// occurrence, sets the current continuations stack to reflect the
+/// position in `in_rule`'s body and recursively checks whether
+/// `target_trailing` reaches unguarded from there.
+///
+/// Returns `true` if any occurrence is unguarded. Sets
+/// `found_callsite` to true if at least one occurrence exists (so the
+/// caller can distinguish "no call sites at all" from "all call sites
+/// guarded").
+fn find_callsite_unguarded<'a>(
+    pat: &'a Pattern,
+    probe: &CallsiteProbe<'a>,
+    continuations: &mut Vec<&'a [Pattern]>,
+    inside_catch: bool,
+    ctx: &LintCtx<'a>,
+    visited_callers: &mut HashSet<String>,
+    found_callsite: &mut bool,
+) -> bool {
+    match pat {
+        Pattern::Literal(_) | Pattern::CharClass(_) | Pattern::AnyChar => false,
+        Pattern::NonTerminal(name) => {
+            if name != probe.target_caller {
+                return false;
+            }
+            *found_callsite = true;
+            leniency_reaches_unguarded(
+                probe.target_trailing,
+                probe.in_rule,
+                continuations,
+                inside_catch,
+                ctx,
+                visited_callers,
+            )
+        }
+        Pattern::Sequence(items) => {
+            for i in 0..items.len() {
+                continuations.push(&items[i + 1..]);
+                let leaked = find_callsite_unguarded(
+                    &items[i],
+                    probe,
+                    continuations,
+                    inside_catch,
+                    ctx,
+                    visited_callers,
+                    found_callsite,
+                );
+                continuations.pop();
+                if leaked {
+                    return true;
+                }
+            }
+            false
+        }
+        Pattern::OrderedChoice(alts) => {
+            for alt in alts {
+                if find_callsite_unguarded(
+                    alt,
+                    probe,
+                    continuations,
+                    inside_catch,
+                    ctx,
+                    visited_callers,
+                    found_callsite,
+                ) {
+                    return true;
+                }
+            }
+            false
+        }
+        Pattern::Optional(inner)
+        | Pattern::Capture(_, inner)
+        | Pattern::Repeat(inner)
+        | Pattern::RepeatOne(inner) => find_callsite_unguarded(
+            inner,
+            probe,
+            continuations,
+            inside_catch,
+            ctx,
+            visited_callers,
+            found_callsite,
+        ),
+        Pattern::NotPredicate(inner) | Pattern::AndPredicate(inner) => {
+            let mut isolated: Vec<&[Pattern]> = Vec::new();
+            find_callsite_unguarded(
+                inner,
+                probe,
+                &mut isolated,
+                inside_catch,
+                ctx,
+                visited_callers,
+                found_callsite,
+            )
+        }
+        Pattern::Catch {
+            inner, recovery, ..
+        } => {
+            if find_callsite_unguarded(
+                inner,
+                probe,
+                continuations,
+                true,
+                ctx,
+                visited_callers,
+                found_callsite,
+            ) {
+                return true;
+            }
+            let mut isolated: Vec<&[Pattern]> = Vec::new();
+            find_callsite_unguarded(
+                recovery,
+                probe,
+                &mut isolated,
+                false,
+                ctx,
+                visited_callers,
+                found_callsite,
+            )
+        }
+    }
+}
+
+enum FrameOutcome {
+    /// A validator was found in this frame: leniency is contained.
+    Validated,
+    /// An `AndPredicate` was found: explicit anchor.
+    Anchored,
+    /// The frame was entirely nullable / overlapping with target — walk
+    /// out further.
+    PassedThrough,
+}
+
+/// Scan one continuation frame (a slice of siblings after the current
+/// position in some Sequence) looking for a hard validator.
+fn scan_frame_for_validator(
+    frame: &[Pattern],
+    target_trailing: &FollowSet,
+    nullable: &HashSet<String>,
+) -> FrameOutcome {
+    for item in frame {
+        if matches!(item, Pattern::AndPredicate(_)) {
+            return FrameOutcome::Anchored;
+        }
+        if let Pattern::NotPredicate(inner) = item {
+            // `!P` succeeds iff P fails. It rejects bytes that match P.
+            // If FIRST(P) contains every element of target_trailing
+            // (target's possible leftover all matches P), then `!P`
+            // unconditionally rejects target's leftover — a validator.
+            // The common case is `!.` (end-of-input assertion), where
+            // FIRST(.) is the full alphabet and any non-empty
+            // target_trailing is subsumed.
+            let inner_first = pattern_first(inner, nullable);
+            if target_trailing
+                .iter()
+                .all(|t| element_subsumed_by(t, &inner_first))
+            {
+                return FrameOutcome::Validated;
+            }
+            // Otherwise it's a zero-width assertion that doesn't help;
+            // keep walking.
+            continue;
+        }
+        if !pattern_nullable(item, nullable) {
+            let item_first = pattern_first(item, nullable);
+            if item_first.is_disjoint(target_trailing) {
+                return FrameOutcome::Validated;
+            }
+            // Non-nullable consumer whose FIRST overlaps with target's
+            // trailing — the consumer doesn't reject what target could
+            // have left. It still consumes, so further siblings are
+            // beyond it; stop walking this frame.
+            return FrameOutcome::PassedThrough;
+        }
+        // Nullable item: walk past it.
+    }
+    FrameOutcome::PassedThrough
+}
+
+/// Returns true iff `elem` is "subsumed" by `set` — every byte that
+/// `elem` can match also can match some element of `set`. Used in
+/// NotPredicate validator analysis.
+///
+/// Conservative: treats `CharClass(full)` as subsuming everything,
+/// `AnyChar` similarly; otherwise checks for exact membership. Rule
+/// references and captures aren't expanded.
+fn element_subsumed_by(elem: &FollowElement, set: &FollowSet) -> bool {
+    let any_char = CharSet::full();
+    if set
+        .iter()
+        .any(|s| matches!(s, FollowElement::CharClass(cs) if *cs == any_char))
+    {
+        return true;
+    }
+    set.contains(elem)
+}
