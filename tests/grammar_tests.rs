@@ -62,15 +62,25 @@ fn postfix_operators() {
     );
 }
 
+/// Builds the desugared AST that `p*^` lowers to: a `Repeat` over a
+/// `Catch` whose recovery body is the supplied pattern wrapped in a
+/// capture named `recovery`. Mirrors `build_recover_repeat` in
+/// `src/pegc/parser.rs`. Used by the AST-shape assertions below.
+fn desugared_recover_repeat(inner: Pattern, recovery_body: Pattern) -> Pattern {
+    Pattern::Repeat(Box::new(Pattern::Catch {
+        inner: Box::new(inner),
+        label: "recovery".into(),
+        recovery: Box::new(Pattern::Capture("recovery".into(), Box::new(recovery_body))),
+    }))
+}
+
 #[test]
 fn recover_repeat_postfix_star_caret() {
+    // `p*^` desugars to `(p ^recovery @recovery{.})*` at parse time.
     let g = parse("r <- 'x'*^");
     assert_eq!(
         g.rules["r"],
-        Pattern::RecoverRepeat {
-            inner: Box::new(Pattern::literal("x")),
-            recovery_kind: "recovery".into(),
-        }
+        desugared_recover_repeat(Pattern::literal("x"), Pattern::AnyChar)
     );
 }
 
@@ -82,11 +92,79 @@ fn recover_repeat_postfix_plus_caret_lowers_to_seq() {
         g.rules["r"],
         Pattern::Sequence(vec![
             Pattern::literal("x"),
-            Pattern::RecoverRepeat {
-                inner: Box::new(Pattern::literal("x")),
-                recovery_kind: "recovery".into(),
-            },
+            desugared_recover_repeat(Pattern::literal("x"), Pattern::AnyChar),
         ])
+    );
+}
+
+#[test]
+fn sync_set_postfix_star_caret_charset() {
+    // `p*^[;]` desugars to `(p ^recovery @recovery{(![;] .)* [;]})*`.
+    let semi = CharSet::from_bytes(b";");
+    let g = parse("r <- 'x'*^[;]");
+    let skip_loop = Pattern::Repeat(Box::new(Pattern::Sequence(vec![
+        Pattern::NotPredicate(Box::new(Pattern::CharClass(semi))),
+        Pattern::AnyChar,
+    ])));
+    let recovery_body = Pattern::Sequence(vec![skip_loop, Pattern::CharClass(semi)]);
+    assert_eq!(
+        g.rules["r"],
+        desugared_recover_repeat(Pattern::literal("x"), recovery_body)
+    );
+}
+
+#[test]
+fn sync_set_postfix_plus_caret_charset() {
+    // `p+^[;]` lowers to `p (p*^[;])`.
+    let semi = CharSet::from_bytes(b";");
+    let g = parse("r <- 'x'+^[;]");
+    let skip_loop = Pattern::Repeat(Box::new(Pattern::Sequence(vec![
+        Pattern::NotPredicate(Box::new(Pattern::CharClass(semi))),
+        Pattern::AnyChar,
+    ])));
+    let recovery_body = Pattern::Sequence(vec![skip_loop, Pattern::CharClass(semi)]);
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Sequence(vec![
+            Pattern::literal("x"),
+            desugared_recover_repeat(Pattern::literal("x"), recovery_body),
+        ])
+    );
+}
+
+#[test]
+fn sync_set_requires_no_whitespace_before_bracket() {
+    // `*^ [;]` is `*^` (plain) followed by a separate atom `[;]` in
+    // the enclosing sequence, NOT a sync set. The whitespace breaks
+    // the postfix glue.
+    let g = parse("r <- 'x'*^ [;]");
+    let semi = CharSet::from_bytes(b";");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Sequence(vec![
+            desugared_recover_repeat(Pattern::literal("x"), Pattern::AnyChar),
+            Pattern::CharClass(semi),
+        ])
+    );
+}
+
+#[test]
+fn sync_set_accepts_negated_and_ranges() {
+    // The sync set parses via the same `parse_charclass` path as a
+    // normal `[...]` atom — ranges (`a-z`) and negation (`[^...]`)
+    // are both supported.
+    let g = parse("r <- 'x'*^[^a-z]");
+    let mut alpha = CharSet::empty();
+    alpha.add_range(b'a', b'z');
+    let neg_alpha = alpha.negate();
+    let skip_loop = Pattern::Repeat(Box::new(Pattern::Sequence(vec![
+        Pattern::NotPredicate(Box::new(Pattern::CharClass(neg_alpha))),
+        Pattern::AnyChar,
+    ])));
+    let recovery_body = Pattern::Sequence(vec![skip_loop, Pattern::CharClass(neg_alpha)]);
+    assert_eq!(
+        g.rules["r"],
+        desugared_recover_repeat(Pattern::literal("x"), recovery_body)
     );
 }
 
@@ -160,16 +238,14 @@ fn catch_is_left_associative() {
 
 #[test]
 fn catch_does_not_collide_with_star_caret() {
-    // `'x'*^` stays as RecoverRepeat (postfix with no whitespace
-    // between `*` and `^`). `'x'* ^lbl 'y'` is a Catch of Repeat over
-    // a separate recovery branch.
+    // `'x'*^` desugars to the recovery-loop AST (postfix with no
+    // whitespace between `*` and `^`). `'x'* ^lbl 'y'` is a Catch of
+    // Repeat over a separate recovery branch — whitespace before `^`
+    // breaks the postfix glue.
     let g = parse("a <- 'x'*^\nb <- 'x'* ^lbl 'y'");
     assert_eq!(
         g.rules["a"],
-        Pattern::RecoverRepeat {
-            inner: Box::new(Pattern::literal("x")),
-            recovery_kind: "recovery".into(),
-        }
+        desugared_recover_repeat(Pattern::literal("x"), Pattern::AnyChar)
     );
     assert_eq!(
         g.rules["b"],
@@ -384,12 +460,15 @@ fn end_to_end_recover_repeat_compile_run() {
     let r = VM::new(&prog.code, b"fooXXfoo").run();
     assert!(r.complete);
     assert_eq!(r.matched, 8);
-    // Capture-kind interning order in the bytecode: "recovery" first
-    // (RecoverRepeat enters before its inner), "kw" second.
-    assert_eq!(prog.capture_kinds, vec!["recovery", "kw"]);
+    // Capture-kind interning order in the bytecode: "kw" first (the
+    // desugared `Catch`'s inner is compiled before the recovery body),
+    // "recovery" second.
+    assert_eq!(prog.capture_kinds, vec!["kw", "recovery"]);
+    let kw = 0u16;
+    let recovery = 1u16;
     let kinds: Vec<u16> = r.captures.iter().map(|c| c.kind.0).collect();
     let spans: Vec<(usize, usize)> = r.captures.iter().map(|c| (c.start, c.end)).collect();
-    assert_eq!(kinds, vec![1, 0, 0, 1]);
+    assert_eq!(kinds, vec![kw, recovery, recovery, kw]);
     assert_eq!(spans, vec![(0, 3), (3, 4), (4, 5), (5, 8)]);
 }
 

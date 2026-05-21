@@ -14,23 +14,10 @@ pub enum Pattern {
     AndPredicate(Box<Pattern>),
     NonTerminal(String),
     Capture(String, Box<Pattern>),
-    /// Like `Repeat`, but resync past failures inside the loop by
-    /// consuming one byte under a capture tagged with `recovery_kind`
-    /// and retrying. At end of input the loop terminates cleanly.
-    ///
-    /// Inherits the empty-match livelock of `Repeat`: if `inner` ever
-    /// matches the empty string successfully, the enclosing loop spins
-    /// forever — same hazard as plain `p*`.
-    RecoverRepeat {
-        inner: Box<Pattern>,
-        recovery_kind: String,
-    },
     /// Try `inner`; on failure, materialize the failed attempt's
     /// deepest-reach captures (via `RecoverToScopedMax`) and run
-    /// `recovery` from that resync point. Reuses the `RecoverScope`
-    /// machinery from #16, minus the loop wrapper of `RecoverRepeat`.
-    /// If `recovery` also fails, the catch fails to its enclosing
-    /// backtrack.
+    /// `recovery` from that resync point. If `recovery` also fails,
+    /// the catch fails to its enclosing backtrack.
     ///
     /// The `label` is mandatory and serves as a diagnostic tag:
     /// `pegdb explain-recoveries` clusters firings by it so a grammar
@@ -39,6 +26,12 @@ pub enum Pattern {
     /// any anonymous failure of `inner`. Future overlays (`^!label`
     /// throws, `^_` or similar anonymous catch) are reserved
     /// syntactic slots; see `src/pegc/README.md`.
+    ///
+    /// The `*^` and `*^[charset]` postfix operators desugar to
+    /// `Repeat(Catch(inner, "recovery", @recovery{<body>}))` at parse
+    /// time — see `build_recover_repeat` in
+    /// [`crate::pegc::parser`]. There is no dedicated `RecoverRepeat`
+    /// AST variant any more.
     Catch {
         inner: Box<Pattern>,
         label: String,

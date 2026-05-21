@@ -53,12 +53,13 @@ enum StackEntry {
         return_addr: usize,
         seed: Option<LSeed>,
     },
-    /// Per-iteration tracking frame for `p*^` (`Pattern::RecoverRepeat`).
-    /// Pushed by `RecoverScopeBegin` at the top of each iteration and
-    /// popped by `RecoverScopeEnd` on every exit edge. Carries an
-    /// iteration-local analogue of the global `(max_sp, max_captures_len,
-    /// saved_lower, saved_above)` watermark so `RecoverToScopedMax` can
-    /// splice the failed inner attempt's deepest-progress captures back
+    /// Tracking frame for a `^label` catch (and, transitively, for each
+    /// iteration of the `*^` / `*^[cs]` desugar `(p ^recovery
+    /// @recovery{...})*`). Pushed by `RecoverScopeBegin` and popped by
+    /// `RecoverScopeEnd` on every exit edge. Carries an iteration-local
+    /// analogue of the global `(max_sp, max_captures_len, saved_lower,
+    /// saved_above)` watermark so `RecoverToScopedMax` can splice the
+    /// failed inner attempt's deepest-progress captures back
     /// into the live buffer before the recovery branch emits its byte.
     ///
     /// Without this frame, the outer `Choice` that lowers `*^` truncates
@@ -186,9 +187,8 @@ pub struct RecoveryDiagnostic {
     /// Resolvable via [`crate::pegvm::Program::label_kinds`]. Set from
     /// the `RecoverScopeBegin` instruction's payload — every recovery
     /// firing carries one (labeled catches use the author's label;
-    /// `*^` uses the intern of its `recovery_kind` string). Lets
-    /// `pegdb explain-recoveries` cluster recoveries by
-    /// `(rule_stack, label)`.
+    /// `*^` desugars to a catch labeled `"recovery"`). Lets `pegdb
+    /// explain-recoveries` cluster recoveries by `(rule_stack, label)`.
     pub label: LabelId,
 }
 
@@ -1750,13 +1750,19 @@ mod examined_max_tests {
         // position the loop *successfully* read must appear in
         // examined_max.
         let mut rules = HashMap::new();
+        // `*^` desugars to `(p ^recovery @recovery{.})*` — see
+        // `build_recover_repeat` in `src/pegc/parser.rs`.
         rule(
             &mut rules,
             "start",
-            Pattern::RecoverRepeat {
+            Pattern::Repeat(Box::new(Pattern::Catch {
                 inner: Box::new(Pattern::literal("ab")),
-                recovery_kind: "recovery".into(),
-            },
+                label: "recovery".into(),
+                recovery: Box::new(Pattern::Capture(
+                    "recovery".into(),
+                    Box::new(Pattern::AnyChar),
+                )),
+            })),
         );
         let prog = Grammar::new(rules, "start").compile().unwrap();
         let (result, _stats, memo) = VM::new(&prog.code, b"abxab")

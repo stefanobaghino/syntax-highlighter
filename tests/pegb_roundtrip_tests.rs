@@ -11,11 +11,9 @@
 //!    the low-level VM and the deep-module `Parser` surface.
 //! 4. Determinism: encoding twice yields byte-equal output.
 //!
-//! Sqlite is `#[ignore]`'d by default — it's the largest grammar
-//! (5 K+ instructions, 426 rules) and adds noticeable test latency.
-//! Run on demand via `cargo test --test pegb_roundtrip_tests --
-//! --ignored sqlite_roundtrips` to exercise the largest varint widths
-//! and the bigger end of the instruction stream.
+//! Sqlite is the largest bundled grammar (5 K+ instructions, 426
+//! rules) and exercises the largest varint widths and the bigger end
+//! of the instruction stream.
 
 use syntax_highlighter::parser::Parser;
 use syntax_highlighter::pegvm::VM;
@@ -143,7 +141,6 @@ fn rust_roundtrips() {
 }
 
 #[test]
-#[ignore = "sqlite is the largest bundled grammar (~5,600 instructions); run on demand"]
 fn sqlite_roundtrips() {
     assert_grammar(
         "sqlite",

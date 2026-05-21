@@ -259,8 +259,8 @@ pub enum Instruction {
     /// `RecoverToScopedMax` and `src/pegc/compiler.rs`.
     ///
     /// The `LabelId` tags the scope with the catch's diagnostic label.
-    /// `*^` emits this as the intern of its `recovery_kind` string so
-    /// every `RecoveryDiagnostic` carries a name. Used by `pegdb
+    /// `*^` / `*^[cs]` desugar to a catch labeled `"recovery"`, so every
+    /// `RecoveryDiagnostic` carries a name. Used by `pegdb
     /// explain-recoveries` to cluster recoveries by label alongside
     /// rule stack.
     RecoverScopeBegin(LabelId),
