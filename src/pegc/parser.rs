@@ -238,7 +238,8 @@ impl<'a> Parser<'a> {
                     if self.peek() == Some(b'^') {
                         self.pos += 1;
                         let charset = self.parse_optional_sync_set()?;
-                        atom = build_recover_repeat(atom, charset);
+                        let label = self.parse_optional_recovery_label()?;
+                        atom = build_recover_repeat(atom, charset, label);
                     } else {
                         atom = Pattern::Repeat(Box::new(atom));
                     }
@@ -248,9 +249,10 @@ impl<'a> Parser<'a> {
                     if self.peek() == Some(b'^') {
                         self.pos += 1;
                         let charset = self.parse_optional_sync_set()?;
+                        let label = self.parse_optional_recovery_label()?;
                         // p+^  ≡  p (p*^)  — at least one inner success required.
                         let head = atom.clone();
-                        atom = Pattern::seq(vec![head, build_recover_repeat(atom, charset)]);
+                        atom = Pattern::seq(vec![head, build_recover_repeat(atom, charset, label)]);
                     } else {
                         atom = Pattern::RepeatOne(Box::new(atom));
                     }
@@ -279,6 +281,30 @@ impl<'a> Parser<'a> {
             Pattern::CharClass(set) => Ok(Some(set)),
             _ => unreachable!("parse_charclass always returns Pattern::CharClass"),
         }
+    }
+
+    /// If the byte following `*^` / `*^[cs]` / `+^` / `+^[cs]` is `:`,
+    /// parse an identifier touching the colon and use it as the catch
+    /// label. The `:` must touch the preceding `^` or `]` (no whitespace),
+    /// and the identifier must touch `:` — same tight-binding rule as
+    /// `parse_catch`'s `^label`. Returns `None` when the next byte isn't
+    /// `:`, in which case the caller falls back to the default
+    /// `"recovery"` label. Bare `_` is rejected as reserved for future
+    /// anonymous-catch syntax, mirroring `parse_catch`.
+    fn parse_optional_recovery_label(&mut self) -> Result<Option<String>, ParseError> {
+        if self.peek() != Some(b':') {
+            return Ok(None);
+        }
+        self.pos += 1;
+        let label = self.parse_ident().map_err(|_| {
+            self.err("expected label identifier immediately after `:` (no whitespace)".into())
+        })?;
+        if label == "_" {
+            return Err(
+                self.err("label name `_` is reserved for future use (anonymous catch)".into())
+            );
+        }
+        Ok(Some(label))
     }
 
     fn parse_atom(&mut self) -> Result<Pattern, ParseError> {
@@ -535,11 +561,11 @@ fn is_atom_start(c: u8) -> bool {
 }
 
 /// Desugar `p*^` and `p*^[cs]` to a labeled-catch loop. Both forms are
-/// `(p ^recovery @recovery{<body>})*` where `<body>` is `.` for the
-/// plain form and `(!cs .)* cs` for the sync-set form. The label and
-/// capture name are both the hardcoded literal `"recovery"`, matching
-/// the `recovery_kind` value the parser used to attach to
-/// `Pattern::RecoverRepeat`.
+/// `(p ^<label> @recovery{<body>})*` where `<body>` is `.` for the
+/// plain form and `(!cs .)* cs` for the sync-set form. The capture
+/// name is always `"recovery"`; the label is the author-supplied
+/// `:lbl` suffix when present and falls back to the literal
+/// `"recovery"` otherwise.
 ///
 /// One implementation, two surface forms — see `parse_postfix`. The
 /// EOF clean-exit behavior of the old `RecoverRepeat` opcode shape
@@ -547,7 +573,11 @@ fn is_atom_start(c: u8) -> bool {
 /// EOF, or `cs` missing before EOF), the failure propagates to the
 /// enclosing `*`'s Backtrack frame and the loop terminates without
 /// consuming further input.
-fn build_recover_repeat(inner: Pattern, charset: Option<CharSet>) -> Pattern {
+fn build_recover_repeat(
+    inner: Pattern,
+    charset: Option<CharSet>,
+    label: Option<String>,
+) -> Pattern {
     let body = match charset {
         None => Pattern::AnyChar,
         Some(cs) => Pattern::Sequence(vec![
@@ -561,7 +591,7 @@ fn build_recover_repeat(inner: Pattern, charset: Option<CharSet>) -> Pattern {
     let recovery = Pattern::Capture("recovery".into(), Box::new(body));
     Pattern::Repeat(Box::new(Pattern::Catch {
         inner: Box::new(inner),
-        label: "recovery".into(),
+        label: label.unwrap_or_else(|| "recovery".into()),
         recovery: Box::new(recovery),
     }))
 }

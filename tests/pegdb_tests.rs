@@ -448,6 +448,33 @@ fn explain_recoveries_emits_label_suffix_on_every_cluster() {
 }
 
 #[test]
+fn explain_recoveries_uses_author_supplied_recovery_label() {
+    // `*^:bad_doc` lowers the catch's label slot to the author's name.
+    // The cluster suffix should pick that up — no special-case for the
+    // hardcoded `"recovery"` default.
+    use std::io::Write as _;
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "pegdb_explain_recoveries_label_{}.peg",
+        std::process::id()
+    ));
+    let grammar = b"doc <- 'x'*^:bad_doc\n";
+    let mut f = std::fs::File::create(&path).expect("create temp grammar");
+    f.write_all(grammar).expect("write temp grammar");
+    drop(f);
+    let (code, stdout, _) = run_stdin(
+        &["explain-recoveries", "-g", path.to_str().unwrap()],
+        b"xx@@@xx",
+    );
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("(label: bad_doc)"),
+        "expected the author-supplied label in the cluster output, got:\n{stdout}"
+    );
+}
+
+#[test]
 fn explain_recoveries_reports_no_recoveries_on_clean_input() {
     let (code, stdout, _) = run(&[
         "explain-recoveries",
