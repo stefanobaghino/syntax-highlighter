@@ -77,7 +77,7 @@ pub enum RuleKind {
 }
 
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct CharSet([u8; 32]);
 
 impl CharSet {
