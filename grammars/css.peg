@@ -20,7 +20,9 @@
 #     full URL whitespace rules.
 #
 # Recovery: top-level uses `*^` so malformed statements don't abort
-# the whole stylesheet.
+# the whole stylesheet; `block` uses a `^block_close` catch so
+# malformed declarations inside a rule/at-rule body resync at the
+# closing `}` instead of failing the enclosing statement.
 
 css_file      <- ws (statement)*^ ws !.
 
@@ -81,7 +83,7 @@ attr_body      <- (!']' .)*
 
 # --- Blocks & declarations ------------------------------------------
 
-block         <- @punctuation{'{'} ws block_body ws @punctuation{'}'}
+block         <- @punctuation{'{'} ws (block_body ws @punctuation{'}'} ^block_close @recovery{(!'}' .)*} @punctuation{'}'})
 block_body    <- (block_item ws)*
 block_item    <- at_rule
                 / declaration

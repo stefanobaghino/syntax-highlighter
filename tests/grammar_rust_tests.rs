@@ -336,6 +336,25 @@ fn recovery_absorbs_malformed_item() {
 }
 
 #[test]
+fn recovery_absorbs_malformed_block_body() {
+    // `block`'s `^block_close` catch resyncs at the closing `}` when
+    // the body contains garbage before the brace. The enclosing
+    // `fn_item` still completes — without the catch, the malformed
+    // body would fail `fn_item` and fall through to top-level
+    // byte-by-byte recovery, fragmenting the output.
+    let input = "fn main() { let x = 1; @@@; let y = 2; }\n";
+    let (matched, caps, kinds, complete) = run(input);
+    assert!(complete, "block_close catch should keep parse complete");
+    assert_eq!(matched, input.len());
+    let kv = kinds_for(&caps, &kinds);
+    assert!(
+        kv.contains(&"recovery"),
+        "expected a @recovery capture inside the block, got: {:?}",
+        kv
+    );
+}
+
+#[test]
 fn trailing_comma_tolerated_in_struct_fields() {
     let input = "struct Foo { a: i32, b: u32, }\n";
     let (_, _) = assert_complete_full(input);

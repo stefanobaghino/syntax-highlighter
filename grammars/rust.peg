@@ -21,7 +21,9 @@
 #   - Const generics (`Foo<const N: usize>`).
 #
 # Recovery: the top-level uses `*^` so malformed items don't
-# abort the whole file.
+# abort the whole file; `block` uses a `^block_close` catch so
+# malformed bodies (fn, match arm, etc.) resync at the closing `}`
+# instead of failing the enclosing item.
 
 rust_file     <- ws (item)*^ ws !.
 
@@ -380,7 +382,7 @@ struct_init_base   <- @punctuation{'..'} expr
 
 # --- Statements & blocks ----------------------------------------------
 
-block         <- @punctuation{'{'} ws block_body ws @punctuation{'}'}
+block         <- @punctuation{'{'} ws (block_body ws @punctuation{'}'} ^block_close @recovery{(!'}' .)*} @punctuation{'}'})
 block_body    <- (stmt)*
 
 stmt          <- let_stmt
