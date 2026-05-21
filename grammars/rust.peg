@@ -137,7 +137,8 @@ type_alias_item <- vis? ws @keyword{'type'} ws @type{ident} generic_params? ws w
 macro_rules_item <- @function{'macro_rules'} @punctuation{'!'} ws @function{ident} ws brace_block ws
 
 # Item-position macro invocation: `foo!(...)` / `foo!{...}` / `foo![...]`.
-macro_invocation_stmt <- @function{ident} @punctuation{'!'} ws macro_args ws (@punctuation{';'})? ws
+# Trailing `;?` absorbed by `rust_file`'s `*^`.
+~macro_invocation_stmt <- @function{ident} @punctuation{'!'} ws macro_args ws (@punctuation{';'})? ws
 macro_args    <- paren_group
                / brace_block
                / bracket_group
@@ -182,7 +183,8 @@ type_expr     <- type_fn
                / type_never
                / type_path
 
-type_fn       <- (type_fn_qualifier ws)* @keyword{'fn'} ws @punctuation{'('} ws type_list? ws @punctuation{')'}
+# Trailing `(-> type)?` absorbed by enclosing recovery.
+~type_fn      <- (type_fn_qualifier ws)* @keyword{'fn'} ws @punctuation{'('} ws type_list? ws @punctuation{')'}
                  (ws @punctuation{'->'} ws type_expr)?
 type_fn_qualifier <- @keyword{'unsafe'}
                    / @keyword{'extern'} (ws string_lit)?
@@ -212,9 +214,11 @@ type_path_seg <- @type{upper_ident} path_tail?
 # `GenericArgs` vs `ParenthesizedGenericArgs`.
 path_tail     <- generic_args
                / paren_generic_args
+
 generic_args  <- @punctuation{'::'} @punctuation{'<'} ws generic_arg_list? ws @punctuation{'>'}
                / @punctuation{'<'} ws generic_arg_list? ws @punctuation{'>'}
-paren_generic_args <- @punctuation{'('} ws type_list? ws @punctuation{')'} (ws @punctuation{'->'} ws type_expr)?
+# Trailing `(-> type)?` absorbed by `*^` / `^block_close`.
+~paren_generic_args <- @punctuation{'('} ws type_list? ws @punctuation{')'} (ws @punctuation{'->'} ws type_expr)?
 generic_arg_list <- generic_arg (ws @punctuation{','} ws generic_arg)* (ws @punctuation{','})?
 generic_arg   <- lifetime
                / type_expr
@@ -246,7 +250,8 @@ pattern_ref   <- @punctuation{'&'} (ws @keyword{'mut'})? ws pattern_atom
 pattern_box   <- @keyword{'box'} ws pattern_atom
 pattern_tuple <- @punctuation{'('} ws pattern_list? ws @punctuation{')'}
 pattern_list  <- pattern (ws @punctuation{','} ws pattern)* (ws @punctuation{','})?
-pattern_struct_or_enum <- @type{upper_ident} (@punctuation{'::'} @type{upper_ident})*
+# Trailing `::` chain leniency absorbed by outer recovery.
+~pattern_struct_or_enum <- @type{upper_ident} (@punctuation{'::'} @type{upper_ident})*
                           (ws pattern_struct_body / ws pattern_tuple)?
 pattern_struct_body <- @punctuation{'{'} ws pattern_struct_fields? ws @punctuation{'}'}
 pattern_struct_fields <- pattern_struct_field (ws @punctuation{','} ws pattern_struct_field)* (ws @punctuation{','})?
@@ -258,7 +263,8 @@ pattern_range <- pattern_literal ws (@punctuation{'..='} / @punctuation{'..'}) w
 pattern_literal <- string_lit / char_lit / number_lit / @constant{bool_lit}
 pattern_wild  <- @punctuation{'_'}
 pattern_rest  <- @punctuation{'..'}
-pattern_binding <- (@keyword{'ref'} ws)? (@keyword{'mut'} ws)? @variable{ident}
+# `(ref)? (mut)?` prefix leniency absorbed by outer recovery.
+~pattern_binding <- (@keyword{'ref'} ws)? (@keyword{'mut'} ws)? @variable{ident}
                    (ws @punctuation{'@'} ws pattern_atom)?
 
 # --- Expressions -------------------------------------------------------
@@ -319,7 +325,8 @@ postfix_op    <- @punctuation{'?'}
 postfix_member <- turbofish_method
                 / @function{ident} (ws @punctuation{'('} ws expr_list? ws @punctuation{')'})?
                 / @number{digit_seq}
-turbofish_method <- @function{ident} @punctuation{'::'} @punctuation{'<'} ws generic_arg_list? ws @punctuation{'>'} (ws @punctuation{'('} ws expr_list? ws @punctuation{')'})?
+# Trailing `(args)?` absorbed by outer recovery.
+~turbofish_method <- @function{ident} @punctuation{'::'} @punctuation{'<'} ws generic_arg_list? ws @punctuation{'>'} (ws @punctuation{'('} ws expr_list? ws @punctuation{')'})?
 
 expr_primary  <- literal
                / expr_if
@@ -339,7 +346,8 @@ expr_primary  <- literal
                / expr_macro_or_path
                / expr_keyword
 
-expr_if       <- @keyword{'if'} ws (@keyword{'let'} ws pattern ws @operator{'='} ws)? expr ws block
+# Trailing `(else (if | block))?` leniency absorbed by `rust_file`'s `*^` and `block`'s `^block_close`.
+~expr_if      <- @keyword{'if'} ws (@keyword{'let'} ws pattern ws @operator{'='} ws)? expr ws block
                  (ws @keyword{'else'} ws (expr_if / block))?
 expr_match    <- @keyword{'match'} ws expr ws @punctuation{'{'} ws match_arms? ws @punctuation{'}'}
 match_arms    <- match_arm (ws @punctuation{','} ws match_arm)* (ws @punctuation{','})?
@@ -347,9 +355,10 @@ match_arm     <- (attr_outer ws)* pattern (ws @keyword{'if'} ws expr)? ws @punct
 expr_while    <- @keyword{'while'} ws (@keyword{'let'} ws pattern ws @operator{'='} ws)? expr ws block
 expr_loop     <- (loop_label ws)? @keyword{'loop'} ws block
 expr_for      <- @keyword{'for'} ws pattern ws @keyword{'in'} ws expr ws block
-expr_return   <- @keyword{'return'} (ws expr)?
-expr_break    <- @keyword{'break'} (ws loop_label)? (ws expr)?
-expr_continue <- @keyword{'continue'} (ws loop_label)?
+# Trailing-optional leniency on these stmt-shaped exprs is absorbed by outer recovery.
+~expr_return  <- @keyword{'return'} (ws expr)?
+~expr_break   <- @keyword{'break'} (ws loop_label)? (ws expr)?
+~expr_continue <- @keyword{'continue'} (ws loop_label)?
 expr_unsafe   <- @keyword{'unsafe'} ws block
 expr_closure  <- (@keyword{'move'} ws)? @punctuation{'|'} ws closure_params? ws @punctuation{'|'}
                  (ws @punctuation{'->'} ws type_expr)? ws expr
@@ -368,7 +377,8 @@ loop_label    <- @punctuation{'\''} @variable{ident} @punctuation{':'}
 
 # `path::to::thing`, `path::to::thing::<T>(...)`, `Struct { ... }`,
 # or `macro!(...)` / `macro!{...}` / `macro![...]`.
-expr_macro_or_path <- path_expr (ws struct_init / @punctuation{'!'} ws macro_args)?
+# Trailing `(struct_init | macro_args)?` leniency absorbed by outer recovery.
+~expr_macro_or_path <- path_expr (ws struct_init / @punctuation{'!'} ws macro_args)?
 path_expr     <- path_seg (@punctuation{'::'} path_seg)*
 path_seg      <- @type{upper_ident} (@punctuation{'::'} @punctuation{'<'} ws generic_arg_list? ws @punctuation{'>'})?
                / @function{lower_ident} (@punctuation{'::'} @punctuation{'<'} ws generic_arg_list? ws @punctuation{'>'})?

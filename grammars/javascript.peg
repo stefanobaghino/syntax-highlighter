@@ -59,7 +59,11 @@ stmt           <- import_decl
                 / empty_stmt
                 / expr ws opt_semi
 
-opt_semi       <- (@punctuation{';'} ws)?
+# Definition-level `~` on `~opt_semi` covers every ASI call site; the
+# missing-else / missing-catch / missing-finally leniency on the other
+# `~`-marked stmts below is absorbed by stmt-level `*^` and
+# `block`'s `^block_close` recovery.
+~opt_semi      <- (@punctuation{';'} ws)?
 empty_stmt     <- @punctuation{';'} ws
 
 # --- Imports / exports ------------------------------------------------
@@ -87,7 +91,8 @@ export_decl    <- @keyword{'export'} ws @keyword{'default'} ws export_default_bo
 export_default_body <- fn_decl
                      / class_decl
                      / expr ws opt_semi
-export_named   <- @punctuation{'{'} ws export_specifier_list? ws @punctuation{'}'} (ws @keyword{'from'} ws string_lit)? ws opt_semi
+# Trailing `opt_semi` on `~export_named` is absorbed by stmt-level recovery.
+~export_named  <- @punctuation{'{'} ws export_specifier_list? ws @punctuation{'}'} (ws @keyword{'from'} ws string_lit)? ws opt_semi
 export_specifier_list <- export_specifier (ws @punctuation{','} ws export_specifier)* (ws @punctuation{','})?
 export_specifier <- @variable{ident_name} ws @keyword{'as'} ws @variable{ident_name}
                   / @variable{ident}
@@ -116,11 +121,13 @@ class_field    <- (computed_prop / @property{ident_name}) ws (@operator{'='} ws 
 
 var_decl       <- (@keyword{'var'} / @keyword{'let'} / @keyword{'const'}) ws var_declarator_list
 var_declarator_list <- var_declarator (ws @punctuation{','} ws var_declarator)*
-var_declarator <- pattern (ws @operator{'='} ws expr_no_comma)?
+# Trailing `(= expr)?` absorbed by enclosing stmt recovery.
+~var_declarator <- pattern (ws @operator{'='} ws expr_no_comma)?
 
 # --- Control flow -----------------------------------------------------
 
-if_stmt        <- @keyword{'if'} ws @punctuation{'('} ws expr ws @punctuation{')'} ws stmt
+# Trailing `(else stmt)?` leniency absorbed by stmt-level recovery.
+~if_stmt       <- @keyword{'if'} ws @punctuation{'('} ws expr ws @punctuation{')'} ws stmt
                   (ws @keyword{'else'} ws stmt)?
 for_stmt       <- @keyword{'for'} (ws @keyword{'await'})? ws @punctuation{'('} ws for_head ws @punctuation{')'} ws stmt
 for_head       <- for_c_style
@@ -139,13 +146,15 @@ switch_stmt    <- @keyword{'switch'} ws @punctuation{'('} ws expr ws @punctuatio
 switch_case    <- @keyword{'case'} ws expr ws @punctuation{':'} ws (!switch_case_term stmt ws)*
                 / @keyword{'default'} ws @punctuation{':'} ws (!switch_case_term stmt ws)*
 switch_case_term <- @keyword{'case'} / @keyword{'default'} / @punctuation{'}'}
-try_stmt       <- @keyword{'try'} ws block (ws catch_clause)? (ws finally_clause)?
+# Trailing `(catch)? (finally)?` absorbed by stmt-level recovery.
+~try_stmt      <- @keyword{'try'} ws block (ws catch_clause)? (ws finally_clause)?
 catch_clause   <- @keyword{'catch'} (ws @punctuation{'('} ws pattern ws @punctuation{')'})? ws block
 finally_clause <- @keyword{'finally'} ws block
 throw_stmt     <- @keyword{'throw'} ws expr ws opt_semi
-return_stmt    <- @keyword{'return'} (ws expr)? ws opt_semi
-break_stmt     <- @keyword{'break'} (ws @variable{ident})? ws opt_semi
-continue_stmt  <- @keyword{'continue'} (ws @variable{ident})? ws opt_semi
+# Trailing `(ws expr)?` leniency on `~return_stmt` absorbed by stmt recovery.
+~return_stmt   <- @keyword{'return'} (ws expr)? ws opt_semi
+~break_stmt    <- @keyword{'break'} (ws @variable{ident})? ws opt_semi
+~continue_stmt <- @keyword{'continue'} (ws @variable{ident})? ws opt_semi
 debugger_stmt  <- @keyword{'debugger'} ws opt_semi
 labeled_stmt   <- @variable{ident} ws @punctuation{':'} ws stmt
 block_stmt     <- block
@@ -200,7 +209,8 @@ arrow_paren_params <- @punctuation{'('} ws fn_param_list? ws @punctuation{')'}
 arrow_body     <- block
                 / expr_no_comma
 
-expr_yield     <- @keyword{'yield'} (ws @operator{'*'})? (ws expr_assign)?
+# Trailing `(ws *)? (ws expr_assign)?` absorbed by stmt-level recovery.
+~expr_yield    <- @keyword{'yield'} (ws @operator{'*'})? (ws expr_assign)?
 
 # Ternary. Below the ternary, precedence is encoded by direct left
 # recursion — `level_n <- level_n OP level_{n+1} / level_{n+1}` per
@@ -208,7 +218,8 @@ expr_yield     <- @keyword{'yield'} (ws @operator{'*'})? (ws expr_assign)?
 # preserve right-associativity. Each level inlines its operator
 # alternation; cross-level ambiguities (`<` vs `<<`, `&` vs `&&`,
 # operator vs compound-assign, …) need explicit `!`-lookaheads.
-expr_conditional <- expr_nullish (ws @operator{'?'} ws expr_no_comma ws @punctuation{':'} ws expr_no_comma)?
+# Trailing ternary leniency absorbed by stmt-level recovery.
+~expr_conditional <- expr_nullish (ws @operator{'?'} ws expr_no_comma ws @punctuation{':'} ws expr_no_comma)?
 
 expr_nullish   <- expr_nullish ws @operator{'??'} !'=' ws expr_lor / expr_lor
 expr_lor       <- expr_lor ws @operator{'||'} !'=' ws expr_land / expr_land

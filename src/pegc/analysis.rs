@@ -662,9 +662,32 @@ fn walk_for_call_sites<'a>(
     ctx: &LintCtx<'a>,
     findings: &mut Vec<LintFinding>,
 ) {
+    walk_for_call_sites_impl(
+        pat,
+        caller,
+        continuations,
+        inside_catch,
+        false,
+        ctx,
+        findings,
+    )
+}
+
+fn walk_for_call_sites_impl<'a>(
+    pat: &'a Pattern,
+    caller: &str,
+    continuations: &mut Vec<&'a [Pattern]>,
+    inside_catch: bool,
+    inside_lenient: bool,
+    ctx: &LintCtx<'a>,
+    findings: &mut Vec<LintFinding>,
+) {
     match pat {
         Pattern::Literal(_) | Pattern::CharClass(_) | Pattern::AnyChar => {}
         Pattern::NonTerminal(name) => {
+            if inside_lenient {
+                return;
+            }
             let Some(t) = ctx.trailing.get(name) else {
                 return;
             };
@@ -690,11 +713,12 @@ fn walk_for_call_sites<'a>(
         Pattern::Sequence(items) => {
             for i in 0..items.len() {
                 continuations.push(&items[i + 1..]);
-                walk_for_call_sites(
+                walk_for_call_sites_impl(
                     &items[i],
                     caller,
                     continuations,
                     inside_catch,
+                    inside_lenient,
                     ctx,
                     findings,
                 );
@@ -703,18 +727,42 @@ fn walk_for_call_sites<'a>(
         }
         Pattern::OrderedChoice(alts) => {
             for alt in alts {
-                walk_for_call_sites(alt, caller, continuations, inside_catch, ctx, findings);
+                walk_for_call_sites_impl(
+                    alt,
+                    caller,
+                    continuations,
+                    inside_catch,
+                    inside_lenient,
+                    ctx,
+                    findings,
+                );
             }
         }
         Pattern::Optional(inner)
         | Pattern::Capture(_, inner)
         | Pattern::Repeat(inner)
         | Pattern::RepeatOne(inner) => {
-            walk_for_call_sites(inner, caller, continuations, inside_catch, ctx, findings);
+            walk_for_call_sites_impl(
+                inner,
+                caller,
+                continuations,
+                inside_catch,
+                inside_lenient,
+                ctx,
+                findings,
+            );
         }
         Pattern::NotPredicate(inner) | Pattern::AndPredicate(inner) => {
             let mut isolated: Vec<&[Pattern]> = Vec::new();
-            walk_for_call_sites(inner, caller, &mut isolated, inside_catch, ctx, findings);
+            walk_for_call_sites_impl(
+                inner,
+                caller,
+                &mut isolated,
+                inside_catch,
+                inside_lenient,
+                ctx,
+                findings,
+            );
         }
         Pattern::Catch {
             inner, recovery, ..
@@ -722,14 +770,42 @@ fn walk_for_call_sites<'a>(
             // Inside the Catch's `inner`: leniency that leaks past `inner`
             // is absorbed by `recovery` (the recovery body fires whenever
             // the next outer-context matching step fails on the leftover).
-            walk_for_call_sites(inner, caller, continuations, true, ctx, findings);
+            walk_for_call_sites_impl(
+                inner,
+                caller,
+                continuations,
+                true,
+                inside_lenient,
+                ctx,
+                findings,
+            );
             let mut isolated: Vec<&[Pattern]> = Vec::new();
-            walk_for_call_sites(recovery, caller, &mut isolated, false, ctx, findings);
+            walk_for_call_sites_impl(
+                recovery,
+                caller,
+                &mut isolated,
+                false,
+                inside_lenient,
+                ctx,
+                findings,
+            );
         }
-        // The lenient marker is an explicit author intent signal: the
-        // lint treats the wrapped subtree as opaque and emits no
-        // findings under it.
-        Pattern::Lenient(_) => {}
+        // Lenient marks the entire wrapped subtree as intentional —
+        // suppress flag emission for any NonTerminal inside. The
+        // propagation walker (`find_callsite_unguarded`) still
+        // descends transparently so deeper rules' leniency reaching
+        // unwrapped sites elsewhere is still detected.
+        Pattern::Lenient(inner) => {
+            walk_for_call_sites_impl(
+                inner,
+                caller,
+                continuations,
+                inside_catch,
+                true,
+                ctx,
+                findings,
+            );
+        }
         // The resolver runs before the lint, so the lint should
         // never see an unresolved boundary-anchored catch.
         Pattern::InferBoundaryCatch { .. } => {
@@ -944,9 +1020,19 @@ fn find_callsite_unguarded<'a>(
                 found_callsite,
             )
         }
-        // The lenient marker hides the wrapped subtree from the lint
-        // entirely — call sites inside it don't count.
-        Pattern::Lenient(_) => false,
+        // Propagation walks through the lenient marker transparently;
+        // the marker only suppresses the IMMEDIATE call's flag (handled
+        // in `walk_for_call_sites`), not deeper detection or outward
+        // propagation from nested rules' leniency.
+        Pattern::Lenient(inner) => find_callsite_unguarded(
+            inner,
+            probe,
+            continuations,
+            inside_catch,
+            ctx,
+            visited_callers,
+            found_callsite,
+        ),
         Pattern::InferBoundaryCatch { .. } => {
             unreachable!(
                 "Pattern::InferBoundaryCatch must be resolved by \

@@ -43,11 +43,15 @@ the following precedence, tightest-binding first:
 ```
 atom       "abc"   [a-z]   .   ident   (...)   @name{...}
 postfix    p*      p+      p?  p*^     p+^     p*^[cs]   p+^[cs]
-prefix     !p      &p
+prefix     !p      &p      ~p
 sequence   p1 p2 p3          (juxtaposition)
-catch      p1 ^label p2
+catch      p1 ^label p2      p1 ^^label B      p1 ^^label
 choice     p1 / p2 / p3
 ```
+
+Rule definitions may carry a top-level `~name <-` decorator to mark
+the whole rule as intentionally lenient — see
+[`~p` / `~name <-`](#p--name----intentional-leniency-marker) below.
 
 ### Atoms
 
@@ -257,49 +261,102 @@ failure points and `*^` outside as the loop-level backstop.
 
 #### Anchoring catches at boundaries
 
-In practice every catch site in `grammars/sqlite.peg` needed a third
-ingredient: a **boundary lookahead** before the catch fires. PEG's
-prioritized choice and possessive `*` mean rules routinely succeed
-by matching a prefix and leaving the rest as leftover at the outer
-level — invisibly, with no failure. The catch only helps when the
-rule actually *fails*, so the lookahead is what turns a
-partial-match success into a catch-able failure. The recurring
-shape:
+PEG's prioritized choice and possessive `*` mean rules routinely
+succeed by matching a prefix and leaving the rest as leftover at the
+outer level — invisibly, with no failure. The bare `^label` catch
+only helps when the rule actually *fails*, so anchoring the inner
+on a boundary is what turns a partial-match success into a
+catch-able failure. The
+[`INNER ^^lbl B`](#inner-lbl-b---boundary-anchored-catch) operator
+collapses the three concerns (anchor + catch + recovery body) into
+one form. The bare `^label` form below is still useful for catches
+whose recovery isn't a "skip until boundary" loop — see PR `#101`'s
+`^block_close` sites.
+
+### `INNER ^^lbl B` — boundary-anchored catch
+
+The boundary-anchored catch is a syntactic sugar that takes one
+inner pattern and one boundary `B` (any pattern) and lowers to the
+three-piece idiom that recurs across `grammars/sqlite.peg`:
 
 ```peg
-rule <- ((INNER &(ws boundary)) ^lbl @recovery{(!boundary .)*})
-boundary <- <punct alts> / <kw_* alts> / !.
+INNER ^^lbl B
+# lowers to
+(INNER &B) ^lbl @recovery{(!B .)*}
 ```
 
-`result_column` and `where_clause` in `grammars/sqlite.peg` are the
-worked examples. `&(ws boundary)` requires the rule to consume up
-to a known continuation token; `(!boundary .)*` resyncs without
+`&B` requires `INNER` to consume up to a position where `B` matches
+(turning silent prefix-match success into a `^lbl` catch fire);
+`(!B .)*` resyncs by skipping bytes until `B` is reachable without
 consuming it (so the outer rule still sees the structural
-delimiter).
+delimiter). The `@recovery{...}` wrap is part of the lowering — the
+operator owns the capture-kind choice so authors don't have to type
+it.
 
-**Footgun: where the catch goes.** The catch must sit *inside* any
-required prefix the rule needs to commit to. Writing the catch
-around the whole rule body — e.g.
+**FOLLOW-inferred form `INNER ^^lbl`.** Omitting `B` synthesizes the
+boundary from `INNER`'s call-site FOLLOW set at compile time. Use it
+when the call site has a single, unambiguous FOLLOW and you don't
+need leading-`ws` permissiveness in the lookahead; the resolver
+synthesizes a boundary pattern from the rule's FOLLOW elements and
+applies the same lowering. The two `grammars/sqlite.peg` POC sites
+use the explicit form because their boundary rules include `ws` and
+that wouldn't fall out of FOLLOW.
+
+**Scoping footgun.** The operator must sit *inside* any required
+prefix the rule needs to commit to. Writing the operator around the
+whole rule body — e.g.
 
 ```peg
-where_clause <- kw_where ws (expr &(ws boundary)) ^bad_where @recovery{(!boundary .)*}
+where_clause <- kw_where ws expr ^^bad_where (ws boundary)
 ```
 
-— fires the catch even when `kw_where` itself fails (no WHERE
-keyword present): inner fails → catch fires → recovery `(!boundary
-.)*` matches zero bytes and succeeds → every clean `SELECT 1;`
-emits a spurious empty `recovery` capture. Push the catch past the
+— would let the operator fire even when `kw_where` itself fails (no
+WHERE keyword present): inner fails → recovery `(!boundary .)*`
+matches zero bytes and succeeds → every clean `SELECT 1;` emits a
+spurious empty `recovery` capture. Push the operator past the
 unconditional prefix:
 
 ```peg
-where_clause <- kw_where ws ((expr &(ws boundary)) ^bad_where @recovery{(!boundary .)*})
+where_clause <- kw_where ws (expr ^^bad_where (ws boundary))
 ```
 
 so a missing prefix fails the rule cleanly with no catch involved.
 
+**Operator-family discriminator.** The doubled caret `^^` marks the
+boundary-anchored family; the single caret `^lbl recovery` remains
+the bare catch with author-written recovery. Disambiguation is
+positional — a single byte peek after the first `^`.
+
 Implementation lives in `Pattern::Catch` (`src/pegc/pattern.rs`) and
-the emission in `src/pegc/compiler.rs`. Reuses the `RecoverScope*`
-opcodes introduced for `*^` — no new VM machinery.
+the emission in `src/pegc/compiler.rs`. The FOLLOW-inferred form
+uses a placeholder `Pattern::InferBoundaryCatch { inner, label }`
+resolved by `analysis::resolve_inferred_boundaries` before bytecode
+emission. No new VM machinery.
+
+### `~p` / `~name <-` — intentional-leniency marker
+
+The static `lint_partial_match` check flags trailing-nullable rules
+called unanchored — but on shipped grammars almost every flag is a
+"partial-match leniency intentionally absorbed by outer `*^`-style
+recovery" that the static analysis can't statically prove safe. The
+`~` marker is the author's intent signal: "yes, this leniency is
+known, don't flag it." There are two forms:
+
+- **`~name <-`** at the rule definition. Marks every call to `name`
+  as intentional. Use when a rule is intrinsically lenient (e.g.
+  `~opt_semi <- (';' ws)?` — ASI absorption — applies to every
+  caller). Wraps the rule's body in `Pattern::Lenient`.
+- **`~p`** at a single call site, a prefix-tier operator binding
+  tighter than `!` and `&`. Use when only one caller intentionally
+  tolerates the leniency and others should still be flagged.
+
+Both forms compile transparently — `Pattern::Lenient(p)` emits the
+same bytecode as `p`. The wrapping exists only for static analysis.
+
+```peg
+~opt_semi <- (@punctuation{';'} ws)?       # definition-level
+stmt <- ~legacy_form / strict_form         # call-site
+```
 
 ### Reserved syntax
 
@@ -307,15 +364,15 @@ opcodes introduced for `*^` — no new VM machinery.
 overlays. Two extensions have been sketched and dropped from the v1
 catch operator pending real-grammar evidence that they're needed:
 
-- **Anonymous catch (`^_` or similar).** A catch with no label.
+- **Anonymous catch (`^_` / `^^_`).** A catch with no label.
   Always emits a placeholder diagnostic. Today's mandatory-label
   rule keeps `pegdb explain-recoveries` clusters meaningful by
   forcing every recovery point to be named.
-- **Throw atom (`^!label`).** A zero-byte pattern that always fails
-  with `label`, with Maidl-style cross-rule routing semantics. Useful
-  for compiler frontends that want commitment semantics and
-  targeted "expected X" diagnostics; less load-bearing for syntax
-  highlighters where `*^` covers the common resync case.
+- **Throw atom (`^!label` / `^^!label`).** A zero-byte pattern that
+  always fails with `label`, with Maidl-style cross-rule routing
+  semantics. Useful for compiler frontends that want commitment
+  semantics and targeted "expected X" diagnostics; less load-bearing
+  for syntax highlighters where `*^` covers the common resync case.
 
 If you hit a grammar that needs either, open an issue with the
 concrete use case.
@@ -356,7 +413,10 @@ concrete use case.
   character-class range out of order, unknown escape.
 - **`CompileError`** — source is well-formed but semantically invalid.
   Examples: `NonTerminal("foo")` with no matching rule, a start rule
-  that doesn't exist.
+  that doesn't exist, partial-match leniency on a call site that's
+  neither anchored (`^^lbl B`) nor explicitly marked intentional
+  (`~p` / `~name <-`), an `^^lbl` whose call-site FOLLOW set is empty
+  so no boundary can be inferred.
 - **`Error`** — unified wrapper returned by `pegc::compile(source)`.
   `From<ParseError>` and `From<CompileError>` are provided.
 

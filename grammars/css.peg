@@ -86,11 +86,12 @@ attr_body      <- (!']' .)*
 block         <- @punctuation{'{'} ws (block_body ws @punctuation{'}'} ^block_close @recovery{(!'}' .)*} @punctuation{'}'})
 block_body    <- (block_item ws)*
 block_item    <- at_rule
-                / ~declaration   # leniency on the `important? ws (';' / &'}')` tail is absorbed by `block`'s `^block_close`
+                / declaration
                 / rule
                 / @punctuation{';'}
 
-declaration   <- @property{prop_ident} ws @punctuation{':'} ws value_list ws
+# Trailing `important? ws (';' / &'}')` leniency is absorbed by `block`'s `^block_close`.
+~declaration  <- @property{prop_ident} ws @punctuation{':'} ws value_list ws
                  important? ws (@punctuation{';'} / &'}')
 important     <- @keyword{'!important'}
 
@@ -127,9 +128,10 @@ hex_color     <- @constant{hex_body}
 hex_body      <- '#' hex_digit+
 hex_digit     <- [0-9a-fA-F]
 
-number_with_unit <- @number{~num_body}  # trailing `num_unit?` leniency: unitless numbers stop at the next non-unit byte; outer recovery handles malformed values
+number_with_unit <- @number{num_body}
 
-num_body      <- sign? (num_float / num_int) num_unit?
+# Trailing `num_unit?` leniency: unitless numbers stop at the next non-unit byte; outer recovery handles malformed values.
+~num_body     <- sign? (num_float / num_int) num_unit?
 sign          <- [+\-]
 num_int       <- [0-9]+
 num_float     <- [0-9]* '.' [0-9]+

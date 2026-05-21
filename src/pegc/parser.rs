@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::analysis::resolve_inferred_boundaries;
+use super::analysis::{lint_partial_match, resolve_inferred_boundaries};
 use super::compiler::{compile_rules, CompileError};
 use super::pattern::Pattern;
 use crate::pegvm::{CharSet, Program};
@@ -31,17 +31,21 @@ impl Grammar {
     /// 1. Resolve `Pattern::InferBoundaryCatch` placeholders (`^^lbl`)
     ///    via [`resolve_inferred_boundaries`] — synthesizes each
     ///    boundary from FOLLOW.
-    /// 2. Emit bytecode via `compile_rules`.
-    ///
-    /// The `lint_partial_match` integration that makes findings fatal
-    /// lands as the closing commit of #103, after the per-grammar
-    /// sweep brings shipped-grammar findings to zero.
+    /// 2. Run [`lint_partial_match`]; any finding is a fatal
+    ///    `CompileError::PartialMatchLeniency`. Anchor real bugs with
+    ///    `^^lbl B` (or `^^lbl`); mark intentional leniency with `~`
+    ///    at the call site or `~name <- body` at the rule definition.
+    /// 3. Emit bytecode via `compile_rules`.
     pub fn compile(&self) -> Result<Program, CompileError> {
         let mut resolved = Grammar {
             rules: self.rules.clone(),
             start: self.start.clone(),
         };
         resolve_inferred_boundaries(&mut resolved)?;
+        let findings = lint_partial_match(&resolved);
+        if !findings.is_empty() {
+            return Err(CompileError::PartialMatchLeniency(findings));
+        }
         compile_rules(&resolved.rules, &resolved.start)
     }
 }
@@ -88,11 +92,25 @@ impl<'a> Parser<'a> {
         let mut rules = HashMap::new();
         let mut order = Vec::new();
         while self.pos < self.src.len() {
+            // Definition-level lenient marker: `~name <- body` declares
+            // that every call to `name` is intentionally lenient and
+            // suppresses `lint_partial_match` findings at every call site
+            // of `name`. The marker touches the name (no whitespace);
+            // the rule's body is wrapped with `Pattern::Lenient` so the
+            // lint walker sees the same shape as a per-call-site `~p`.
+            let mut definition_lenient = false;
+            if self.peek() == Some(b'~') {
+                self.pos += 1;
+                definition_lenient = true;
+            }
             let name = self.parse_ident()?;
             self.skip_ws();
             self.expect_str("<-")?;
             self.skip_ws();
-            let pat = self.parse_choice()?;
+            let mut pat = self.parse_choice()?;
+            if definition_lenient {
+                pat = Pattern::Lenient(Box::new(pat));
+            }
             if rules.insert(name.clone(), pat).is_some() {
                 return Err(self.err(format!("rule '{}' defined twice", name)));
             }
@@ -241,9 +259,45 @@ impl<'a> Parser<'a> {
             // `^<non-ident-byte>` slot; when added, this function
             // grows a one-byte lookahead.
             Some(b'^') => false,
+            // `~name <- body` is a definition-level lenient marker for
+            // the NEXT rule, not a call-site `~p` in the current body.
+            // Look past the `~ ident` to see if `<-` follows.
+            Some(b'~') if self.looks_like_lenient_rule_def() => false,
             Some(c) if is_ident_start(c) => !self.looks_like_rule_def(),
             Some(c) => is_atom_start(c),
         }
+    }
+
+    /// Look past a leading `~` to see if it starts a `~ident <-` rule
+    /// definition. Used by `at_prefix_start` to keep `~` at the
+    /// boundary between rules from being consumed as a call-site
+    /// lenient marker for the previous rule's body.
+    fn looks_like_lenient_rule_def(&self) -> bool {
+        let mut p = self.pos;
+        if p >= self.src.len() || self.src[p] != b'~' {
+            return false;
+        }
+        p += 1;
+        if p >= self.src.len() || !is_ident_start(self.src[p]) {
+            return false;
+        }
+        p += 1;
+        while p < self.src.len() && is_ident_cont(self.src[p]) {
+            p += 1;
+        }
+        loop {
+            while p < self.src.len() && matches!(self.src[p], b' ' | b'\t' | b'\n' | b'\r') {
+                p += 1;
+            }
+            if p < self.src.len() && self.src[p] == b'#' {
+                while p < self.src.len() && self.src[p] != b'\n' {
+                    p += 1;
+                }
+                continue;
+            }
+            break;
+        }
+        p + 1 < self.src.len() && &self.src[p..p + 2] == b"<-"
     }
 
     /// Look ahead from the current position to determine whether what follows is

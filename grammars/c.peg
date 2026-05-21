@@ -165,7 +165,8 @@ stmt          <- labeled_stmt
 labeled_stmt  <- @variable{ident} ws @punctuation{':'} ws stmt
                / @keyword{'case'} ws expr_cond ws @punctuation{':'} ws stmt
                / @keyword{'default'} ws @punctuation{':'} ws stmt
-if_stmt       <- @keyword{'if'} ws @punctuation{'('} ws expr ws @punctuation{')'} ws stmt
+# Trailing `(else stmt)?` leniency absorbed by top-level `*^` and `^block_close`.
+~if_stmt      <- @keyword{'if'} ws @punctuation{'('} ws expr ws @punctuation{')'} ws stmt
                  (ws @keyword{'else'} ws stmt)?
 for_stmt      <- @keyword{'for'} ws @punctuation{'('} ws for_init ws expr? ws @punctuation{';'} ws expr? ws @punctuation{')'} ws stmt
 for_init      <- decl
@@ -194,12 +195,14 @@ expr          <- expr_assign (ws @punctuation{','} ws expr_assign)*
 expr_assign   <- expr_unary ws assign_op ws expr_assign
                / expr_cond
 
+
 assign_op     <- @operator{'<<='} / @operator{'>>='}
                / @operator{'+='} / @operator{'-='} / @operator{'*='} / @operator{'/='}
                / @operator{'%='} / @operator{'&='} / @operator{'|='} / @operator{'^='}
                / @operator{'='} !'='
 
-expr_cond     <- expr_lor (ws @operator{'?'} ws expr ws @punctuation{':'} ws expr_assign)?
+# Trailing ternary `?` leniency absorbed by top-level `*^`.
+~expr_cond    <- expr_lor (ws @operator{'?'} ws expr ws @punctuation{':'} ws expr_assign)?
 
 expr_lor      <- expr_lor ws @operator{'||'} ws expr_land / expr_land
 expr_land     <- expr_land ws @operator{'&&'} ws expr_bor / expr_bor
