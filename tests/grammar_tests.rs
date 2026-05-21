@@ -468,6 +468,264 @@ fn catch_rejects_reserved_underscore_label() {
     );
 }
 
+// ---- Boundary-anchored catch (`^^lbl B` / `^^lbl`) ------------
+
+/// Builds the AST that `INNER ^^lbl B` lowers to: a `Catch` whose
+/// inner is `Sequence([INNER, AndPredicate(B)])` and whose recovery
+/// is `@recovery{(!B .)*}`. Mirrors `lower_boundary_catch` in the
+/// parser.
+fn lowered_boundary_catch(inner: Pattern, label: &str, boundary: Pattern) -> Pattern {
+    let stop_loop = Pattern::Repeat(Box::new(Pattern::Sequence(vec![
+        Pattern::NotPredicate(Box::new(boundary.clone())),
+        Pattern::AnyChar,
+    ])));
+    Pattern::Catch {
+        inner: Box::new(Pattern::Sequence(vec![
+            inner,
+            Pattern::AndPredicate(Box::new(boundary)),
+        ])),
+        label: label.into(),
+        recovery: Box::new(Pattern::Capture("recovery".into(), Box::new(stop_loop))),
+    }
+}
+
+#[test]
+fn boundary_catch_lowers_to_anchored_catch_with_recovery_loop() {
+    let g = parse("r <- 'a' ^^lbl 'b'");
+    assert_eq!(
+        g.rules["r"],
+        lowered_boundary_catch(Pattern::literal("a"), "lbl", Pattern::literal("b")),
+    );
+}
+
+#[test]
+fn boundary_catch_with_rule_boundary() {
+    let g = parse("r <- 'a' ^^lbl b\nb <- 'x'");
+    assert_eq!(
+        g.rules["r"],
+        lowered_boundary_catch(
+            Pattern::literal("a"),
+            "lbl",
+            Pattern::NonTerminal("b".into())
+        ),
+    );
+}
+
+#[test]
+fn boundary_catch_with_charset_boundary() {
+    let g = parse("r <- 'a' ^^lbl [,;)]");
+    let mut delim = CharSet::empty();
+    delim.add(b',');
+    delim.add(b';');
+    delim.add(b')');
+    assert_eq!(
+        g.rules["r"],
+        lowered_boundary_catch(Pattern::literal("a"), "lbl", Pattern::CharClass(delim)),
+    );
+}
+
+#[test]
+fn boundary_catch_with_grouped_boundary() {
+    let g = parse("r <- 'a' ^^lbl (b c)\nb <- 'x'\nc <- 'y'");
+    let boundary = Pattern::Sequence(vec![
+        Pattern::NonTerminal("b".into()),
+        Pattern::NonTerminal("c".into()),
+    ]);
+    assert_eq!(
+        g.rules["r"],
+        lowered_boundary_catch(Pattern::literal("a"), "lbl", boundary),
+    );
+}
+
+#[test]
+fn boundary_catch_label_touches_second_caret() {
+    // `^^lbl B` with no whitespace between the carets and the label
+    // is the canonical form; `^^ lbl B` (space) errors with the
+    // "expected label identifier" message.
+    let g = parse("r <- 'a' ^^lbl 'b'");
+    assert_eq!(
+        g.rules["r"],
+        lowered_boundary_catch(Pattern::literal("a"), "lbl", Pattern::literal("b")),
+    );
+    let err = parse_src("r <- 'a' ^^ lbl 'b'").unwrap_err();
+    assert!(
+        err.message.contains("expected label identifier"),
+        "expected a label-identifier error, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn boundary_catch_does_not_swallow_trailing_atoms() {
+    // The boundary is one atom-with-prefix-postfix; trailing atoms
+    // belong to the enclosing sequence: `A ^^lbl B C` is `(A ^^lbl B) C`.
+    let g = parse("r <- 'a' ^^lbl 'b' 'c'");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Sequence(vec![
+            lowered_boundary_catch(Pattern::literal("a"), "lbl", Pattern::literal("b")),
+            Pattern::literal("c"),
+        ]),
+    );
+}
+
+#[test]
+fn bare_catch_with_capture_rhs_still_parses() {
+    // Regression guard: single `^` is bare, `@kind{...}` is the RHS.
+    // The doubled-caret discriminator must not consume `@`.
+    let g = parse("r <- 'a' ^lbl @rec{'b'}");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Catch {
+            inner: Box::new(Pattern::literal("a")),
+            label: "lbl".into(),
+            recovery: Box::new(Pattern::Capture(
+                "rec".into(),
+                Box::new(Pattern::literal("b"))
+            )),
+        },
+    );
+}
+
+#[test]
+fn boundary_catch_rejects_reserved_underscore_label() {
+    let err = parse_src("r <- 'a' ^^_ 'b'").unwrap_err();
+    assert!(
+        err.message.contains("reserved"),
+        "expected reserved-label error, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn boundary_catch_rejects_throw_atom_shape() {
+    let err = parse_src("r <- 'a' ^^!lbl 'b'").unwrap_err();
+    assert!(
+        err.message.contains("reserved") || err.message.contains("expected label identifier"),
+        "expected reserved-or-label error, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn inferred_catch_at_end_of_rule_parses_to_placeholder() {
+    let g = parse("r <- 'a' ^^lbl");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::InferBoundaryCatch {
+            inner: Box::new(Pattern::literal("a")),
+            label: "lbl".into(),
+        },
+    );
+}
+
+#[test]
+fn inferred_catch_before_choice_separator() {
+    let g = parse("r <- 'a' ^^lbl / 'b'");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::OrderedChoice(vec![
+            Pattern::InferBoundaryCatch {
+                inner: Box::new(Pattern::literal("a")),
+                label: "lbl".into(),
+            },
+            Pattern::literal("b"),
+        ]),
+    );
+}
+
+#[test]
+fn inferred_catch_before_paren_close() {
+    let g = parse("r <- ('a' ^^lbl) 'c'");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Sequence(vec![
+            Pattern::InferBoundaryCatch {
+                inner: Box::new(Pattern::literal("a")),
+                label: "lbl".into(),
+            },
+            Pattern::literal("c"),
+        ]),
+    );
+}
+
+#[test]
+fn inferred_vs_explicit_no_ambiguity() {
+    // Disambiguation is purely by `at_prefix_start`: `^^lbl B C` is
+    // explicit (B is the boundary, C is the trailing sequence atom);
+    // `^^lbl / B` is inferred (`/` is not an atom-start).
+    let explicit = parse("r <- 'a' ^^lbl 'b' 'c'");
+    assert_eq!(
+        explicit.rules["r"],
+        Pattern::Sequence(vec![
+            lowered_boundary_catch(Pattern::literal("a"), "lbl", Pattern::literal("b")),
+            Pattern::literal("c"),
+        ]),
+    );
+    let inferred = parse("r <- 'a' ^^lbl / 'b'");
+    assert_eq!(
+        inferred.rules["r"],
+        Pattern::OrderedChoice(vec![
+            Pattern::InferBoundaryCatch {
+                inner: Box::new(Pattern::literal("a")),
+                label: "lbl".into(),
+            },
+            Pattern::literal("b"),
+        ]),
+    );
+}
+
+// ---- Lenient marker (`~p`) ------------------------------------
+
+#[test]
+fn lenient_marker_wraps_atom() {
+    let g = parse("r <- 'a' ~b 'c'\nb <- 'x'");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Sequence(vec![
+            Pattern::literal("a"),
+            Pattern::Lenient(Box::new(Pattern::NonTerminal("b".into()))),
+            Pattern::literal("c"),
+        ]),
+    );
+}
+
+#[test]
+fn lenient_marker_requires_touching_atom() {
+    let err = parse_src("r <- 'a' ~ b\nb <- 'x'").unwrap_err();
+    assert!(
+        err.message.contains("no whitespace"),
+        "expected a touching-atom error, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn lenient_marker_inside_not_predicate() {
+    let g = parse("r <- !~b 'c'\nb <- 'x'");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Sequence(vec![
+            Pattern::NotPredicate(Box::new(Pattern::Lenient(Box::new(Pattern::NonTerminal(
+                "b".into()
+            ))))),
+            Pattern::literal("c"),
+        ]),
+    );
+}
+
+#[test]
+fn lenient_marker_carries_through_postfix() {
+    // `~p*` is `Lenient(p)` followed by `*` postfix? No — `~` is at the
+    // prefix tier and wraps a single atom-with-postfix. So `~p*` is
+    // `~(p*)` = `Lenient(Repeat(p))`.
+    let g = parse("r <- ~'a'*");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Lenient(Box::new(Pattern::Repeat(Box::new(Pattern::literal("a"))))),
+    );
+}
+
 #[test]
 fn catch_accepts_underscore_prefixed_labels() {
     // `_foo` (underscore prefix, not bare `_`) stays a valid label.
@@ -621,6 +879,76 @@ fn end_to_end_recover_repeat_compile_run() {
     let spans: Vec<(usize, usize)> = r.captures.iter().map(|c| (c.start, c.end)).collect();
     assert_eq!(kinds, vec![kw, recovery, recovery, kw]);
     assert_eq!(spans, vec![(0, 3), (3, 4), (4, 5), (5, 8)]);
+}
+
+#[test]
+fn end_to_end_inferred_catch_matches_explicit_behavior() {
+    // `^^lbl` (FOLLOW-inferred) should produce a program with the
+    // same observable behavior as the explicit `^^lbl B` form when
+    // `B` mirrors the call site's FOLLOW set. Byte-identical
+    // bytecode isn't expected (label numbering shifts), but the
+    // MatchResult on the same input must agree.
+    use syntax_highlighter::pegvm::VM;
+    let inferred = parse("list <- aliased (',' aliased)*\naliased <- 'x' ^^bad")
+        .compile()
+        .unwrap();
+    let explicit = parse("list <- aliased (',' aliased)*\naliased <- 'x' ^^bad (',' / !.)")
+        .compile()
+        .unwrap();
+    for input in [&b"x,x"[..], b"xy,x", b"x"].iter() {
+        let r_inferred = VM::new(&inferred.code, input).run();
+        let r_explicit = VM::new(&explicit.code, input).run();
+        assert_eq!(
+            r_inferred.complete, r_explicit.complete,
+            "completion differs for input {input:?}"
+        );
+        assert_eq!(
+            r_inferred.matched, r_explicit.matched,
+            "matched length differs for input {input:?}"
+        );
+    }
+}
+
+#[test]
+fn end_to_end_inferred_catch_fires_on_partial_match() {
+    use syntax_highlighter::pegvm::VM;
+    // `aliased <- 'x' ^^bad` lowers to a catch that anchors `x` to
+    // FOLLOW(aliased). FOLLOW contains `,` from the call site in
+    // `list`. Input `xy,x` — the first `x` succeeds but the next
+    // byte `y` is not in FOLLOW; the catch fires, recovery skips
+    // `y` until it sees `,`, and parsing resumes with the second `x`.
+    let prog = parse("list <- aliased (',' aliased)*\naliased <- 'x' ^^bad")
+        .compile()
+        .unwrap();
+    let r = VM::new(&prog.code, b"xy,x").run();
+    assert!(r.complete, "catch should let parse complete; got {:?}", r);
+}
+
+#[test]
+fn end_to_end_inferred_catch_clean_input_no_recovery() {
+    use syntax_highlighter::pegvm::VM;
+    let prog = parse("list <- aliased (',' aliased)*\naliased <- 'x' ^^bad")
+        .compile()
+        .unwrap();
+    let r = VM::new(&prog.code, b"x,x").run();
+    assert!(r.complete);
+    let recovery_captures = r
+        .captures
+        .iter()
+        .filter(|c| prog.capture_kinds[c.kind.0 as usize] == "recovery")
+        .count();
+    assert_eq!(recovery_captures, 0, "clean input should emit no recovery");
+}
+
+#[test]
+fn end_to_end_lenient_marker_is_runtime_transparent() {
+    use syntax_highlighter::pegvm::VM;
+    let plain = parse("r <- 'x'+").compile().unwrap();
+    let lenient = parse("r <- ~'x'+").compile().unwrap();
+    assert_eq!(plain.code, lenient.code, "`~` is runtime-transparent");
+    let r = VM::new(&lenient.code, b"xxx").run();
+    assert!(r.complete);
+    assert_eq!(r.matched, 3);
 }
 
 #[test]

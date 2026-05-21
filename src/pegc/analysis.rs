@@ -94,6 +94,13 @@ pub(crate) fn pattern_nullable(pat: &Pattern, nullable: &HashSet<String>) -> boo
         // "matches empty after success" path — nullability follows
         // inner.
         Pattern::Catch { inner, .. } => pattern_nullable(inner, nullable),
+        // `~` is runtime-transparent.
+        Pattern::Lenient(inner) => pattern_nullable(inner, nullable),
+        // Pre-resolution placeholder for `^^lbl`. Nullability follows
+        // inner just like `Catch` — the eventual recovery body
+        // `(!B .)*` is always nullable but only contributes on
+        // failure, same shape as `Catch`'s analysis.
+        Pattern::InferBoundaryCatch { inner, .. } => pattern_nullable(inner, nullable),
         Pattern::NonTerminal(name) => nullable.contains(name),
     }
 }
@@ -147,6 +154,12 @@ fn collect_first_calls(pat: &Pattern, nullable: &HashSet<String>, out: &mut Hash
             collect_first_calls(inner, nullable, out);
             collect_first_calls(recovery, nullable, out);
         }
+        Pattern::Lenient(inner) => collect_first_calls(inner, nullable, out),
+        // Pre-resolution placeholder for `^^lbl`. Only the inner can
+        // route a first-call edge — the synthesized recovery
+        // `(!B .)*` has no non-terminals other than B, and the
+        // resolver hasn't picked B yet.
+        Pattern::InferBoundaryCatch { inner, .. } => collect_first_calls(inner, nullable, out),
         Pattern::NonTerminal(name) => {
             out.insert(name.clone());
         }
@@ -336,6 +349,15 @@ fn pattern_first(pat: &Pattern, nullable: &HashSet<String>) -> FollowSet {
             // in FIRST.
             out.extend(pattern_first(inner, nullable));
         }
+        Pattern::Lenient(inner) => {
+            out.extend(pattern_first(inner, nullable));
+        }
+        // Pre-resolution placeholder for `^^lbl`. The eventual recovery
+        // body `(!B .)*` fires only on failure (same as Catch) so it
+        // doesn't appear in FIRST; only the inner does.
+        Pattern::InferBoundaryCatch { inner, .. } => {
+            out.extend(pattern_first(inner, nullable));
+        }
     }
     out
 }
@@ -460,6 +482,17 @@ fn collect_follow(
             // for cross-check).
             collect_follow(inner, nullable, trailing, follow, changed);
             collect_follow(recovery, nullable, trailing, follow, changed);
+        }
+        Pattern::Lenient(inner) => {
+            collect_follow(inner, nullable, trailing, follow, changed);
+        }
+        // Pre-resolution placeholder for `^^lbl`. Treat like `Catch`'s
+        // success arm: inner inherits the catch's trailing. The
+        // synthesized recovery body has no NonTerminal references at
+        // this stage (the resolver hasn't picked B yet), so there's
+        // nothing to propagate into.
+        Pattern::InferBoundaryCatch { inner, .. } => {
+            collect_follow(inner, nullable, trailing, follow, changed);
         }
     }
 }
@@ -693,6 +726,18 @@ fn walk_for_call_sites<'a>(
             let mut isolated: Vec<&[Pattern]> = Vec::new();
             walk_for_call_sites(recovery, caller, &mut isolated, false, ctx, findings);
         }
+        // The lenient marker is an explicit author intent signal: the
+        // lint treats the wrapped subtree as opaque and emits no
+        // findings under it.
+        Pattern::Lenient(_) => {}
+        // The resolver runs before the lint, so the lint should
+        // never see an unresolved boundary-anchored catch.
+        Pattern::InferBoundaryCatch { .. } => {
+            unreachable!(
+                "Pattern::InferBoundaryCatch must be resolved by \
+                 analysis::resolve_inferred_boundaries before lint_partial_match"
+            )
+        }
     }
 }
 
@@ -899,6 +944,15 @@ fn find_callsite_unguarded<'a>(
                 found_callsite,
             )
         }
+        // The lenient marker hides the wrapped subtree from the lint
+        // entirely — call sites inside it don't count.
+        Pattern::Lenient(_) => false,
+        Pattern::InferBoundaryCatch { .. } => {
+            unreachable!(
+                "Pattern::InferBoundaryCatch must be resolved by \
+                 analysis::resolve_inferred_boundaries before lint_partial_match"
+            )
+        }
     }
 }
 
@@ -974,4 +1028,236 @@ fn element_subsumed_by(elem: &FollowElement, set: &FollowSet) -> bool {
         return true;
     }
     set.contains(elem)
+}
+
+// -- FOLLOW-inferred boundary catch resolver -----------------------------
+
+/// Synthesize a boundary pattern from a FOLLOW set. Used by the
+/// `^^lbl` resolver to fill in the boundary argument the author
+/// omitted. The synthesized pattern is an `OrderedChoice` of:
+/// - each literal byte sequence as `Pattern::Literal(bytes)`,
+/// - the union of all character classes as one `Pattern::CharClass(set)`,
+/// - each rule reference as `Pattern::NonTerminal(name)`,
+/// - each capture as `Pattern::Capture(kind, inner)`,
+/// - EOF (if present) as `Pattern::NotPredicate(AnyChar)` (i.e. `!.`).
+///
+/// Single-element synthesis returns the element directly rather than
+/// wrapping in a one-arm `OrderedChoice`.
+pub fn follow_set_to_boundary_pattern(fs: &FollowSet) -> Pattern {
+    let mut alts: Vec<Pattern> = Vec::new();
+    let mut char_union = CharSet::empty();
+    let mut has_char_class = false;
+    for elem in fs {
+        match elem {
+            FollowElement::CharClass(cs) => {
+                char_union = char_union.union(cs);
+                has_char_class = true;
+            }
+            FollowElement::Literal(bytes) => {
+                alts.push(Pattern::Literal(bytes.clone()));
+            }
+            FollowElement::Rule(name) => {
+                alts.push(Pattern::NonTerminal(name.clone()));
+            }
+            FollowElement::Capture { kind, inner } => {
+                alts.push(Pattern::Capture(
+                    kind.clone(),
+                    Box::new(follow_element_inner_to_pattern(inner)),
+                ));
+            }
+            FollowElement::Eof => {
+                alts.push(Pattern::NotPredicate(Box::new(Pattern::AnyChar)));
+            }
+        }
+    }
+    if has_char_class {
+        alts.insert(0, Pattern::CharClass(char_union));
+    }
+    if alts.len() == 1 {
+        alts.into_iter().next().unwrap()
+    } else {
+        Pattern::OrderedChoice(alts)
+    }
+}
+
+fn follow_element_inner_to_pattern(elem: &FollowElement) -> Pattern {
+    match elem {
+        FollowElement::Literal(bytes) => Pattern::Literal(bytes.clone()),
+        FollowElement::CharClass(cs) => Pattern::CharClass(*cs),
+        FollowElement::Rule(name) => Pattern::NonTerminal(name.clone()),
+        FollowElement::Capture { kind, inner } => Pattern::Capture(
+            kind.clone(),
+            Box::new(follow_element_inner_to_pattern(inner)),
+        ),
+        // EOF nested inside a capture would be malformed in practice;
+        // synthesize the same `!.` shape as the top-level case.
+        FollowElement::Eof => Pattern::NotPredicate(Box::new(Pattern::AnyChar)),
+    }
+}
+
+/// Resolve every `Pattern::InferBoundaryCatch` placeholder in `grammar`
+/// to the lowered explicit-form `Catch` shape. Boundary is synthesized
+/// from the placeholder's per-site FOLLOW set; an empty FOLLOW set
+/// returns `CompileError::CannotInferBoundary`.
+///
+/// Runs before `lint_partial_match` and bytecode emission. After this
+/// pass, no `InferBoundaryCatch` remains in the rule bodies.
+pub fn resolve_inferred_boundaries(grammar: &mut Grammar) -> Result<(), CompileError> {
+    let nullable = compute_nullable(&grammar.rules);
+    let follow = compute_follow(grammar);
+    let mut new_rules: HashMap<String, Pattern> = HashMap::with_capacity(grammar.rules.len());
+    for (name, body) in &grammar.rules {
+        let rule_follow = follow.get(name).cloned().unwrap_or_default();
+        let resolved = resolve_in_pattern(body, &rule_follow, &nullable, name)?;
+        new_rules.insert(name.clone(), resolved);
+    }
+    grammar.rules = new_rules;
+    Ok(())
+}
+
+fn resolve_in_pattern(
+    pat: &Pattern,
+    trailing: &FollowSet,
+    nullable: &HashSet<String>,
+    rule_name: &str,
+) -> Result<Pattern, CompileError> {
+    match pat {
+        Pattern::Literal(_)
+        | Pattern::CharClass(_)
+        | Pattern::AnyChar
+        | Pattern::NonTerminal(_) => Ok(pat.clone()),
+        Pattern::Sequence(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for i in 0..items.len() {
+                let sub_trailing = sequence_suffix_trailing(&items[i + 1..], trailing, nullable);
+                out.push(resolve_in_pattern(
+                    &items[i],
+                    &sub_trailing,
+                    nullable,
+                    rule_name,
+                )?);
+            }
+            Ok(Pattern::Sequence(out))
+        }
+        Pattern::OrderedChoice(alts) => {
+            let mut out = Vec::with_capacity(alts.len());
+            for alt in alts {
+                out.push(resolve_in_pattern(alt, trailing, nullable, rule_name)?);
+            }
+            Ok(Pattern::OrderedChoice(out))
+        }
+        Pattern::Repeat(inner) | Pattern::RepeatOne(inner) => {
+            // The inner can iterate; its successor includes FIRST(inner)
+            // plus the outer trailing.
+            let mut sub_trailing = trailing.clone();
+            sub_trailing.extend(pattern_first(inner, nullable));
+            Ok(match pat {
+                Pattern::Repeat(_) => Pattern::Repeat(Box::new(resolve_in_pattern(
+                    inner,
+                    &sub_trailing,
+                    nullable,
+                    rule_name,
+                )?)),
+                Pattern::RepeatOne(_) => Pattern::RepeatOne(Box::new(resolve_in_pattern(
+                    inner,
+                    &sub_trailing,
+                    nullable,
+                    rule_name,
+                )?)),
+                _ => unreachable!(),
+            })
+        }
+        Pattern::Optional(inner) => Ok(Pattern::Optional(Box::new(resolve_in_pattern(
+            inner, trailing, nullable, rule_name,
+        )?))),
+        Pattern::NotPredicate(inner) => Ok(Pattern::NotPredicate(Box::new(resolve_in_pattern(
+            inner,
+            &FollowSet::new(),
+            nullable,
+            rule_name,
+        )?))),
+        Pattern::AndPredicate(inner) => Ok(Pattern::AndPredicate(Box::new(resolve_in_pattern(
+            inner,
+            &FollowSet::new(),
+            nullable,
+            rule_name,
+        )?))),
+        Pattern::Capture(kind, inner) => Ok(Pattern::Capture(
+            kind.clone(),
+            Box::new(resolve_in_pattern(inner, trailing, nullable, rule_name)?),
+        )),
+        Pattern::Lenient(inner) => Ok(Pattern::Lenient(Box::new(resolve_in_pattern(
+            inner, trailing, nullable, rule_name,
+        )?))),
+        Pattern::Catch {
+            inner,
+            label,
+            recovery,
+        } => {
+            // Success branch: inner inherits the catch's trailing.
+            // Recovery branch: trailing is also the catch's trailing.
+            Ok(Pattern::Catch {
+                inner: Box::new(resolve_in_pattern(inner, trailing, nullable, rule_name)?),
+                label: label.clone(),
+                recovery: Box::new(resolve_in_pattern(recovery, trailing, nullable, rule_name)?),
+            })
+        }
+        Pattern::InferBoundaryCatch { inner, label } => {
+            if trailing.is_empty() {
+                return Err(CompileError::CannotInferBoundary {
+                    rule: rule_name.into(),
+                    label: label.clone(),
+                });
+            }
+            let boundary = follow_set_to_boundary_pattern(trailing);
+            // Resolve nested catches inside the inner first.
+            let resolved_inner = resolve_in_pattern(inner, trailing, nullable, rule_name)?;
+            Ok(lower_inferred_boundary_catch(
+                resolved_inner,
+                label.clone(),
+                boundary,
+            ))
+        }
+    }
+}
+
+/// FIRST of `items[..]` with `outer_trailing` propagated through if
+/// all items are nullable. Mirrors the Sequence arm of
+/// `collect_follow` but produces a fresh FollowSet rather than
+/// extending one in place.
+fn sequence_suffix_trailing(
+    items: &[Pattern],
+    outer_trailing: &FollowSet,
+    nullable: &HashSet<String>,
+) -> FollowSet {
+    let mut out = FollowSet::new();
+    let mut all_nullable = true;
+    for it in items {
+        out.extend(pattern_first(it, nullable));
+        if !pattern_nullable(it, nullable) {
+            all_nullable = false;
+            break;
+        }
+    }
+    if all_nullable {
+        out.extend(outer_trailing.iter().cloned());
+    }
+    out
+}
+
+/// Mirror of `parser::lower_boundary_catch` for the resolver path.
+/// Builds the same `Catch { Sequence([inner, &B]), label, @recovery{(!B .)*} }`
+/// shape from a synthesized boundary.
+fn lower_inferred_boundary_catch(inner: Pattern, label: String, boundary: Pattern) -> Pattern {
+    let lookahead = Pattern::AndPredicate(Box::new(boundary.clone()));
+    let stop_loop = Pattern::Repeat(Box::new(Pattern::Sequence(vec![
+        Pattern::NotPredicate(Box::new(boundary)),
+        Pattern::AnyChar,
+    ])));
+    let recovery = Pattern::Capture("recovery".into(), Box::new(stop_loop));
+    Pattern::Catch {
+        inner: Box::new(Pattern::Sequence(vec![inner, lookahead])),
+        label,
+        recovery: Box::new(recovery),
+    }
 }

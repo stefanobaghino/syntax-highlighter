@@ -37,6 +37,26 @@ pub enum Pattern {
         label: String,
         recovery: Box<Pattern>,
     },
+    /// Author-local marker that a pattern is intentionally lenient — the
+    /// `lint_partial_match` walker treats this as an opaque barrier and
+    /// does not descend into it for call-site detection. At runtime the
+    /// wrapper is transparent: the compiler emits exactly the inner
+    /// pattern's bytecode. Surface syntax: postfix `~p`.
+    Lenient(Box<Pattern>),
+    /// Boundary-anchored catch with the boundary inferred from the
+    /// call site's FOLLOW set. Placeholder produced at parse time by
+    /// the `^^lbl` surface form; resolved before bytecode emission by
+    /// `analysis::resolve_inferred_boundaries`, which rewrites it to
+    /// the same shape the explicit `^^lbl B` form lowers to (a
+    /// `Catch` whose inner is `Sequence([inner, AndPredicate(B)])`
+    /// and whose recovery is `@recovery{(!B .)*}`).
+    ///
+    /// An `InferBoundaryCatch` should never reach the compiler or any
+    /// downstream analysis — the resolver runs first and replaces it.
+    InferBoundaryCatch {
+        inner: Box<Pattern>,
+        label: String,
+    },
 }
 
 impl Pattern {

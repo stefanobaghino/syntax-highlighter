@@ -86,7 +86,7 @@ attr_body      <- (!']' .)*
 block         <- @punctuation{'{'} ws (block_body ws @punctuation{'}'} ^block_close @recovery{(!'}' .)*} @punctuation{'}'})
 block_body    <- (block_item ws)*
 block_item    <- at_rule
-                / declaration
+                / ~declaration   # leniency on the `important? ws (';' / &'}')` tail is absorbed by `block`'s `^block_close`
                 / rule
                 / @punctuation{';'}
 
@@ -127,7 +127,8 @@ hex_color     <- @constant{hex_body}
 hex_body      <- '#' hex_digit+
 hex_digit     <- [0-9a-fA-F]
 
-number_with_unit <- @number{num_body}
+number_with_unit <- @number{~num_body}  # trailing `num_unit?` leniency: unitless numbers stop at the next non-unit byte; outer recovery handles malformed values
+
 num_body      <- sign? (num_float / num_int) num_unit?
 sign          <- [+\-]
 num_int       <- [0-9]+
