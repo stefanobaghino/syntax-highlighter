@@ -242,6 +242,48 @@ whatever captures the author put in it. Wrap recovery in
 natural two-tier composition is `^label` inside a rule for known
 failure points and `*^` outside as the loop-level backstop.
 
+#### Anchoring catches at boundaries
+
+In practice every catch site in `grammars/sqlite.peg` needed a third
+ingredient: a **boundary lookahead** before the catch fires. PEG's
+prioritized choice and possessive `*` mean rules routinely succeed
+by matching a prefix and leaving the rest as leftover at the outer
+level — invisibly, with no failure. The catch only helps when the
+rule actually *fails*, so the lookahead is what turns a
+partial-match success into a catch-able failure. The recurring
+shape:
+
+```peg
+rule <- ((INNER &(ws boundary)) ^lbl @recovery{(!boundary .)*})
+boundary <- <punct alts> / <kw_* alts> / !.
+```
+
+`result_column` and `where_clause` in `grammars/sqlite.peg` are the
+worked examples. `&(ws boundary)` requires the rule to consume up
+to a known continuation token; `(!boundary .)*` resyncs without
+consuming it (so the outer rule still sees the structural
+delimiter).
+
+**Footgun: where the catch goes.** The catch must sit *inside* any
+required prefix the rule needs to commit to. Writing the catch
+around the whole rule body — e.g.
+
+```peg
+where_clause <- kw_where ws (expr &(ws boundary)) ^bad_where @recovery{(!boundary .)*}
+```
+
+— fires the catch even when `kw_where` itself fails (no WHERE
+keyword present): inner fails → catch fires → recovery `(!boundary
+.)*` matches zero bytes and succeeds → every clean `SELECT 1;`
+emits a spurious empty `recovery` capture. Push the catch past the
+unconditional prefix:
+
+```peg
+where_clause <- kw_where ws ((expr &(ws boundary)) ^bad_where @recovery{(!boundary .)*})
+```
+
+so a missing prefix fails the rule cleanly with no catch involved.
+
 Implementation lives in `Pattern::Catch` (`src/pegc/pattern.rs`) and
 the emission in `src/pegc/compiler.rs`. Reuses the `RecoverScope*`
 opcodes introduced for `*^` — no new VM machinery.
