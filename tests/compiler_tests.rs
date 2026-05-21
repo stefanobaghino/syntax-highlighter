@@ -1811,13 +1811,6 @@ fn compile_succeeds_with_definition_lenient_on_flagged_rule() {
 }
 
 #[test]
-fn compile_succeeds_with_call_site_lenient_on_flagged_call() {
-    let g = parse("start <- (~r)*^[;]\nr <- 'x' 'y'?").expect("parse");
-    g.compile()
-        .expect("compile should succeed with call-site `~r`");
-}
-
-#[test]
 fn compile_succeeds_with_boundary_catch_anchor() {
     // `^^bad ';'` lowers to `Catch { Seq(a, &';'), bad, recovery }` —
     // anchoring `a` by lookahead so the lint sees no leniency.

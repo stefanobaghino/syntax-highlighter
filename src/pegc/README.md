@@ -43,7 +43,7 @@ the following precedence, tightest-binding first:
 ```
 atom       "abc"   [a-z]   .   ident   (...)   @name{...}
 postfix    p*      p+      p?  p*^     p+^     p*^[cs]   p+^[cs]
-prefix     !p      &p      ~p
+prefix     !p      &p
 sequence   p1 p2 p3          (juxtaposition)
 catch      p1 ^label p2      p1 ^^label B      p1 ^^label
 choice     p1 / p2 / p3
@@ -51,7 +51,7 @@ choice     p1 / p2 / p3
 
 Rule definitions may carry a top-level `~name <-` decorator to mark
 the whole rule as intentionally lenient — see
-[`~p` / `~name <-`](#p--name----intentional-leniency-marker) below.
+[`~name <-`](#name----intentional-leniency-marker) below.
 
 ### Atoms
 
@@ -333,30 +333,28 @@ uses a placeholder `Pattern::InferBoundaryCatch { inner, label }`
 resolved by `analysis::resolve_inferred_boundaries` before bytecode
 emission. No new VM machinery.
 
-### `~p` / `~name <-` — intentional-leniency marker
+### `~name <-` — intentional-leniency marker
 
 The static `lint_partial_match` check flags trailing-nullable rules
 called unanchored — but on shipped grammars almost every flag is a
 "partial-match leniency intentionally absorbed by outer `*^`-style
 recovery" that the static analysis can't statically prove safe. The
-`~` marker is the author's intent signal: "yes, this leniency is
-known, don't flag it." There are two forms:
-
-- **`~name <-`** at the rule definition. Marks every call to `name`
-  as intentional. Use when a rule is intrinsically lenient (e.g.
-  `~opt_semi <- (';' ws)?` — ASI absorption — applies to every
-  caller). Wraps the rule's body in `Pattern::Lenient`.
-- **`~p`** at a single call site, a prefix-tier operator binding
-  tighter than `!` and `&`. Use when only one caller intentionally
-  tolerates the leniency and others should still be flagged.
-
-Both forms compile transparently — `Pattern::Lenient(p)` emits the
-same bytecode as `p`. The wrapping exists only for static analysis.
+`~name <-` marker is the author's intent signal: "yes, this rule's
+leniency is known, don't flag any call to it." Wraps the rule's body
+in `Pattern::Lenient`, which the lint walker treats as an opaque
+barrier and the compiler treats as transparent (emits the inner's
+bytecode unchanged).
 
 ```peg
-~opt_semi <- (@punctuation{';'} ws)?       # definition-level
-stmt <- ~legacy_form / strict_form         # call-site
+~opt_semi <- (@punctuation{';'} ws)?
 ```
+
+The marker must touch the name (no whitespace between `~` and the
+identifier). Whether the runtime invariant the marker assumes —
+typically an outer `*^` / `*^[;]` / `^block_close` recovery scope
+absorbing the leniency — actually holds is currently a convention
+recorded in adjacent comments and unenforced by the lint; see
+`#113` for the planned tightening.
 
 ### Reserved syntax
 
@@ -415,7 +413,7 @@ concrete use case.
   Examples: `NonTerminal("foo")` with no matching rule, a start rule
   that doesn't exist, partial-match leniency on a call site that's
   neither anchored (`^^lbl B`) nor explicitly marked intentional
-  (`~p` / `~name <-`), an `^^lbl` whose call-site FOLLOW set is empty
+  (`~name <-`), an `^^lbl` whose call-site FOLLOW set is empty
   so no boundary can be inferred.
 - **`Error`** — unified wrapper returned by `pegc::compile(source)`.
   `From<ParseError>` and `From<CompileError>` are provided.

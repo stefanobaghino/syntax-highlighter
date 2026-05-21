@@ -259,45 +259,14 @@ impl<'a> Parser<'a> {
             // `^<non-ident-byte>` slot; when added, this function
             // grows a one-byte lookahead.
             Some(b'^') => false,
-            // `~name <- body` is a definition-level lenient marker for
-            // the NEXT rule, not a call-site `~p` in the current body.
-            // Look past the `~ ident` to see if `<-` follows.
-            Some(b'~') if self.looks_like_lenient_rule_def() => false,
+            // `~` is a definition-level marker on the NEXT rule. There
+            // is no call-site form, so `~` is never a valid in-body
+            // atom-start: fall through and let the sequence terminate
+            // here, letting `parse_grammar` consume `~name <- ...`.
+            Some(b'~') => false,
             Some(c) if is_ident_start(c) => !self.looks_like_rule_def(),
             Some(c) => is_atom_start(c),
         }
-    }
-
-    /// Look past a leading `~` to see if it starts a `~ident <-` rule
-    /// definition. Used by `at_prefix_start` to keep `~` at the
-    /// boundary between rules from being consumed as a call-site
-    /// lenient marker for the previous rule's body.
-    fn looks_like_lenient_rule_def(&self) -> bool {
-        let mut p = self.pos;
-        if p >= self.src.len() || self.src[p] != b'~' {
-            return false;
-        }
-        p += 1;
-        if p >= self.src.len() || !is_ident_start(self.src[p]) {
-            return false;
-        }
-        p += 1;
-        while p < self.src.len() && is_ident_cont(self.src[p]) {
-            p += 1;
-        }
-        loop {
-            while p < self.src.len() && matches!(self.src[p], b' ' | b'\t' | b'\n' | b'\r') {
-                p += 1;
-            }
-            if p < self.src.len() && self.src[p] == b'#' {
-                while p < self.src.len() && self.src[p] != b'\n' {
-                    p += 1;
-                }
-                continue;
-            }
-            break;
-        }
-        p + 1 < self.src.len() && &self.src[p..p + 2] == b"<-"
     }
 
     /// Look ahead from the current position to determine whether what follows is
@@ -333,57 +302,17 @@ impl<'a> Parser<'a> {
         match self.peek() {
             Some(b'!') => {
                 self.pos += 1;
-                // Recurse into `parse_prefix` so chained prefixes
-                // compose: `!~p` parses as `NotPredicate(Lenient(p))`.
-                // Existing `!atom` shapes are unchanged.
-                let inner = self.parse_prefix_or_postfix_after_predicate()?;
+                self.skip_ws();
+                let inner = self.parse_postfix()?;
                 Ok(Pattern::NotPredicate(Box::new(inner)))
             }
             Some(b'&') => {
                 self.pos += 1;
-                let inner = self.parse_prefix_or_postfix_after_predicate()?;
+                self.skip_ws();
+                let inner = self.parse_postfix()?;
                 Ok(Pattern::AndPredicate(Box::new(inner)))
             }
-            // `~p` — intentional-leniency marker. `~` must touch the
-            // atom (no whitespace); the wrapper is opaque to the lint
-            // and transparent at runtime. See `src/pegc/README.md`.
-            Some(b'~') => {
-                self.pos += 1;
-                if matches!(
-                    self.peek(),
-                    Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'\r')
-                ) {
-                    return Err(
-                        self.err("expected pattern immediately after `~` (no whitespace)".into())
-                    );
-                }
-                let inner = self.parse_postfix()?;
-                Ok(Pattern::Lenient(Box::new(inner)))
-            }
             _ => self.parse_postfix(),
-        }
-    }
-
-    /// After `!` / `&` consume their sigil, allow either a single
-    /// `~p` lenient marker or a plain `parse_postfix`. Skipping
-    /// whitespace before the inner is allowed (existing behavior);
-    /// `~` itself enforces its own touching-atom rule.
-    fn parse_prefix_or_postfix_after_predicate(&mut self) -> Result<Pattern, ParseError> {
-        self.skip_ws();
-        if self.peek() == Some(b'~') {
-            self.pos += 1;
-            if matches!(
-                self.peek(),
-                Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'\r')
-            ) {
-                return Err(
-                    self.err("expected pattern immediately after `~` (no whitespace)".into())
-                );
-            }
-            let inner = self.parse_postfix()?;
-            Ok(Pattern::Lenient(Box::new(inner)))
-        } else {
-            self.parse_postfix()
         }
     }
 
@@ -715,10 +644,7 @@ fn is_ident_cont(c: u8) -> bool {
 }
 
 fn is_atom_start(c: u8) -> bool {
-    matches!(
-        c,
-        b'(' | b'"' | b'\'' | b'[' | b'.' | b'@' | b'!' | b'&' | b'~'
-    ) || is_ident_start(c)
+    matches!(c, b'(' | b'"' | b'\'' | b'[' | b'.' | b'@' | b'!' | b'&') || is_ident_start(c)
 }
 
 /// Lower `INNER ^^lbl B` to the explicit boundary-anchored catch

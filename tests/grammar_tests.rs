@@ -675,56 +675,13 @@ fn inferred_vs_explicit_no_ambiguity() {
     );
 }
 
-// ---- Lenient marker (`~p`) ------------------------------------
-
-#[test]
-fn lenient_marker_wraps_atom() {
-    let g = parse("r <- 'a' ~b 'c'\nb <- 'x'");
-    assert_eq!(
-        g.rules["r"],
-        Pattern::Sequence(vec![
-            Pattern::literal("a"),
-            Pattern::Lenient(Box::new(Pattern::NonTerminal("b".into()))),
-            Pattern::literal("c"),
-        ]),
-    );
-}
-
-#[test]
-fn lenient_marker_requires_touching_atom() {
-    let err = parse_src("r <- 'a' ~ b\nb <- 'x'").unwrap_err();
-    assert!(
-        err.message.contains("no whitespace"),
-        "expected a touching-atom error, got: {}",
-        err.message
-    );
-}
-
-#[test]
-fn lenient_marker_inside_not_predicate() {
-    let g = parse("r <- !~b 'c'\nb <- 'x'");
-    assert_eq!(
-        g.rules["r"],
-        Pattern::Sequence(vec![
-            Pattern::NotPredicate(Box::new(Pattern::Lenient(Box::new(Pattern::NonTerminal(
-                "b".into()
-            ))))),
-            Pattern::literal("c"),
-        ]),
-    );
-}
-
-#[test]
-fn lenient_marker_carries_through_postfix() {
-    // `~p*` is `Lenient(p)` followed by `*` postfix? No — `~` is at the
-    // prefix tier and wraps a single atom-with-postfix. So `~p*` is
-    // `~(p*)` = `Lenient(Repeat(p))`.
-    let g = parse("r <- ~'a'*");
-    assert_eq!(
-        g.rules["r"],
-        Pattern::Lenient(Box::new(Pattern::Repeat(Box::new(Pattern::literal("a"))))),
-    );
-}
+// ---- Lenient marker (definition-level only) -------------------
+//
+// Definition-level `~name <- body` parsing is verified end-to-end by
+// the `definition_lenient_marker_*` tests in `tests/compiler_tests.rs`.
+// The call-site `~p` form was considered during design and dropped
+// before landing: empirically zero shipped grammars used it after the
+// pivot to definition-level marking.
 
 #[test]
 fn catch_accepts_underscore_prefixed_labels() {
@@ -944,7 +901,7 @@ fn end_to_end_inferred_catch_clean_input_no_recovery() {
 fn end_to_end_lenient_marker_is_runtime_transparent() {
     use syntax_highlighter::pegvm::VM;
     let plain = parse("r <- 'x'+").compile().unwrap();
-    let lenient = parse("r <- ~'x'+").compile().unwrap();
+    let lenient = parse("~r <- 'x'+").compile().unwrap();
     assert_eq!(plain.code, lenient.code, "`~` is runtime-transparent");
     let r = VM::new(&lenient.code, b"xxx").run();
     assert!(r.complete);
