@@ -42,7 +42,7 @@ the following precedence, tightest-binding first:
 
 ```
 atom       "abc"   [a-z]   .   ident   (...)   @name{...}
-postfix    p*      p+      p?  p*^     p+^
+postfix    p*      p+      p?  p*^     p+^     p*^[cs]   p+^[cs]
 prefix     !p      &p
 sequence   p1 p2 p3          (juxtaposition)
 catch      p1 ^label p2
@@ -81,6 +81,8 @@ point.
 | `p?` | Optional. |
 | `p*^` | Repetition with skip-byte error recovery (see below). |
 | `p+^` | At-least-once recovery form — desugars to `p (p*^)`. |
+| `p*^[charset]` | Repetition with delimiter-scoped recovery: on inner failure, skip to and consume the next byte in `charset`. |
+| `p+^[charset]` | At-least-once delimiter-scoped recovery — desugars to `p (p*^[charset])`. |
 
 ### Prefix operators
 
@@ -137,15 +139,60 @@ sql_file <- ws (statement)*^ ws !.
 recover on the rest. The recovery capture kind is hard-coded as
 `recovery`.
 
-Implementation lives in `Pattern::RecoverRepeat`
-(`src/pegc/pattern.rs`) and the emission in
-`src/pegc/compiler.rs`. The compiler uses `Choice`/`Commit` per
-iteration rather than `PartialCommit` — see the invariants section in
-[`src/pegvm/README.md`](../pegvm/README.md).
+**Lowering.** `p*^` is syntactic sugar for a labeled catch wrapped in
+a `Repeat`. The parser produces an AST equivalent to:
+
+```peg
+(p ^recovery @recovery{.})*
+```
+
+There is no dedicated `RecoverRepeat` AST node — `build_recover_repeat`
+in `src/pegc/parser.rs` emits the desugared `Repeat(Catch(...))` tree
+directly. The runtime behavior (one `recovery` capture per skipped
+byte, clean exit at EOF) is unchanged; what was once a bespoke opcode
+sequence is now the composition of the existing `Repeat` and `Catch`
+compiler arms in `src/pegc/compiler.rs`.
 
 **Empty-match caveat.** If `p` matches the empty string, `p*^` spins
 forever — same hazard as plain `p*`. The compiler does not detect
 this; grammar authors must ensure `p` consumes input on success.
+
+### `p*^[charset]` / `p+^[charset]` — delimiter-scoped recovery
+
+The sync-set form replaces the skip-one-byte recovery with a
+skip-until-delimiter recovery: on inner failure, consume bytes that
+aren't in `charset` and then consume one byte that is. One `recovery`
+capture is emitted per resync region — covering the skipped bytes plus
+the delimiter — instead of one capture per skipped byte.
+
+```peg
+sql_file <- ws (statement)*^[;] ws !.
+```
+
+On input like `INSERT INTO @@@ garbage @@@; SELECT 1;` the `*^[;]` form
+emits a single `recovery` span covering `@@@ garbage @@@;` rather than
+17 single-byte recovery spans. Same compile shape as `*^`, different
+recovery body:
+
+```peg
+(p ^recovery @recovery{(![charset] .)* [charset]})*
+```
+
+`p+^[charset]` desugars to `p (p*^[charset])`, mirroring `p+^`.
+
+The `[charset]` token uses the standard character-class syntax — same
+ranges, escapes, and negation as a top-level `[...]` atom. It must
+touch `^` (no whitespace between them) so the postfix glue isn't
+broken by an intervening atom.
+
+**EOF semantics.** If the delimiter is missing before EOF, the
+recovery body fails: the catch fails, the outer `*` terminates, and
+the parse stops at the last successful inner match. With plain `*^`
+the loop would have skipped past the missing delimiter byte-by-byte
+to EOF; with sync sets the loop stops at the first unrecoverable
+region. Pick `*^` when "skip what you can't parse" is the right
+default and sync sets when you want recovery anchored to a specific
+delimiter.
 
 ### `inner ^label recovery` — labeled catch with recovery
 
