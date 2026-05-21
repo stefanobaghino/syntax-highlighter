@@ -38,3 +38,8 @@ harness = false
 name = "incremental"
 path = "benches/incremental.rs"
 harness = false
+
+[[bench]]
+name = "follow_set"
+path = "benches/follow_set.rs"
+harness = false

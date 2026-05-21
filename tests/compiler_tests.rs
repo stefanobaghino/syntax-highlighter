@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use syntax_highlighter::pegc::{compile_pattern, Grammar, Pattern};
+use syntax_highlighter::pegc::analysis::{compute_follow, FollowElement};
+use syntax_highlighter::pegc::{compile_pattern, parse, Grammar, Pattern};
 use syntax_highlighter::pegvm::{
     Capture, CaptureKind, CharSet, Instruction, Label, LabelId, MatchResult, MemoId, RuleKind, VM,
 };
@@ -1313,3 +1314,233 @@ fn lr_through_nullable_prefix_is_detected() {
         .iter()
         .any(|i| matches!(i, Instruction::RuleEnter(MemoId(0), RuleKind::Lr, _))));
 }
+
+// -- FOLLOW analysis ------------------------------------------------------
+
+fn rule(name: &str) -> FollowElement {
+    FollowElement::Rule(name.into())
+}
+
+fn lit(s: &str) -> FollowElement {
+    FollowElement::Literal(s.as_bytes().to_vec())
+}
+
+fn cap_lit(kind: &str, s: &str) -> FollowElement {
+    FollowElement::Capture {
+        kind: kind.into(),
+        inner: Box::new(lit(s)),
+    }
+}
+
+#[test]
+fn follow_set_single_rule_tail() {
+    // start <- a; a <- 'x'
+    let mut rules = HashMap::new();
+    rules.insert("start".into(), Pattern::NonTerminal("a".into()));
+    rules.insert("a".into(), Pattern::literal("x"));
+    let g = Grammar::new(rules, "start");
+    let follow = compute_follow(&g);
+    assert_eq!(follow["a"], BTreeSetOf::from([FollowElement::Eof]));
+    assert_eq!(follow["start"], BTreeSetOf::from([FollowElement::Eof]));
+}
+
+#[test]
+fn follow_set_sequence_after() {
+    // start <- a 'y'; a <- 'x'
+    let mut rules = HashMap::new();
+    rules.insert(
+        "start".into(),
+        Pattern::seq(vec![
+            Pattern::NonTerminal("a".into()),
+            Pattern::literal("y"),
+        ]),
+    );
+    rules.insert("a".into(), Pattern::literal("x"));
+    let g = Grammar::new(rules, "start");
+    let follow = compute_follow(&g);
+    assert_eq!(follow["a"], BTreeSetOf::from([lit("y")]));
+}
+
+#[test]
+fn follow_set_choice_tail() {
+    // start <- a / b; a <- 'x'; b <- 'y'
+    let mut rules = HashMap::new();
+    rules.insert(
+        "start".into(),
+        Pattern::choice(vec![
+            Pattern::NonTerminal("a".into()),
+            Pattern::NonTerminal("b".into()),
+        ]),
+    );
+    rules.insert("a".into(), Pattern::literal("x"));
+    rules.insert("b".into(), Pattern::literal("y"));
+    let g = Grammar::new(rules, "start");
+    let follow = compute_follow(&g);
+    // Each alt sits at the tail of `start`; FOLLOW(start) = {Eof}.
+    assert_eq!(follow["a"], BTreeSetOf::from([FollowElement::Eof]));
+    assert_eq!(follow["b"], BTreeSetOf::from([FollowElement::Eof]));
+}
+
+#[test]
+fn follow_set_repeat_self() {
+    // start <- a*; a <- 'x'
+    let mut rules = HashMap::new();
+    rules.insert(
+        "start".into(),
+        Pattern::Repeat(Box::new(Pattern::NonTerminal("a".into()))),
+    );
+    rules.insert("a".into(), Pattern::literal("x"));
+    let g = Grammar::new(rules, "start");
+    let follow = compute_follow(&g);
+    // Body can iterate (next iteration's FIRST = FIRST(a) = {Rule("a")}),
+    // and at termination FOLLOW(start) = {Eof} applies.
+    let f_a = &follow["a"];
+    assert!(
+        f_a.contains(&rule("a")),
+        "FOLLOW(a) should include Rule(\"a\") (iterating body), got {f_a:?}"
+    );
+    assert!(
+        f_a.contains(&FollowElement::Eof),
+        "FOLLOW(a) should include Eof (after the loop terminates), got {f_a:?}"
+    );
+}
+
+#[test]
+fn follow_set_nullable_skip() {
+    // start <- a b 'z'; a <- 'x'; b <- 'y'?
+    let mut rules = HashMap::new();
+    rules.insert(
+        "start".into(),
+        Pattern::seq(vec![
+            Pattern::NonTerminal("a".into()),
+            Pattern::NonTerminal("b".into()),
+            Pattern::literal("z"),
+        ]),
+    );
+    rules.insert("a".into(), Pattern::literal("x"));
+    rules.insert(
+        "b".into(),
+        Pattern::Optional(Box::new(Pattern::literal("y"))),
+    );
+    let g = Grammar::new(rules, "start");
+    let follow = compute_follow(&g);
+    let f_a = &follow["a"];
+    // After `a`: FIRST(b) = {Rule("b")} (opaque, one-level), plus — since b
+    // is nullable — FIRST of what follows b, the literal 'z'.
+    assert!(
+        f_a.contains(&rule("b")),
+        "expected Rule(\"b\") in FOLLOW(a): {f_a:?}"
+    );
+    assert!(
+        f_a.contains(&lit("z")),
+        "expected 'z' in FOLLOW(a): {f_a:?}"
+    );
+}
+
+#[test]
+fn follow_set_recursive() {
+    // list <- 'x' (',' list)?
+    let mut rules = HashMap::new();
+    rules.insert(
+        "list".into(),
+        Pattern::seq(vec![
+            Pattern::literal("x"),
+            Pattern::Optional(Box::new(Pattern::seq(vec![
+                Pattern::literal(","),
+                Pattern::NonTerminal("list".into()),
+            ]))),
+        ]),
+    );
+    let g = Grammar::new(rules, "list");
+    let follow = compute_follow(&g);
+    // The recursive `list` call is at the tail of an Optional, which is at
+    // the tail of `list` itself — so FOLLOW(list) propagates to itself,
+    // and the seed Eof reaches all the way down.
+    assert_eq!(follow["list"], BTreeSetOf::from([FollowElement::Eof]));
+}
+
+#[test]
+fn follow_set_capture_preserved() {
+    // start <- a @punctuation{','}; a <- 'x'
+    let mut rules = HashMap::new();
+    rules.insert(
+        "start".into(),
+        Pattern::seq(vec![
+            Pattern::NonTerminal("a".into()),
+            Pattern::Capture("punctuation".into(), Box::new(Pattern::literal(","))),
+        ]),
+    );
+    rules.insert("a".into(), Pattern::literal("x"));
+    let g = Grammar::new(rules, "start");
+    let follow = compute_follow(&g);
+    let f_a = &follow["a"];
+    assert!(
+        f_a.contains(&cap_lit("punctuation", ",")),
+        "FOLLOW(a) should preserve the capture wrapper: {f_a:?}"
+    );
+}
+
+#[test]
+fn follow_set_predicate_lookahead() {
+    // start <- a &'y' 'z'; a <- 'x'
+    let mut rules = HashMap::new();
+    rules.insert(
+        "start".into(),
+        Pattern::seq(vec![
+            Pattern::NonTerminal("a".into()),
+            Pattern::AndPredicate(Box::new(Pattern::literal("y"))),
+            Pattern::literal("z"),
+        ]),
+    );
+    rules.insert("a".into(), Pattern::literal("x"));
+    let g = Grammar::new(rules, "start");
+    let follow = compute_follow(&g);
+    let f_a = &follow["a"];
+    // The lookahead &'y' contributes FIRST('y') = {'y'} (predicate is
+    // nullable for sequence flow, so FIRST of 'z' also reaches FOLLOW(a)).
+    assert!(
+        f_a.contains(&lit("y")),
+        "expected 'y' in FOLLOW(a): {f_a:?}"
+    );
+    assert!(
+        f_a.contains(&lit("z")),
+        "expected 'z' in FOLLOW(a): {f_a:?}"
+    );
+}
+
+#[test]
+fn follow_set_real_sqlite_grammar() {
+    let src = include_str!("../grammars/sqlite.peg");
+    let grammar = parse(src).expect("sqlite.peg parses");
+    let follow = compute_follow(&grammar);
+
+    let f_result_column = follow.get("result_column").expect("result_column defined");
+    assert!(
+        f_result_column.contains(&cap_lit("punctuation", ",")),
+        "FOLLOW(result_column) should include @punctuation{{','}}: {f_result_column:?}"
+    );
+    // One-level analysis: the rule called right after `result_list` in
+    // `select_core` is `from_clause` (whose FIRST is `kw_from`). Authors
+    // chasing the missing-keyword question follow Rule chains one step.
+    assert!(
+        f_result_column.contains(&rule("from_clause")),
+        "FOLLOW(result_column) should include Rule(\"from_clause\"): {f_result_column:?}"
+    );
+
+    // Load-bearing acceptance criterion: PR #101 hand-missed `kw_returning`
+    // in `where_clause_boundary`. With the FOLLOW analysis surfacing
+    // `returning_clause` as an immediate follower of `where_clause`
+    // (through `update_stmt` / `delete_stmt`), the author would have a
+    // direct lead to the missing keyword via `pegc follow-set
+    // returning_clause` → kw_returning.
+    let f_where_clause = follow.get("where_clause").expect("where_clause defined");
+    assert!(
+        f_where_clause.contains(&rule("returning_clause")),
+        "FOLLOW(where_clause) should include Rule(\"returning_clause\"): {f_where_clause:?}"
+    );
+}
+
+/// Helper for `BTreeSet::from([...])` since `std::collections::BTreeSet`
+/// doesn't have a const `from` for arrays in stable Rust without a
+/// `<const N: usize>` import. Defined locally to keep tests readable.
+type BTreeSetOf<T> = std::collections::BTreeSet<T>;

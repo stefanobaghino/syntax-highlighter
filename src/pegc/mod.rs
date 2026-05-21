@@ -26,6 +26,7 @@
 //! [`Grammar::new`], [`Grammar::compile`], [`compile_pattern`], and
 //! [`Pattern`].
 
+pub mod analysis;
 pub mod compiler;
 pub mod parser;
 pub mod pattern;

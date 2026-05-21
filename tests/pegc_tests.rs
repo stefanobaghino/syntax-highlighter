@@ -131,3 +131,63 @@ fn unknown_subcommand_is_usage_error() {
     assert_eq!(code, 2);
     assert!(stderr.contains("unknown subcommand"), "stderr: {stderr}");
 }
+
+#[test]
+fn follow_set_emits_ndjson_per_rule() {
+    let path = "grammars/json.peg";
+    assert!(Path::new(path).exists(), "fixture missing: {path}");
+    let (code, stdout, stderr) = run(&["follow-set", path]);
+    assert_eq!(code, 0, "stderr was: {stderr}");
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(!lines.is_empty(), "follow-set produced no output");
+    for line in &lines {
+        assert!(
+            line.starts_with('{') && line.ends_with('}'),
+            "follow-set line not a JSON object: {line:?}"
+        );
+        assert!(
+            json_field_str(line, "rule").is_some(),
+            "missing rule field: {line:?}"
+        );
+        let follow = json_field_str(line, "follow").expect("follow field");
+        assert!(
+            follow.starts_with('[') && follow.ends_with(']'),
+            "follow not a JSON array: {follow:?}"
+        );
+    }
+}
+
+#[test]
+fn follow_set_single_rule_filter_emits_one_line() {
+    let path = "grammars/sqlite.peg";
+    assert!(Path::new(path).exists(), "fixture missing: {path}");
+    let (code, stdout, stderr) = run(&["follow-set", path, "result_column"]);
+    assert_eq!(code, 0, "stderr was: {stderr}");
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "expected exactly one record, got: {lines:?}"
+    );
+    let line = lines[0];
+    assert_eq!(
+        json_field_str(line, "rule"),
+        Some("\"result_column\""),
+        "wrong rule: {line:?}"
+    );
+}
+
+#[test]
+fn follow_set_unknown_rule_exits_two() {
+    let (code, _stdout, stderr) = run(&["follow-set", "grammars/sqlite.peg", "no_such_rule"]);
+    assert_eq!(code, 2);
+    assert!(stderr.contains("not found"), "stderr: {stderr}");
+}
+
+#[test]
+fn follow_set_bad_grammar_exits_three() {
+    // medium.json is not valid PEG source.
+    let fixture = "benches/fixtures/medium.json";
+    let (code, _stdout, _stderr) = run(&["follow-set", fixture]);
+    assert_eq!(code, 3);
+}
