@@ -83,6 +83,7 @@ point.
 | `p+^` | At-least-once recovery form — desugars to `p (p*^)`. |
 | `p*^[charset]` | Repetition with delimiter-scoped recovery: on inner failure, skip to and consume the next byte in `charset`. |
 | `p+^[charset]` | At-least-once delimiter-scoped recovery — desugars to `p (p*^[charset])`. |
+| `p*^:lbl` / `p*^[charset]:lbl` / `p+^:lbl` / `p+^[charset]:lbl` | Optional `:label` suffix on any of the above, naming the catch scope for `pegdb explain-recoveries` clustering. Default label is `"recovery"`. |
 
 ### Prefix operators
 
@@ -139,6 +140,14 @@ sql_file <- ws (statement)*^ ws !.
 recover on the rest. The recovery capture kind is hard-coded as
 `recovery`.
 
+An optional `:lbl` suffix names the catch scope: `p*^:bad_doc`
+interns label `"bad_doc"` instead of the default `"recovery"`. The
+`:` must touch the preceding `^` and the identifier must touch `:`
+— same tight-binding rule as `^label`. The capture kind is
+unaffected (still `recovery`); only the label changes. `pegdb
+explain-recoveries` clusters by this label, so per-site naming
+lets distinct call sites surface as their own buckets.
+
 **Lowering.** `p*^` is syntactic sugar for a labeled catch wrapped in
 a `Repeat`. The parser produces an AST equivalent to:
 
@@ -184,6 +193,10 @@ The `[charset]` token uses the standard character-class syntax — same
 ranges, escapes, and negation as a top-level `[...]` atom. It must
 touch `^` (no whitespace between them) so the postfix glue isn't
 broken by an intervening atom.
+
+The optional `:lbl` suffix described above applies here too:
+`p*^[;]:bad_stmt` interns label `"bad_stmt"`. The `:` must touch the
+closing `]`.
 
 **EOF semantics.** If the delimiter is missing before EOF, the
 recovery body fails: the catch fails, the outer `*` terminates, and

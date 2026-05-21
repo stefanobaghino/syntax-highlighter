@@ -64,12 +64,22 @@ fn postfix_operators() {
 
 /// Builds the desugared AST that `p*^` lowers to: a `Repeat` over a
 /// `Catch` whose recovery body is the supplied pattern wrapped in a
-/// capture named `recovery`. Mirrors `build_recover_repeat` in
-/// `src/pegc/parser.rs`. Used by the AST-shape assertions below.
+/// capture named `recovery`. The label defaults to `"recovery"` to
+/// match bare `*^`; the `_with_label` variant covers `*^:lbl`.
+/// Mirrors `build_recover_repeat` in `src/pegc/parser.rs`. Used by the
+/// AST-shape assertions below.
 fn desugared_recover_repeat(inner: Pattern, recovery_body: Pattern) -> Pattern {
+    desugared_recover_repeat_with_label(inner, recovery_body, "recovery")
+}
+
+fn desugared_recover_repeat_with_label(
+    inner: Pattern,
+    recovery_body: Pattern,
+    label: &str,
+) -> Pattern {
     Pattern::Repeat(Box::new(Pattern::Catch {
         inner: Box::new(inner),
-        label: "recovery".into(),
+        label: label.into(),
         recovery: Box::new(Pattern::Capture("recovery".into(), Box::new(recovery_body))),
     }))
 }
@@ -165,6 +175,147 @@ fn sync_set_accepts_negated_and_ranges() {
     assert_eq!(
         g.rules["r"],
         desugared_recover_repeat(Pattern::literal("x"), recovery_body)
+    );
+}
+
+#[test]
+fn recover_repeat_postfix_star_caret_with_label() {
+    // `p*^:bad` interns label "bad" instead of the default "recovery";
+    // the capture name is unchanged.
+    let g = parse("r <- 'x'*^:bad");
+    assert_eq!(
+        g.rules["r"],
+        desugared_recover_repeat_with_label(Pattern::literal("x"), Pattern::AnyChar, "bad")
+    );
+}
+
+#[test]
+fn recover_repeat_postfix_plus_caret_with_label() {
+    // `p+^:bad` lowers to `p (p*^:bad)` — the label flows through the
+    // tail `*^` only; the head `p` is the unguarded one-iteration prefix.
+    let g = parse("r <- 'x'+^:bad");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Sequence(vec![
+            Pattern::literal("x"),
+            desugared_recover_repeat_with_label(Pattern::literal("x"), Pattern::AnyChar, "bad"),
+        ])
+    );
+}
+
+#[test]
+fn sync_set_postfix_star_caret_charset_with_label() {
+    // `p*^[;]:bad_stmt` interns label "bad_stmt"; recovery body
+    // (sync-set skip) is unchanged.
+    let semi = CharSet::from_bytes(b";");
+    let g = parse("r <- 'x'*^[;]:bad_stmt");
+    let skip_loop = Pattern::Repeat(Box::new(Pattern::Sequence(vec![
+        Pattern::NotPredicate(Box::new(Pattern::CharClass(semi))),
+        Pattern::AnyChar,
+    ])));
+    let recovery_body = Pattern::Sequence(vec![skip_loop, Pattern::CharClass(semi)]);
+    assert_eq!(
+        g.rules["r"],
+        desugared_recover_repeat_with_label(Pattern::literal("x"), recovery_body, "bad_stmt")
+    );
+}
+
+#[test]
+fn sync_set_postfix_plus_caret_charset_with_label() {
+    // `p+^[;]:bad_stmt` lowers to `p (p*^[;]:bad_stmt)`.
+    let semi = CharSet::from_bytes(b";");
+    let g = parse("r <- 'x'+^[;]:bad_stmt");
+    let skip_loop = Pattern::Repeat(Box::new(Pattern::Sequence(vec![
+        Pattern::NotPredicate(Box::new(Pattern::CharClass(semi))),
+        Pattern::AnyChar,
+    ])));
+    let recovery_body = Pattern::Sequence(vec![skip_loop, Pattern::CharClass(semi)]);
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Sequence(vec![
+            Pattern::literal("x"),
+            desugared_recover_repeat_with_label(Pattern::literal("x"), recovery_body, "bad_stmt"),
+        ])
+    );
+}
+
+#[test]
+fn recovery_label_default_is_recovery() {
+    // Back-compat: bare `*^` (no `:label`) lowers to label "recovery"
+    // exactly as before — the helper's default already encodes this,
+    // so the existing tests cover it; this is a self-documenting
+    // sentinel that the default has not drifted.
+    let g = parse("r <- 'x'*^");
+    let Pattern::Repeat(inner) = &g.rules["r"] else {
+        panic!("expected Repeat, got {:?}", g.rules["r"]);
+    };
+    let Pattern::Catch { label, .. } = inner.as_ref() else {
+        panic!("expected Catch inside Repeat, got {:?}", inner);
+    };
+    assert_eq!(label, "recovery");
+}
+
+#[test]
+fn recovery_label_rejects_whitespace_before_colon() {
+    // `*^ :lbl` (whitespace between `^` and `:`) breaks the postfix
+    // glue: the `*^` lowers without a label, the loose `:lbl` isn't a
+    // valid sequence atom, and the parser falls through to the next
+    // rule-start where `:` fails `parse_ident` with "expected
+    // identifier".
+    let err = parse_src("r <- 'x'*^ :lbl").unwrap_err();
+    assert!(
+        err.message.contains("expected identifier"),
+        "expected an identifier-required error at top level, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn recovery_label_rejects_whitespace_after_colon() {
+    // `*^: lbl` — the identifier must touch `:`.
+    let err = parse_src("r <- 'x'*^: lbl").unwrap_err();
+    assert!(
+        err.message.contains("expected label identifier"),
+        "expected a label-identifier error, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn recovery_label_rejects_underscore() {
+    // Bare `_` mirrors `^_`'s reservation for future anonymous-catch
+    // syntax.
+    let err = parse_src("r <- 'x'*^:_").unwrap_err();
+    assert!(
+        err.message.contains("reserved"),
+        "expected a reserved-label error, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn recovery_label_after_sync_set_requires_no_space_before_colon() {
+    // `*^[;] :lbl` (whitespace between `]` and `:`) breaks the postfix
+    // glue: `*^[;]` lowers without a label, the loose `:lbl` isn't a
+    // valid sequence atom, and the parser falls through to the next
+    // rule-start where `:` fails `parse_ident` with "expected
+    // identifier".
+    let err = parse_src("r <- 'x'*^[;] :lbl").unwrap_err();
+    assert!(
+        err.message.contains("expected identifier"),
+        "expected an identifier-required error at top level, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn recovery_label_accepts_underscore_prefixed_identifier() {
+    // `_foo` (underscore prefix, not bare `_`) stays a valid label,
+    // mirroring `parse_catch`.
+    let g = parse("r <- 'x'*^:_foo");
+    assert_eq!(
+        g.rules["r"],
+        desugared_recover_repeat_with_label(Pattern::literal("x"), Pattern::AnyChar, "_foo")
     );
 }
 
@@ -470,6 +621,23 @@ fn end_to_end_recover_repeat_compile_run() {
     let spans: Vec<(usize, usize)> = r.captures.iter().map(|c| (c.start, c.end)).collect();
     assert_eq!(kinds, vec![kw, recovery, recovery, kw]);
     assert_eq!(spans, vec![(0, 3), (3, 4), (4, 5), (5, 8)]);
+}
+
+#[test]
+fn end_to_end_recover_repeat_with_label_intern() {
+    use syntax_highlighter::pegvm::VM;
+    // `*^:bad_doc` interns the author-supplied label in
+    // `Program::label_kinds`; the runtime behavior is otherwise
+    // identical to the unlabeled form (one recovery capture per
+    // skipped byte, clean exit at EOF). pegdb explain-recoveries
+    // clusters by this label.
+    let g = parse("doc <- @kw{\"foo\"}*^:bad_doc");
+    let prog = g.compile().unwrap();
+    assert_eq!(prog.label_kinds, vec!["bad_doc"]);
+    let r = VM::new(&prog.code, b"fooXXfoo").run();
+    assert!(r.complete);
+    assert_eq!(r.matched, 8);
+    assert_eq!(prog.capture_kinds, vec!["kw", "recovery"]);
 }
 
 #[test]

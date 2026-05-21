@@ -912,6 +912,17 @@ fn recover_repeat_emits_choice_commit_skeleton() {
     assert_eq!(prog.label_kinds, vec!["recovery".to_string()]);
 }
 
+#[test]
+fn recover_repeat_labeled_interns_author_label() {
+    // `*^:bad_thing` interns the author-supplied label while leaving
+    // the capture kind at its hardcoded `"recovery"` — the catch
+    // scope is renamed (so pegdb explain-recoveries clusters under
+    // "bad_thing"), but theme styling is unaffected.
+    let prog = syntax_highlighter::pegc::compile("r <- 'a'*^:bad_thing").unwrap();
+    assert_eq!(prog.capture_kinds, vec!["recovery".to_string()]);
+    assert_eq!(prog.label_kinds, vec!["bad_thing".to_string()]);
+}
+
 /// Builds the desugared AST that `p*^[cs]` lowers to: a `Repeat` over
 /// `Catch(inner, "recovery", @recovery{(!cs .)* cs})`. Mirrors
 /// `build_recover_repeat` in `src/pegc/parser.rs`.
