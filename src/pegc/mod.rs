@@ -31,6 +31,7 @@ pub mod compiler;
 pub mod parser;
 pub mod pattern;
 
+pub use analysis::{LintFinding, LintKind};
 pub use compiler::{compile_pattern, CompileError};
 pub use parser::{parse, Grammar, ParseError};
 pub use pattern::Pattern;

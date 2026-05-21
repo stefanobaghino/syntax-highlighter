@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use syntax_highlighter::pegc::analysis::{compute_follow, FollowElement};
+use syntax_highlighter::pegc::analysis::{
+    compute_follow, lint_partial_match, FollowElement, LintFinding, LintKind,
+};
 use syntax_highlighter::pegc::{compile_pattern, parse, Grammar, Pattern};
 use syntax_highlighter::pegvm::{
     Capture, CaptureKind, CharSet, Instruction, Label, LabelId, MatchResult, MemoId, RuleKind, VM,
@@ -1544,3 +1546,170 @@ fn follow_set_real_sqlite_grammar() {
 /// doesn't have a const `from` for arrays in stable Rust without a
 /// `<const N: usize>` import. Defined locally to keep tests readable.
 type BTreeSetOf<T> = std::collections::BTreeSet<T>;
+
+// -- partial-match leniency lint ----------------------------------------
+
+fn finding(rule: &str, caller: &str) -> LintFinding {
+    LintFinding {
+        kind: LintKind::PartialMatchLeniency,
+        rule: rule.into(),
+        caller: caller.into(),
+    }
+}
+
+#[test]
+fn lint_partial_match_trailing_optional_with_eof_validator() {
+    // start <- a; a <- 'x' 'y'?
+    // a is called from the start rule, whose only continuation is Eof.
+    // Eof rejects any non-empty leftover bytes — a validator. No flag.
+    let mut rules = HashMap::new();
+    rules.insert("start".into(), Pattern::NonTerminal("a".into()));
+    rules.insert(
+        "a".into(),
+        Pattern::seq(vec![
+            Pattern::literal("x"),
+            Pattern::Optional(Box::new(Pattern::literal("y"))),
+        ]),
+    );
+    let g = Grammar::new(rules, "start");
+    assert!(lint_partial_match(&g).is_empty());
+}
+
+#[test]
+fn lint_partial_match_no_trailing_nullable_skipped() {
+    // start <- a; a <- 'x' 'y' — no trailing optional/nullable.
+    let mut rules = HashMap::new();
+    rules.insert("start".into(), Pattern::NonTerminal("a".into()));
+    rules.insert(
+        "a".into(),
+        Pattern::seq(vec![Pattern::literal("x"), Pattern::literal("y")]),
+    );
+    let g = Grammar::new(rules, "start");
+    assert!(lint_partial_match(&g).is_empty());
+}
+
+#[test]
+fn lint_partial_match_anchored_via_andpredicate() {
+    // start <- a &'y' 'y'; a <- 'x' 'y'?
+    // The AndPredicate anchors the call to a even though a's trailing
+    // overlaps with what follows.
+    let mut rules = HashMap::new();
+    rules.insert(
+        "start".into(),
+        Pattern::seq(vec![
+            Pattern::NonTerminal("a".into()),
+            Pattern::AndPredicate(Box::new(Pattern::literal("y"))),
+            Pattern::literal("y"),
+        ]),
+    );
+    rules.insert(
+        "a".into(),
+        Pattern::seq(vec![
+            Pattern::literal("x"),
+            Pattern::Optional(Box::new(Pattern::literal("y"))),
+        ]),
+    );
+    let g = Grammar::new(rules, "start");
+    assert!(
+        lint_partial_match(&g).is_empty(),
+        "AndPredicate should anchor"
+    );
+}
+
+#[test]
+fn lint_partial_match_validated_by_disjoint_consumer() {
+    // start <- a 'z'; a <- 'x' 'y'?
+    // 'z' after a is a non-nullable consumer with FIRST={'z'} disjoint
+    // from a's trailing {'y'}. The consumer validates.
+    let mut rules = HashMap::new();
+    rules.insert(
+        "start".into(),
+        Pattern::seq(vec![
+            Pattern::NonTerminal("a".into()),
+            Pattern::literal("z"),
+        ]),
+    );
+    rules.insert(
+        "a".into(),
+        Pattern::seq(vec![
+            Pattern::literal("x"),
+            Pattern::Optional(Box::new(Pattern::literal("y"))),
+        ]),
+    );
+    let g = Grammar::new(rules, "start");
+    assert!(lint_partial_match(&g).is_empty());
+}
+
+#[test]
+fn lint_partial_match_absorbed_by_outer_catch_flagged() {
+    // start <- (a)*^[;]
+    // a <- 'x' 'y'?
+    // a's leniency at the call site is absorbed by the *^ recovery
+    // wrapper — exactly the PR #101 shape.
+    let mut rules = HashMap::new();
+    let recovery_body = Pattern::Repeat(Box::new(Pattern::seq(vec![
+        Pattern::NotPredicate(Box::new(Pattern::literal(";"))),
+        Pattern::AnyChar,
+    ])));
+    let call_inside_catch = Pattern::Repeat(Box::new(Pattern::Catch {
+        inner: Box::new(Pattern::NonTerminal("a".into())),
+        label: "recovery".into(),
+        recovery: Box::new(recovery_body),
+    }));
+    rules.insert("start".into(), call_inside_catch);
+    rules.insert(
+        "a".into(),
+        Pattern::seq(vec![
+            Pattern::literal("x"),
+            Pattern::Optional(Box::new(Pattern::literal("y"))),
+        ]),
+    );
+    let g = Grammar::new(rules, "start");
+    let findings = lint_partial_match(&g);
+    assert_eq!(findings, vec![finding("a", "start")]);
+}
+
+#[test]
+fn lint_partial_match_real_sqlite_grammar_aliased_expr_anchored() {
+    // The shipped grammar has the PR #101 fix: aliased_expr is anchored
+    // via `&(ws result_column_boundary)` inside result_column. The lint
+    // must not flag aliased_expr → result_column.
+    let source =
+        std::fs::read_to_string("grammars/sqlite.peg").expect("sqlite.peg fixture present");
+    let g = parse(&source).expect("sqlite.peg parses");
+    let findings = lint_partial_match(&g);
+    let bad = findings
+        .iter()
+        .find(|f| f.rule == "aliased_expr" && f.caller == "result_column");
+    assert!(
+        bad.is_none(),
+        "aliased_expr is anchored; should not be flagged"
+    );
+}
+
+#[test]
+fn lint_partial_match_real_sqlite_grammar_unanchored_aliased_expr_flagged() {
+    // Synthesize the pre-PR-#101 shape inline: result_column's body is
+    // just the choice with no anchor. Verify the lint catches the
+    // load-bearing case.
+    let source =
+        std::fs::read_to_string("grammars/sqlite.peg").expect("sqlite.peg fixture present");
+    let mut g = parse(&source).expect("sqlite.peg parses");
+    // Replace result_column's body with an unanchored version.
+    g.rules.insert(
+        "result_column".into(),
+        Pattern::OrderedChoice(vec![
+            Pattern::NonTerminal("table_star".into()),
+            Pattern::Capture("operator".into(), Box::new(Pattern::literal("*"))),
+            Pattern::NonTerminal("aliased_expr".into()),
+        ]),
+    );
+    let findings = lint_partial_match(&g);
+    let hit = findings
+        .iter()
+        .find(|f| f.rule == "aliased_expr" && f.caller == "result_column");
+    assert!(
+        hit.is_some(),
+        "load-bearing PR #101 case must be flagged when anchor is stripped; findings: {findings:?}"
+    );
+}
