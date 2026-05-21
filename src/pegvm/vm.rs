@@ -1559,14 +1559,15 @@ fn close_captures(open: Vec<OpenCapture>, close_at: usize) -> Vec<Capture> {
 
 /// Drop phantom diagnostics whose `capture_index` doesn't point at a
 /// capture that survived to the final result. `RecoverToScopedMax`
-/// pushes a diagnostic *before* the recovery byte's `CaptureBegin` /
-/// `Any(1)` / `CaptureEnd` triple runs; on the loop's EOF-exit
-/// iteration the recovery `Any(1)` fails and the inner
-/// `Choice exit_inner` backtrack restores the capture buffer to its
-/// pre-emission shape — but the diagnostic was pushed onto
-/// `recovery_diagnostics`, which has no paired backtrack slot. We
-/// recognise a surviving recovery byte by shape: one byte wide,
-/// starting at the iteration's `scoped_max_sp` (= `pos`).
+/// pushes a diagnostic *before* the recovery body runs; if the body
+/// then fails, the enclosing catch's `Choice` / `Backtrack` pair
+/// restores the capture buffer to its pre-emission shape — but the
+/// diagnostic was pushed onto `recovery_diagnostics`, which has no
+/// paired backtrack slot. We recognise a surviving recovery capture
+/// by its start position: a successful recovery emits at least one
+/// capture starting at `scoped_max_sp` (= `pos`). The width can be
+/// anything from one byte (plain `*^`) to many (sync sets, explicit
+/// `^label` catches with multi-byte recovery bodies).
 fn finalize_recovery_diagnostics(
     diagnostics: Vec<RecoveryDiagnostic>,
     captures: &[Capture],
@@ -1576,7 +1577,7 @@ fn finalize_recovery_diagnostics(
         .filter(|d| {
             captures
                 .get(d.capture_index)
-                .map(|c| c.start == d.pos && c.end == c.start + 1)
+                .map(|c| c.start == d.pos)
                 .unwrap_or(false)
         })
         .collect()
