@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use super::analysis::{lint_partial_match, resolve_inferred_boundaries};
 use super::compiler::{compile_rules, CompileError};
-use super::pattern::Pattern;
+use super::pattern::{Pattern, Span};
 use crate::pegvm::{CharSet, Program};
 
 /// Cap for the `p{n}` exact-count quantifier. Conservative typo guard:
@@ -83,14 +83,50 @@ pub fn parse(input: &str) -> Result<Grammar, ParseError> {
 struct Parser<'a> {
     src: &'a [u8],
     pos: usize,
+    /// Byte offset of the first byte of each line (1-indexed lines, so
+    /// `line_starts[0]` is the start of line 1 = 0). Precomputed once
+    /// in `Parser::new` so that `span_at(offset)` is O(log lines)
+    /// rather than O(offset). Every Pattern node carries a [`Span`];
+    /// the per-node lookup dominates parser cost without this.
+    line_starts: Vec<usize>,
 }
 
 impl<'a> Parser<'a> {
     fn new(input: &'a str) -> Self {
-        Parser {
-            src: input.as_bytes(),
-            pos: 0,
+        let src = input.as_bytes();
+        let mut line_starts = Vec::with_capacity(src.len() / 32 + 1);
+        line_starts.push(0);
+        for (i, &b) in src.iter().enumerate() {
+            if b == b'\n' {
+                line_starts.push(i + 1);
+            }
         }
+        Parser {
+            src,
+            pos: 0,
+            line_starts,
+        }
+    }
+
+    /// Convert a byte offset into a 1-based (line, col). O(log lines)
+    /// via binary search over `line_starts`.
+    fn span_at(&self, offset: usize) -> Span {
+        let offset = offset.min(self.src.len());
+        let line_idx = self
+            .line_starts
+            .partition_point(|&s| s <= offset)
+            .saturating_sub(1);
+        let line_start = self.line_starts[line_idx];
+        Span {
+            line: line_idx + 1,
+            col: offset - line_start + 1,
+        }
+    }
+
+    /// Span at the current parse position. Snapshot before consuming
+    /// the bytes that start the construct being built.
+    fn span(&self) -> Span {
+        self.span_at(self.pos)
     }
 
     fn parse_grammar(&mut self) -> Result<Grammar, ParseError> {
@@ -104,18 +140,21 @@ impl<'a> Parser<'a> {
             // of `name`. The marker touches the name (no whitespace);
             // the rule's body is wrapped with `Pattern::Lenient` so the
             // lint walker sees the same shape as a per-call-site `~p`.
-            let mut definition_lenient = false;
+            let mut lenient_span: Option<Span> = None;
             if self.peek() == Some(b'~') {
+                lenient_span = Some(self.span());
                 self.pos += 1;
-                definition_lenient = true;
             }
             let name = self.parse_ident()?;
             self.skip_ws();
             self.expect_str("<-")?;
             self.skip_ws();
             let mut pat = self.parse_choice()?;
-            if definition_lenient {
-                pat = Pattern::Lenient(Box::new(pat));
+            if let Some(span) = lenient_span {
+                pat = Pattern::Lenient {
+                    inner: Box::new(pat),
+                    span,
+                };
             }
             if rules.insert(name.clone(), pat).is_some() {
                 return Err(self.err(format!("rule '{}' defined twice", name)));
@@ -176,6 +215,10 @@ impl<'a> Parser<'a> {
             if self.peek() != Some(b'^') {
                 break;
             }
+            // Span of the catch / boundary-catch construct is the
+            // position of the leading `^` (or `^^`). Snapshot before
+            // consuming the operator bytes.
+            let catch_span = self.span();
             self.pos += 1;
             // Doubled-caret discriminator: a second `^` immediately
             // after the first marks the boundary-anchored family.
@@ -188,7 +231,7 @@ impl<'a> Parser<'a> {
                     self.pos += 3;
                     self.skip_ws();
                     let boundary = self.parse_prefix()?;
-                    lower_bracketed_close_catch(lhs, label, boundary)
+                    lower_bracketed_close_catch(lhs, label, boundary, catch_span)
                 } else if self.peek() == Some(b'.') && self.peek_at(1) == Some(b'.') {
                     // `INNER ^^lbl .. B` — rejected. The catch necessarily
                     // consumes B; the non-consuming form has no use here.
@@ -199,11 +242,12 @@ impl<'a> Parser<'a> {
                     ));
                 } else if self.at_prefix_start() {
                     let boundary = self.parse_prefix()?;
-                    lower_boundary_catch(lhs, label, boundary)
+                    lower_boundary_catch(lhs, label, boundary, catch_span)
                 } else {
                     Pattern::InferBoundaryCatch {
                         inner: Box::new(lhs),
                         label,
+                        span: catch_span,
                     }
                 };
                 // Trailing sequence atoms after `^^lbl B` (or
@@ -228,6 +272,7 @@ impl<'a> Parser<'a> {
                     inner: Box::new(lhs),
                     label,
                     recovery: Box::new(rhs),
+                    span: catch_span,
                 };
             }
         }
@@ -321,16 +366,24 @@ impl<'a> Parser<'a> {
     fn parse_prefix(&mut self) -> Result<Pattern, ParseError> {
         match self.peek() {
             Some(b'!') => {
+                let span = self.span();
                 self.pos += 1;
                 self.skip_ws();
                 let inner = self.parse_postfix()?;
-                Ok(Pattern::NotPredicate(Box::new(inner)))
+                Ok(Pattern::NotPredicate {
+                    inner: Box::new(inner),
+                    span,
+                })
             }
             Some(b'&') => {
+                let span = self.span();
                 self.pos += 1;
                 self.skip_ws();
                 let inner = self.parse_postfix()?;
-                Ok(Pattern::AndPredicate(Box::new(inner)))
+                Ok(Pattern::AndPredicate {
+                    inner: Box::new(inner),
+                    span,
+                })
             }
             _ => self.parse_postfix(),
         }
@@ -348,7 +401,8 @@ impl<'a> Parser<'a> {
                         let label = self.parse_optional_recovery_label()?;
                         atom = build_recover_repeat(atom, charset, label);
                     } else {
-                        atom = Pattern::Repeat(Box::new(atom));
+                        // Span of `Repeat` inherits its operand's span.
+                        atom = Pattern::repeat(atom);
                     }
                 }
                 Some(b'+') => {
@@ -361,12 +415,12 @@ impl<'a> Parser<'a> {
                         let head = atom.clone();
                         atom = Pattern::seq(vec![head, build_recover_repeat(atom, charset, label)]);
                     } else {
-                        atom = Pattern::RepeatOne(Box::new(atom));
+                        atom = Pattern::repeat_one(atom);
                     }
                 }
                 Some(b'?') => {
                     self.pos += 1;
-                    atom = Pattern::Optional(Box::new(atom));
+                    atom = Pattern::optional(atom);
                 }
                 Some(b'{') => {
                     self.pos += 1;
@@ -429,7 +483,7 @@ impl<'a> Parser<'a> {
             return Ok(None);
         }
         match self.parse_charclass()? {
-            Pattern::CharClass(set) => Ok(Some(set)),
+            Pattern::CharClass { set, .. } => Ok(Some(set)),
             _ => unreachable!("parse_charclass always returns Pattern::CharClass"),
         }
     }
@@ -459,6 +513,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_atom(&mut self) -> Result<Pattern, ParseError> {
+        let span = self.span();
         match self.peek() {
             Some(b'(') => {
                 self.pos += 1;
@@ -484,20 +539,20 @@ impl<'a> Parser<'a> {
                     self.skip_ws();
                     let stop = self.parse_prefix()?;
                     return Ok(if inclusive {
-                        lower_until_inclusive(stop)
+                        lower_until_inclusive(stop, span)
                     } else {
-                        lower_until_exclusive(stop)
+                        lower_until_exclusive(stop, span)
                     });
                 }
                 self.pos += 1;
-                Ok(Pattern::AnyChar)
+                Ok(Pattern::AnyChar { span })
             }
             Some(b'@') => self.parse_capture(),
             Some(b'\\') => self.parse_backslash_atom(),
             Some(c) if is_ident_start(c) => {
                 // Disambiguation against `name <- ...` is handled by at_prefix_start.
                 let name = self.parse_ident()?;
-                Ok(Pattern::NonTerminal(name))
+                Ok(Pattern::NonTerminal { name, span })
             }
             Some(c) => Err(self.err(format!("unexpected '{}'", c as char))),
             None => Err(self.err("unexpected end of input".into())),
@@ -521,23 +576,47 @@ impl<'a> Parser<'a> {
     /// pointer back to this form.
     fn parse_backslash_atom(&mut self) -> Result<Pattern, ParseError> {
         debug_assert_eq!(self.peek(), Some(b'\\'));
+        // Span of the synthesized atom is the position of the leading
+        // `\`. The synthesized inner patterns (literals, AnyChar) are
+        // not directly authored — they all share the backslash atom's
+        // span so a diagnostic firing inside the desugar still points
+        // at the author's `\R` / `\z` site.
+        let span = self.span();
         self.pos += 1;
         match self.peek() {
             Some(c) if class_for_shortcut(c).is_some() => {
                 self.pos += 1;
-                Ok(Pattern::CharClass(class_for_shortcut(c).unwrap()))
+                Ok(Pattern::CharClass {
+                    set: class_for_shortcut(c).unwrap(),
+                    span,
+                })
             }
             Some(b'R') => {
                 self.pos += 1;
-                Ok(Pattern::OrderedChoice(vec![
-                    Pattern::literal("\r\n"),
-                    Pattern::literal("\n"),
-                    Pattern::literal("\r"),
-                ]))
+                Ok(Pattern::OrderedChoice {
+                    alts: vec![
+                        Pattern::Literal {
+                            bytes: b"\r\n".to_vec(),
+                            span,
+                        },
+                        Pattern::Literal {
+                            bytes: b"\n".to_vec(),
+                            span,
+                        },
+                        Pattern::Literal {
+                            bytes: b"\r".to_vec(),
+                            span,
+                        },
+                    ],
+                    span,
+                })
             }
             Some(b'z') => {
                 self.pos += 1;
-                Ok(Pattern::NotPredicate(Box::new(Pattern::AnyChar)))
+                Ok(Pattern::NotPredicate {
+                    inner: Box::new(Pattern::AnyChar { span }),
+                    span,
+                })
             }
             Some(c) => Err(self.err(format!(
                 "unknown atom '\\{}' (valid: \\d \\D \\s \\S \\h \\H \\R \\z)",
@@ -548,6 +627,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_capture(&mut self) -> Result<Pattern, ParseError> {
+        // Span of `Capture` is the position of the `@` sigil.
+        let span = self.span();
         self.expect(b'@')?;
         let name = self.parse_ident()?;
         self.expect(b'{')?;
@@ -555,10 +636,16 @@ impl<'a> Parser<'a> {
         let inner = self.parse_choice()?;
         self.skip_ws();
         self.expect(b'}')?;
-        Ok(Pattern::Capture(name, Box::new(inner)))
+        Ok(Pattern::Capture {
+            kind: name,
+            inner: Box::new(inner),
+            span,
+        })
     }
 
     fn parse_string(&mut self) -> Result<Pattern, ParseError> {
+        // Span of the literal is the position of the opening quote.
+        let span = self.span();
         let quote = self.peek().unwrap();
         self.pos += 1;
         let mut bytes = Vec::new();
@@ -571,7 +658,7 @@ impl<'a> Parser<'a> {
                 }
                 Some(c) if c == quote => {
                     self.pos += 1;
-                    return Ok(Pattern::Literal(bytes));
+                    return Ok(Pattern::Literal { bytes, span });
                 }
                 Some(c) => {
                     bytes.push(c);
@@ -582,6 +669,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_charclass(&mut self) -> Result<Pattern, ParseError> {
+        // Span of the char class is the position of the opening `[`.
+        let span = self.span();
         self.expect(b'[')?;
         let negate = if self.peek() == Some(b'^') {
             self.pos += 1;
@@ -645,7 +734,10 @@ impl<'a> Parser<'a> {
         }
         self.expect(b']')?;
         let final_set = if negate { set.negate() } else { set };
-        Ok(Pattern::CharClass(final_set))
+        Ok(Pattern::CharClass {
+            set: final_set,
+            span,
+        })
     }
 
     fn parse_class_char(&mut self) -> Result<u8, ParseError> {
@@ -786,22 +878,8 @@ impl<'a> Parser<'a> {
     }
 
     fn err(&self, message: String) -> ParseError {
-        let (line, col) = self.line_col();
+        let Span { line, col } = self.span();
         ParseError { message, line, col }
-    }
-
-    fn line_col(&self) -> (usize, usize) {
-        let mut line = 1;
-        let mut col = 1;
-        for &b in &self.src[..self.pos.min(self.src.len())] {
-            if b == b'\n' {
-                line += 1;
-                col = 1;
-            } else {
-                col += 1;
-            }
-        }
-        (line, col)
     }
 }
 
@@ -837,37 +915,72 @@ fn class_for_shortcut(c: u8) -> Option<CharSet> {
 }
 
 /// Lower `.. S` (skip-until exclusive) to `(!S .)*`. The stop pattern
-/// is a negative lookahead; `S` is not consumed.
-fn lower_until_exclusive(stop: Pattern) -> Pattern {
-    Pattern::Repeat(Box::new(Pattern::Sequence(vec![
-        Pattern::NotPredicate(Box::new(stop)),
-        Pattern::AnyChar,
-    ])))
+/// is a negative lookahead; `S` is not consumed. All synthesized nodes
+/// inherit the leading `..`'s span so a diagnostic firing inside the
+/// desugar still points at the author's site.
+fn lower_until_exclusive(stop: Pattern, span: Span) -> Pattern {
+    Pattern::Repeat {
+        inner: Box::new(Pattern::Sequence {
+            items: vec![
+                Pattern::NotPredicate {
+                    inner: Box::new(stop),
+                    span,
+                },
+                Pattern::AnyChar { span },
+            ],
+            span,
+        }),
+        span,
+    }
 }
 
 /// Lower `..= S` (skip-until inclusive) to `(!S .)* S`. The stop is
 /// matched and consumed after the skip; its capture kind (if any) is
 /// preserved on the trailing consume.
-fn lower_until_inclusive(stop: Pattern) -> Pattern {
-    Pattern::Sequence(vec![lower_until_exclusive(stop.clone()), stop])
+fn lower_until_inclusive(stop: Pattern, span: Span) -> Pattern {
+    Pattern::Sequence {
+        items: vec![lower_until_exclusive(stop.clone(), span), stop],
+        span,
+    }
 }
 
 /// Lower `INNER ^^lbl B` to the explicit boundary-anchored catch
 /// shape: `Catch { Sequence([INNER, &B]), lbl, @recovery{(!B .)*} }`.
 /// Parse-time lowering — the compiler sees this as a regular `Catch`
 /// with an `AndPredicate` sibling, so the existing lint walker
-/// recognizes it as anchored without a new arm.
-fn lower_boundary_catch(inner: Pattern, label: String, boundary: Pattern) -> Pattern {
-    let lookahead = Pattern::AndPredicate(Box::new(boundary.clone()));
-    let stop_loop = Pattern::Repeat(Box::new(Pattern::Sequence(vec![
-        Pattern::NotPredicate(Box::new(boundary)),
-        Pattern::AnyChar,
-    ])));
-    let recovery = Pattern::Capture("recovery".into(), Box::new(stop_loop));
+/// recognizes it as anchored without a new arm. All synthesized nodes
+/// inherit the catch operator's span.
+fn lower_boundary_catch(inner: Pattern, label: String, boundary: Pattern, span: Span) -> Pattern {
+    let lookahead = Pattern::AndPredicate {
+        inner: Box::new(boundary.clone()),
+        span,
+    };
+    let stop_loop = Pattern::Repeat {
+        inner: Box::new(Pattern::Sequence {
+            items: vec![
+                Pattern::NotPredicate {
+                    inner: Box::new(boundary),
+                    span,
+                },
+                Pattern::AnyChar { span },
+            ],
+            span,
+        }),
+        span,
+    };
+    let recovery = Pattern::Capture {
+        kind: "recovery".into(),
+        inner: Box::new(stop_loop),
+        span,
+    };
     Pattern::Catch {
-        inner: Box::new(Pattern::Sequence(vec![inner, lookahead])),
+        inner: Box::new(Pattern::Sequence {
+            items: vec![inner, lookahead],
+            span,
+        }),
         label,
         recovery: Box::new(recovery),
+        span,
     }
 }
 
@@ -882,19 +995,41 @@ fn lower_boundary_catch(inner: Pattern, label: String, boundary: Pattern) -> Pat
 /// the shape the `^block_close` sites across the shipped grammars
 /// need: the closing `}` keeps its `@punctuation` kind in both happy
 /// and recovery paths.
-fn lower_bracketed_close_catch(inner: Pattern, label: String, boundary: Pattern) -> Pattern {
-    let stop_loop = Pattern::Repeat(Box::new(Pattern::Sequence(vec![
-        Pattern::NotPredicate(Box::new(boundary.clone())),
-        Pattern::AnyChar,
-    ])));
-    let recovery = Pattern::Sequence(vec![
-        Pattern::Capture("recovery".into(), Box::new(stop_loop)),
-        boundary,
-    ]);
+fn lower_bracketed_close_catch(
+    inner: Pattern,
+    label: String,
+    boundary: Pattern,
+    span: Span,
+) -> Pattern {
+    let stop_loop = Pattern::Repeat {
+        inner: Box::new(Pattern::Sequence {
+            items: vec![
+                Pattern::NotPredicate {
+                    inner: Box::new(boundary.clone()),
+                    span,
+                },
+                Pattern::AnyChar { span },
+            ],
+            span,
+        }),
+        span,
+    };
+    let recovery = Pattern::Sequence {
+        items: vec![
+            Pattern::Capture {
+                kind: "recovery".into(),
+                inner: Box::new(stop_loop),
+                span,
+            },
+            boundary,
+        ],
+        span,
+    };
     Pattern::Catch {
         inner: Box::new(inner),
         label,
         recovery: Box::new(recovery),
+        span,
     }
 }
 
@@ -911,25 +1046,50 @@ fn lower_bracketed_close_catch(inner: Pattern, label: String, boundary: Pattern)
 /// EOF, or `cs` missing before EOF), the failure propagates to the
 /// enclosing `*`'s Backtrack frame and the loop terminates without
 /// consuming further input.
+///
+/// The synthesized recover-repeat tree inherits its operand's span,
+/// matching the per-variant convention for `Repeat` ("start of
+/// operand").
 fn build_recover_repeat(
     inner: Pattern,
     charset: Option<CharSet>,
     label: Option<String>,
 ) -> Pattern {
+    let span = inner.span();
     let body = match charset {
-        None => Pattern::AnyChar,
-        Some(cs) => Pattern::Sequence(vec![
-            Pattern::Repeat(Box::new(Pattern::Sequence(vec![
-                Pattern::NotPredicate(Box::new(Pattern::CharClass(cs))),
-                Pattern::AnyChar,
-            ]))),
-            Pattern::CharClass(cs),
-        ]),
+        None => Pattern::AnyChar { span },
+        Some(cs) => Pattern::Sequence {
+            items: vec![
+                Pattern::Repeat {
+                    inner: Box::new(Pattern::Sequence {
+                        items: vec![
+                            Pattern::NotPredicate {
+                                inner: Box::new(Pattern::CharClass { set: cs, span }),
+                                span,
+                            },
+                            Pattern::AnyChar { span },
+                        ],
+                        span,
+                    }),
+                    span,
+                },
+                Pattern::CharClass { set: cs, span },
+            ],
+            span,
+        },
     };
-    let recovery = Pattern::Capture("recovery".into(), Box::new(body));
-    Pattern::Repeat(Box::new(Pattern::Catch {
-        inner: Box::new(inner),
-        label: label.unwrap_or_else(|| "recovery".into()),
-        recovery: Box::new(recovery),
-    }))
+    let recovery = Pattern::Capture {
+        kind: "recovery".into(),
+        inner: Box::new(body),
+        span,
+    };
+    Pattern::Repeat {
+        inner: Box::new(Pattern::Catch {
+            inner: Box::new(inner),
+            label: label.unwrap_or_else(|| "recovery".into()),
+            recovery: Box::new(recovery),
+            span,
+        }),
+        span,
+    }
 }

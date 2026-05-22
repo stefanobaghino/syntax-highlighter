@@ -1,8 +1,20 @@
-use syntax_highlighter::pegc::{parse as parse_src, Pattern};
+use syntax_highlighter::pegc::{parse as parse_src, Pattern, Span};
 use syntax_highlighter::pegvm::CharSet;
 
+/// Parse, then strip spans from every rule body. Tests in this file
+/// assert structural shape via `assert_eq!` against hand-built
+/// fixtures that carry [`Span::SYNTHETIC`]; the parsed pattern's real
+/// positions would otherwise make the equality check diverge on the
+/// span field. The dedicated positional-assertion tests for #114 use
+/// `parse_src` directly to inspect real spans.
 fn parse(src: &str) -> syntax_highlighter::pegc::Grammar {
-    parse_src(src).expect("parse failed")
+    let mut g = parse_src(src).expect("parse failed");
+    g.rules = g
+        .rules
+        .into_iter()
+        .map(|(k, v)| (k, v.strip_spans()))
+        .collect();
+    g
 }
 
 #[test]
@@ -24,7 +36,7 @@ fn ordered_choice_in_grammar() {
     let g = parse("r <- 'a' / 'b' / 'c'");
     assert_eq!(
         g.rules["r"],
-        Pattern::OrderedChoice(vec![
+        Pattern::choice(vec![
             Pattern::literal("a"),
             Pattern::literal("b"),
             Pattern::literal("c"),
@@ -37,7 +49,7 @@ fn sequence_in_grammar() {
     let g = parse("r <- 'a' 'b' 'c'");
     assert_eq!(
         g.rules["r"],
-        Pattern::Sequence(vec![
+        Pattern::seq(vec![
             Pattern::literal("a"),
             Pattern::literal("b"),
             Pattern::literal("c"),
@@ -48,18 +60,9 @@ fn sequence_in_grammar() {
 #[test]
 fn postfix_operators() {
     let g = parse("a <- 'x'*\nb <- 'x'+\nc <- 'x'?");
-    assert_eq!(
-        g.rules["a"],
-        Pattern::Repeat(Box::new(Pattern::literal("x")))
-    );
-    assert_eq!(
-        g.rules["b"],
-        Pattern::RepeatOne(Box::new(Pattern::literal("x")))
-    );
-    assert_eq!(
-        g.rules["c"],
-        Pattern::Optional(Box::new(Pattern::literal("x")))
-    );
+    assert_eq!(g.rules["a"], Pattern::repeat(Pattern::literal("x")));
+    assert_eq!(g.rules["b"], Pattern::repeat_one(Pattern::literal("x")));
+    assert_eq!(g.rules["c"], Pattern::optional(Pattern::literal("x")));
 }
 
 #[test]
@@ -74,7 +77,7 @@ fn postfix_repeat_count_multiple() {
     let g = parse("r <- 'x'{4}");
     assert_eq!(
         g.rules["r"],
-        Pattern::Sequence(vec![
+        Pattern::seq(vec![
             Pattern::literal("x"),
             Pattern::literal("x"),
             Pattern::literal("x"),
@@ -86,20 +89,20 @@ fn postfix_repeat_count_multiple() {
 #[test]
 fn postfix_repeat_count_on_backslash_atom() {
     let g = parse("r <- \\d{4}");
-    let digit = Pattern::CharClass(CharSet::from_ranges(&[(b'0', b'9')]));
+    let digit = Pattern::char_class(CharSet::from_ranges(&[(b'0', b'9')]));
     assert_eq!(
         g.rules["r"],
-        Pattern::Sequence(vec![digit.clone(), digit.clone(), digit.clone(), digit])
+        Pattern::seq(vec![digit.clone(), digit.clone(), digit.clone(), digit])
     );
 }
 
 #[test]
 fn postfix_repeat_count_on_group() {
     let g = parse("r <- ('a' / 'b'){3}");
-    let choice = Pattern::OrderedChoice(vec![Pattern::literal("a"), Pattern::literal("b")]);
+    let choice = Pattern::choice(vec![Pattern::literal("a"), Pattern::literal("b")]);
     assert_eq!(
         g.rules["r"],
-        Pattern::Sequence(vec![choice.clone(), choice.clone(), choice])
+        Pattern::seq(vec![choice.clone(), choice.clone(), choice])
     );
 }
 
@@ -110,10 +113,10 @@ fn postfix_repeat_count_chains_with_star() {
     let g = parse("r <- 'x'{2}*");
     assert_eq!(
         g.rules["r"],
-        Pattern::Repeat(Box::new(Pattern::Sequence(vec![
+        Pattern::repeat(Pattern::seq(vec![
             Pattern::literal("x"),
             Pattern::literal("x"),
-        ])))
+        ]))
     );
 }
 
@@ -122,7 +125,7 @@ fn postfix_repeat_count_at_maximum_accepted() {
     // Boundary case: 1024 is the cap, must be accepted.
     let g = parse("r <- 'x'{1024}");
     match &g.rules["r"] {
-        Pattern::Sequence(items) => assert_eq!(items.len(), 1024),
+        Pattern::Sequence { items, .. } => assert_eq!(items.len(), 1024),
         other => panic!("expected Sequence of 1024 items, got: {other:?}"),
     }
 }
@@ -214,11 +217,12 @@ fn desugared_recover_repeat_with_label(
     recovery_body: Pattern,
     label: &str,
 ) -> Pattern {
-    Pattern::Repeat(Box::new(Pattern::Catch {
+    Pattern::repeat(Pattern::Catch {
         inner: Box::new(inner),
         label: label.into(),
-        recovery: Box::new(Pattern::Capture("recovery".into(), Box::new(recovery_body))),
-    }))
+        recovery: Box::new(Pattern::capture("recovery", recovery_body)),
+        span: Span::SYNTHETIC,
+    })
 }
 
 #[test]
@@ -227,7 +231,7 @@ fn recover_repeat_postfix_star_caret() {
     let g = parse("r <- 'x'*^");
     assert_eq!(
         g.rules["r"],
-        desugared_recover_repeat(Pattern::literal("x"), Pattern::AnyChar)
+        desugared_recover_repeat(Pattern::literal("x"), Pattern::any_char())
     );
 }
 
@@ -237,9 +241,9 @@ fn recover_repeat_postfix_plus_caret_lowers_to_seq() {
     let g = parse("r <- 'x'+^");
     assert_eq!(
         g.rules["r"],
-        Pattern::Sequence(vec![
+        Pattern::seq(vec![
             Pattern::literal("x"),
-            desugared_recover_repeat(Pattern::literal("x"), Pattern::AnyChar),
+            desugared_recover_repeat(Pattern::literal("x"), Pattern::any_char()),
         ])
     );
 }
@@ -249,11 +253,11 @@ fn sync_set_postfix_star_caret_charset() {
     // `p*^[;]` desugars to `(p ^recovery @recovery{(![;] .)* [;]})*`.
     let semi = CharSet::from_bytes(b";");
     let g = parse("r <- 'x'*^[;]");
-    let skip_loop = Pattern::Repeat(Box::new(Pattern::Sequence(vec![
-        Pattern::NotPredicate(Box::new(Pattern::CharClass(semi))),
-        Pattern::AnyChar,
-    ])));
-    let recovery_body = Pattern::Sequence(vec![skip_loop, Pattern::CharClass(semi)]);
+    let skip_loop = Pattern::repeat(Pattern::seq(vec![
+        Pattern::not_predicate(Pattern::char_class(semi)),
+        Pattern::any_char(),
+    ]));
+    let recovery_body = Pattern::seq(vec![skip_loop, Pattern::char_class(semi)]);
     assert_eq!(
         g.rules["r"],
         desugared_recover_repeat(Pattern::literal("x"), recovery_body)
@@ -265,14 +269,14 @@ fn sync_set_postfix_plus_caret_charset() {
     // `p+^[;]` lowers to `p (p*^[;])`.
     let semi = CharSet::from_bytes(b";");
     let g = parse("r <- 'x'+^[;]");
-    let skip_loop = Pattern::Repeat(Box::new(Pattern::Sequence(vec![
-        Pattern::NotPredicate(Box::new(Pattern::CharClass(semi))),
-        Pattern::AnyChar,
-    ])));
-    let recovery_body = Pattern::Sequence(vec![skip_loop, Pattern::CharClass(semi)]);
+    let skip_loop = Pattern::repeat(Pattern::seq(vec![
+        Pattern::not_predicate(Pattern::char_class(semi)),
+        Pattern::any_char(),
+    ]));
+    let recovery_body = Pattern::seq(vec![skip_loop, Pattern::char_class(semi)]);
     assert_eq!(
         g.rules["r"],
-        Pattern::Sequence(vec![
+        Pattern::seq(vec![
             Pattern::literal("x"),
             desugared_recover_repeat(Pattern::literal("x"), recovery_body),
         ])
@@ -288,9 +292,9 @@ fn sync_set_requires_no_whitespace_before_bracket() {
     let semi = CharSet::from_bytes(b";");
     assert_eq!(
         g.rules["r"],
-        Pattern::Sequence(vec![
-            desugared_recover_repeat(Pattern::literal("x"), Pattern::AnyChar),
-            Pattern::CharClass(semi),
+        Pattern::seq(vec![
+            desugared_recover_repeat(Pattern::literal("x"), Pattern::any_char()),
+            Pattern::char_class(semi),
         ])
     );
 }
@@ -304,11 +308,11 @@ fn sync_set_accepts_negated_and_ranges() {
     let mut alpha = CharSet::empty();
     alpha.add_range(b'a', b'z');
     let neg_alpha = alpha.negate();
-    let skip_loop = Pattern::Repeat(Box::new(Pattern::Sequence(vec![
-        Pattern::NotPredicate(Box::new(Pattern::CharClass(neg_alpha))),
-        Pattern::AnyChar,
-    ])));
-    let recovery_body = Pattern::Sequence(vec![skip_loop, Pattern::CharClass(neg_alpha)]);
+    let skip_loop = Pattern::repeat(Pattern::seq(vec![
+        Pattern::not_predicate(Pattern::char_class(neg_alpha)),
+        Pattern::any_char(),
+    ]));
+    let recovery_body = Pattern::seq(vec![skip_loop, Pattern::char_class(neg_alpha)]);
     assert_eq!(
         g.rules["r"],
         desugared_recover_repeat(Pattern::literal("x"), recovery_body)
@@ -322,7 +326,7 @@ fn recover_repeat_postfix_star_caret_with_label() {
     let g = parse("r <- 'x'*^:bad");
     assert_eq!(
         g.rules["r"],
-        desugared_recover_repeat_with_label(Pattern::literal("x"), Pattern::AnyChar, "bad")
+        desugared_recover_repeat_with_label(Pattern::literal("x"), Pattern::any_char(), "bad")
     );
 }
 
@@ -333,9 +337,9 @@ fn recover_repeat_postfix_plus_caret_with_label() {
     let g = parse("r <- 'x'+^:bad");
     assert_eq!(
         g.rules["r"],
-        Pattern::Sequence(vec![
+        Pattern::seq(vec![
             Pattern::literal("x"),
-            desugared_recover_repeat_with_label(Pattern::literal("x"), Pattern::AnyChar, "bad"),
+            desugared_recover_repeat_with_label(Pattern::literal("x"), Pattern::any_char(), "bad"),
         ])
     );
 }
@@ -346,11 +350,11 @@ fn sync_set_postfix_star_caret_charset_with_label() {
     // (sync-set skip) is unchanged.
     let semi = CharSet::from_bytes(b";");
     let g = parse("r <- 'x'*^[;]:bad_stmt");
-    let skip_loop = Pattern::Repeat(Box::new(Pattern::Sequence(vec![
-        Pattern::NotPredicate(Box::new(Pattern::CharClass(semi))),
-        Pattern::AnyChar,
-    ])));
-    let recovery_body = Pattern::Sequence(vec![skip_loop, Pattern::CharClass(semi)]);
+    let skip_loop = Pattern::repeat(Pattern::seq(vec![
+        Pattern::not_predicate(Pattern::char_class(semi)),
+        Pattern::any_char(),
+    ]));
+    let recovery_body = Pattern::seq(vec![skip_loop, Pattern::char_class(semi)]);
     assert_eq!(
         g.rules["r"],
         desugared_recover_repeat_with_label(Pattern::literal("x"), recovery_body, "bad_stmt")
@@ -362,14 +366,14 @@ fn sync_set_postfix_plus_caret_charset_with_label() {
     // `p+^[;]:bad_stmt` lowers to `p (p*^[;]:bad_stmt)`.
     let semi = CharSet::from_bytes(b";");
     let g = parse("r <- 'x'+^[;]:bad_stmt");
-    let skip_loop = Pattern::Repeat(Box::new(Pattern::Sequence(vec![
-        Pattern::NotPredicate(Box::new(Pattern::CharClass(semi))),
-        Pattern::AnyChar,
-    ])));
-    let recovery_body = Pattern::Sequence(vec![skip_loop, Pattern::CharClass(semi)]);
+    let skip_loop = Pattern::repeat(Pattern::seq(vec![
+        Pattern::not_predicate(Pattern::char_class(semi)),
+        Pattern::any_char(),
+    ]));
+    let recovery_body = Pattern::seq(vec![skip_loop, Pattern::char_class(semi)]);
     assert_eq!(
         g.rules["r"],
-        Pattern::Sequence(vec![
+        Pattern::seq(vec![
             Pattern::literal("x"),
             desugared_recover_repeat_with_label(Pattern::literal("x"), recovery_body, "bad_stmt"),
         ])
@@ -383,7 +387,7 @@ fn recovery_label_default_is_recovery() {
     // so the existing tests cover it; this is a self-documenting
     // sentinel that the default has not drifted.
     let g = parse("r <- 'x'*^");
-    let Pattern::Repeat(inner) = &g.rules["r"] else {
+    let Pattern::Repeat { inner, .. } = &g.rules["r"] else {
         panic!("expected Repeat, got {:?}", g.rules["r"]);
     };
     let Pattern::Catch { label, .. } = inner.as_ref() else {
@@ -452,7 +456,7 @@ fn recovery_label_accepts_underscore_prefixed_identifier() {
     let g = parse("r <- 'x'*^:_foo");
     assert_eq!(
         g.rules["r"],
-        desugared_recover_repeat_with_label(Pattern::literal("x"), Pattern::AnyChar, "_foo")
+        desugared_recover_repeat_with_label(Pattern::literal("x"), Pattern::any_char(), "_foo")
     );
 }
 
@@ -465,6 +469,7 @@ fn catch_basic_parses_to_pattern_catch() {
             inner: Box::new(Pattern::literal("a")),
             label: "lbl".into(),
             recovery: Box::new(Pattern::literal("b")),
+            span: Span::SYNTHETIC,
         }
     );
 }
@@ -475,11 +480,12 @@ fn catch_binds_tighter_than_choice() {
     let g = parse("r <- 'a' ^lbl 'b' / 'c'");
     assert_eq!(
         g.rules["r"],
-        Pattern::OrderedChoice(vec![
+        Pattern::choice(vec![
             Pattern::Catch {
                 inner: Box::new(Pattern::literal("a")),
                 label: "lbl".into(),
                 recovery: Box::new(Pattern::literal("b")),
+                span: Span::SYNTHETIC,
             },
             Pattern::literal("c"),
         ])
@@ -493,15 +499,16 @@ fn catch_binds_looser_than_sequence() {
     assert_eq!(
         g.rules["r"],
         Pattern::Catch {
-            inner: Box::new(Pattern::Sequence(vec![
+            inner: Box::new(Pattern::seq(vec![
                 Pattern::literal("a"),
                 Pattern::literal("b"),
             ])),
             label: "lbl".into(),
-            recovery: Box::new(Pattern::Sequence(vec![
+            recovery: Box::new(Pattern::seq(vec![
                 Pattern::literal("c"),
                 Pattern::literal("d"),
             ])),
+            span: Span::SYNTHETIC,
         }
     );
 }
@@ -517,9 +524,11 @@ fn catch_is_left_associative() {
                 inner: Box::new(Pattern::literal("a")),
                 label: "l1".into(),
                 recovery: Box::new(Pattern::literal("b")),
+                span: Span::SYNTHETIC,
             }),
             label: "l2".into(),
             recovery: Box::new(Pattern::literal("c")),
+            span: Span::SYNTHETIC,
         }
     );
 }
@@ -533,14 +542,15 @@ fn catch_does_not_collide_with_star_caret() {
     let g = parse("a <- 'x'*^\nb <- 'x'* ^lbl 'y'");
     assert_eq!(
         g.rules["a"],
-        desugared_recover_repeat(Pattern::literal("x"), Pattern::AnyChar)
+        desugared_recover_repeat(Pattern::literal("x"), Pattern::any_char())
     );
     assert_eq!(
         g.rules["b"],
         Pattern::Catch {
-            inner: Box::new(Pattern::Repeat(Box::new(Pattern::literal("x")))),
+            inner: Box::new(Pattern::repeat(Pattern::literal("x"))),
             label: "lbl".into(),
             recovery: Box::new(Pattern::literal("y")),
+            span: Span::SYNTHETIC,
         }
     );
 }
@@ -556,10 +566,11 @@ fn catch_parens_force_grouping_on_recovery() {
         Pattern::Catch {
             inner: Box::new(Pattern::literal("a")),
             label: "lbl".into(),
-            recovery: Box::new(Pattern::OrderedChoice(vec![
+            recovery: Box::new(Pattern::choice(vec![
                 Pattern::literal("b"),
                 Pattern::literal("c"),
             ])),
+            span: Span::SYNTHETIC,
         }
     );
 }
@@ -575,6 +586,7 @@ fn catch_label_touches_caret_whitespace_insensitive_on_left() {
         inner: Box::new(Pattern::literal("a")),
         label: "lbl".into(),
         recovery: Box::new(Pattern::literal("b")),
+        span: Span::SYNTHETIC,
     };
     assert_eq!(with_space.rules["r"], expected);
     assert_eq!(glued.rules["r"], expected);
@@ -612,17 +624,15 @@ fn catch_rejects_reserved_underscore_label() {
 /// is `@recovery{(!B .)*}`. Mirrors `lower_boundary_catch` in the
 /// parser.
 fn lowered_boundary_catch(inner: Pattern, label: &str, boundary: Pattern) -> Pattern {
-    let stop_loop = Pattern::Repeat(Box::new(Pattern::Sequence(vec![
-        Pattern::NotPredicate(Box::new(boundary.clone())),
-        Pattern::AnyChar,
-    ])));
+    let stop_loop = Pattern::repeat(Pattern::seq(vec![
+        Pattern::not_predicate(boundary.clone()),
+        Pattern::any_char(),
+    ]));
     Pattern::Catch {
-        inner: Box::new(Pattern::Sequence(vec![
-            inner,
-            Pattern::AndPredicate(Box::new(boundary)),
-        ])),
+        inner: Box::new(Pattern::seq(vec![inner, Pattern::and_predicate(boundary)])),
         label: label.into(),
-        recovery: Box::new(Pattern::Capture("recovery".into(), Box::new(stop_loop))),
+        recovery: Box::new(Pattern::capture("recovery", stop_loop)),
+        span: Span::SYNTHETIC,
     }
 }
 
@@ -640,11 +650,7 @@ fn boundary_catch_with_rule_boundary() {
     let g = parse("r <- 'a' ^^lbl b\nb <- 'x'");
     assert_eq!(
         g.rules["r"],
-        lowered_boundary_catch(
-            Pattern::literal("a"),
-            "lbl",
-            Pattern::NonTerminal("b".into())
-        ),
+        lowered_boundary_catch(Pattern::literal("a"), "lbl", Pattern::nt("b")),
     );
 }
 
@@ -657,17 +663,14 @@ fn boundary_catch_with_charset_boundary() {
     delim.add(b')');
     assert_eq!(
         g.rules["r"],
-        lowered_boundary_catch(Pattern::literal("a"), "lbl", Pattern::CharClass(delim)),
+        lowered_boundary_catch(Pattern::literal("a"), "lbl", Pattern::char_class(delim)),
     );
 }
 
 #[test]
 fn boundary_catch_with_grouped_boundary() {
     let g = parse("r <- 'a' ^^lbl (b c)\nb <- 'x'\nc <- 'y'");
-    let boundary = Pattern::Sequence(vec![
-        Pattern::NonTerminal("b".into()),
-        Pattern::NonTerminal("c".into()),
-    ]);
+    let boundary = Pattern::seq(vec![Pattern::nt("b"), Pattern::nt("c")]);
     assert_eq!(
         g.rules["r"],
         lowered_boundary_catch(Pattern::literal("a"), "lbl", boundary),
@@ -699,7 +702,7 @@ fn boundary_catch_does_not_swallow_trailing_atoms() {
     let g = parse("r <- 'a' ^^lbl 'b' 'c'");
     assert_eq!(
         g.rules["r"],
-        Pattern::Sequence(vec![
+        Pattern::seq(vec![
             lowered_boundary_catch(Pattern::literal("a"), "lbl", Pattern::literal("b")),
             Pattern::literal("c"),
         ]),
@@ -716,10 +719,8 @@ fn bare_catch_with_capture_rhs_still_parses() {
         Pattern::Catch {
             inner: Box::new(Pattern::literal("a")),
             label: "lbl".into(),
-            recovery: Box::new(Pattern::Capture(
-                "rec".into(),
-                Box::new(Pattern::literal("b"))
-            )),
+            recovery: Box::new(Pattern::capture("rec", Pattern::literal("b"))),
+            span: Span::SYNTHETIC,
         },
     );
 }
@@ -752,6 +753,7 @@ fn inferred_catch_at_end_of_rule_parses_to_placeholder() {
         Pattern::InferBoundaryCatch {
             inner: Box::new(Pattern::literal("a")),
             label: "lbl".into(),
+            span: Span::SYNTHETIC,
         },
     );
 }
@@ -761,10 +763,11 @@ fn inferred_catch_before_choice_separator() {
     let g = parse("r <- 'a' ^^lbl / 'b'");
     assert_eq!(
         g.rules["r"],
-        Pattern::OrderedChoice(vec![
+        Pattern::choice(vec![
             Pattern::InferBoundaryCatch {
                 inner: Box::new(Pattern::literal("a")),
                 label: "lbl".into(),
+                span: Span::SYNTHETIC,
             },
             Pattern::literal("b"),
         ]),
@@ -776,10 +779,11 @@ fn inferred_catch_before_paren_close() {
     let g = parse("r <- ('a' ^^lbl) 'c'");
     assert_eq!(
         g.rules["r"],
-        Pattern::Sequence(vec![
+        Pattern::seq(vec![
             Pattern::InferBoundaryCatch {
                 inner: Box::new(Pattern::literal("a")),
                 label: "lbl".into(),
+                span: Span::SYNTHETIC,
             },
             Pattern::literal("c"),
         ]),
@@ -794,7 +798,7 @@ fn inferred_vs_explicit_no_ambiguity() {
     let explicit = parse("r <- 'a' ^^lbl 'b' 'c'");
     assert_eq!(
         explicit.rules["r"],
-        Pattern::Sequence(vec![
+        Pattern::seq(vec![
             lowered_boundary_catch(Pattern::literal("a"), "lbl", Pattern::literal("b")),
             Pattern::literal("c"),
         ]),
@@ -802,10 +806,11 @@ fn inferred_vs_explicit_no_ambiguity() {
     let inferred = parse("r <- 'a' ^^lbl / 'b'");
     assert_eq!(
         inferred.rules["r"],
-        Pattern::OrderedChoice(vec![
+        Pattern::choice(vec![
             Pattern::InferBoundaryCatch {
                 inner: Box::new(Pattern::literal("a")),
                 label: "lbl".into(),
+                span: Span::SYNTHETIC,
             },
             Pattern::literal("b"),
         ]),
@@ -830,6 +835,7 @@ fn catch_accepts_underscore_prefixed_labels() {
             inner: Box::new(Pattern::literal("a")),
             label: "_foo".into(),
             recovery: Box::new(Pattern::literal("b")),
+            span: Span::SYNTHETIC,
         }
     );
 }
@@ -839,15 +845,15 @@ fn predicate_operators() {
     let g = parse("a <- !'x' .\nb <- &'y' 'y'");
     assert_eq!(
         g.rules["a"],
-        Pattern::Sequence(vec![
-            Pattern::NotPredicate(Box::new(Pattern::literal("x"))),
-            Pattern::AnyChar,
+        Pattern::seq(vec![
+            Pattern::not_predicate(Pattern::literal("x")),
+            Pattern::any_char(),
         ])
     );
     assert_eq!(
         g.rules["b"],
-        Pattern::Sequence(vec![
-            Pattern::AndPredicate(Box::new(Pattern::literal("y"))),
+        Pattern::seq(vec![
+            Pattern::and_predicate(Pattern::literal("y")),
             Pattern::literal("y"),
         ])
     );
@@ -858,7 +864,7 @@ fn char_class_with_range() {
     let g = parse("d <- [0-9]");
     assert_eq!(
         g.rules["d"],
-        Pattern::CharClass(CharSet::from_ranges(&[(b'0', b'9')]))
+        Pattern::char_class(CharSet::from_ranges(&[(b'0', b'9')]))
     );
 }
 
@@ -868,7 +874,7 @@ fn char_class_negated() {
     let mut excluded = CharSet::empty();
     excluded.add(b'"');
     excluded.add(b'\\');
-    assert_eq!(g.rules["nq"], Pattern::CharClass(excluded.negate()));
+    assert_eq!(g.rules["nq"], Pattern::char_class(excluded.negate()));
 }
 
 #[test]
@@ -882,7 +888,7 @@ fn char_class_mixed_chars_and_ranges() {
         s.add(b'_');
         s
     };
-    assert_eq!(g.rules["alnum"], Pattern::CharClass(expected));
+    assert_eq!(g.rules["alnum"], Pattern::char_class(expected));
 }
 
 #[test]
@@ -890,7 +896,7 @@ fn capture_annotation() {
     let g = parse("r <- @keyword{'while'}");
     assert_eq!(
         g.rules["r"],
-        Pattern::Capture("keyword".into(), Box::new(Pattern::literal("while")))
+        Pattern::capture("keyword", Pattern::literal("while"))
     );
 }
 
@@ -914,9 +920,9 @@ fn parens_and_precedence() {
     let g = parse("r <- 'a' ('b' / 'c') 'd'");
     assert_eq!(
         g.rules["r"],
-        Pattern::Sequence(vec![
+        Pattern::seq(vec![
             Pattern::literal("a"),
-            Pattern::OrderedChoice(vec![Pattern::literal("b"), Pattern::literal("c")]),
+            Pattern::choice(vec![Pattern::literal("b"), Pattern::literal("c")]),
             Pattern::literal("d"),
         ])
     );
@@ -925,13 +931,16 @@ fn parens_and_precedence() {
 #[test]
 fn nonterminal_reference() {
     let g = parse("a <- b\nb <- 'x'");
-    assert_eq!(g.rules["a"], Pattern::NonTerminal("b".into()));
+    assert_eq!(g.rules["a"], Pattern::nt("b"));
 }
 
 #[test]
 fn escape_sequences_in_string() {
     let g = parse("r <- '\\n\\t\\\\'");
-    assert_eq!(g.rules["r"], Pattern::Literal(vec![b'\n', b'\t', b'\\']));
+    assert_eq!(
+        g.rules["r"],
+        Pattern::literal_bytes(vec![b'\n', b'\t', b'\\'])
+    );
 }
 
 #[test]
@@ -940,7 +949,7 @@ fn dash_in_class_at_end_is_literal() {
     let mut s = CharSet::empty();
     s.add(b'+');
     s.add(b'-');
-    assert_eq!(g.rules["r"], Pattern::CharClass(s));
+    assert_eq!(g.rules["r"], Pattern::char_class(s));
 }
 
 #[test]
@@ -948,7 +957,7 @@ fn backslash_d_atom() {
     let g = parse("r <- \\d");
     assert_eq!(
         g.rules["r"],
-        Pattern::CharClass(CharSet::from_ranges(&[(b'0', b'9')]))
+        Pattern::char_class(CharSet::from_ranges(&[(b'0', b'9')]))
     );
 }
 
@@ -957,7 +966,7 @@ fn backslash_d_negated_atom() {
     let g = parse("r <- \\D");
     assert_eq!(
         g.rules["r"],
-        Pattern::CharClass(CharSet::from_ranges(&[(b'0', b'9')]).negate())
+        Pattern::char_class(CharSet::from_ranges(&[(b'0', b'9')]).negate())
     );
 }
 
@@ -966,7 +975,7 @@ fn backslash_s_atom() {
     let g = parse("r <- \\s");
     assert_eq!(
         g.rules["r"],
-        Pattern::CharClass(CharSet::from_bytes(b" \t\n\r"))
+        Pattern::char_class(CharSet::from_bytes(b" \t\n\r"))
     );
 }
 
@@ -975,7 +984,7 @@ fn backslash_s_negated_atom() {
     let g = parse("r <- \\S");
     assert_eq!(
         g.rules["r"],
-        Pattern::CharClass(CharSet::from_bytes(b" \t\n\r").negate())
+        Pattern::char_class(CharSet::from_bytes(b" \t\n\r").negate())
     );
 }
 
@@ -984,7 +993,7 @@ fn backslash_h_atom() {
     let g = parse("r <- \\h");
     assert_eq!(
         g.rules["r"],
-        Pattern::CharClass(CharSet::from_bytes(b" \t"))
+        Pattern::char_class(CharSet::from_bytes(b" \t"))
     );
 }
 
@@ -993,7 +1002,7 @@ fn backslash_h_negated_atom() {
     let g = parse("r <- \\H");
     assert_eq!(
         g.rules["r"],
-        Pattern::CharClass(CharSet::from_bytes(b" \t").negate())
+        Pattern::char_class(CharSet::from_bytes(b" \t").negate())
     );
 }
 
@@ -1002,7 +1011,7 @@ fn backslash_cap_r_linebreak_atom() {
     let g = parse("r <- \\R");
     assert_eq!(
         g.rules["r"],
-        Pattern::OrderedChoice(vec![
+        Pattern::choice(vec![
             Pattern::literal("\r\n"),
             Pattern::literal("\n"),
             Pattern::literal("\r"),
@@ -1013,10 +1022,7 @@ fn backslash_cap_r_linebreak_atom() {
 #[test]
 fn backslash_z_atom() {
     let g = parse("r <- \\z");
-    assert_eq!(
-        g.rules["r"],
-        Pattern::NotPredicate(Box::new(Pattern::AnyChar))
-    );
+    assert_eq!(g.rules["r"], Pattern::not_predicate(Pattern::any_char()));
 }
 
 #[test]
@@ -1024,7 +1030,7 @@ fn backslash_d_in_class_unions_digits() {
     let g = parse("r <- [\\d_]");
     let mut s = CharSet::from_ranges(&[(b'0', b'9')]);
     s.add(b'_');
-    assert_eq!(g.rules["r"], Pattern::CharClass(s));
+    assert_eq!(g.rules["r"], Pattern::char_class(s));
 }
 
 #[test]
@@ -1034,7 +1040,7 @@ fn backslash_d_in_class_with_range_neighbor() {
     let mut s = CharSet::from_ranges(&[(b'0', b'9')]);
     s.add_range(b'a', b'f');
     s.add_range(b'A', b'F');
-    assert_eq!(g.rules["r"], Pattern::CharClass(s));
+    assert_eq!(g.rules["r"], Pattern::char_class(s));
 }
 
 #[test]
@@ -1042,7 +1048,7 @@ fn backslash_s_in_class_unions_whitespace() {
     let g = parse("r <- [\\sX]");
     let mut s = CharSet::from_bytes(b" \t\n\r");
     s.add(b'X');
-    assert_eq!(g.rules["r"], Pattern::CharClass(s));
+    assert_eq!(g.rules["r"], Pattern::char_class(s));
 }
 
 #[test]
@@ -1051,7 +1057,7 @@ fn backslash_d_in_negated_class() {
     let g = parse("r <- [^\\d]");
     assert_eq!(
         g.rules["r"],
-        Pattern::CharClass(CharSet::from_ranges(&[(b'0', b'9')]).negate())
+        Pattern::char_class(CharSet::from_ranges(&[(b'0', b'9')]).negate())
     );
 }
 
@@ -1265,17 +1271,17 @@ fn duplicate_rule_errors() {
 /// `Repeat(Seq(NotPredicate(S), AnyChar))`. Mirrors
 /// `lower_until_exclusive` in `src/pegc/parser.rs`.
 fn desugared_until_exclusive(stop: Pattern) -> Pattern {
-    Pattern::Repeat(Box::new(Pattern::Sequence(vec![
-        Pattern::NotPredicate(Box::new(stop)),
-        Pattern::AnyChar,
-    ])))
+    Pattern::repeat(Pattern::seq(vec![
+        Pattern::not_predicate(stop),
+        Pattern::any_char(),
+    ]))
 }
 
 /// Builds the desugared AST that `..= S` lowers to:
 /// `Seq(.. S, S)`. Mirrors `lower_until_inclusive` in
 /// `src/pegc/parser.rs`.
 fn desugared_until_inclusive(stop: Pattern) -> Pattern {
-    Pattern::Sequence(vec![desugared_until_exclusive(stop.clone()), stop])
+    Pattern::seq(vec![desugared_until_exclusive(stop.clone()), stop])
 }
 
 #[test]
@@ -1301,7 +1307,7 @@ fn skip_until_inclusive_vs_exclusive_distinction() {
     // Same stop pattern; ASTs differ exactly in the trailing consume.
     let excl = parse("r <- .. 'b'").rules["r"].clone();
     let incl = parse("r <- ..= 'b'").rules["r"].clone();
-    assert_eq!(incl, Pattern::Sequence(vec![excl, Pattern::literal("b")]));
+    assert_eq!(incl, Pattern::seq(vec![excl, Pattern::literal("b")]));
 }
 
 #[test]
@@ -1309,7 +1315,7 @@ fn skip_until_inside_sequence() {
     let g = parse("r <- 'x' .. 'b' 'y'");
     assert_eq!(
         g.rules["r"],
-        Pattern::Sequence(vec![
+        Pattern::seq(vec![
             Pattern::literal("x"),
             desugared_until_exclusive(Pattern::literal("b")),
             Pattern::literal("y"),
@@ -1323,9 +1329,9 @@ fn skip_until_requires_adjacent_dots() {
     let g = parse("r <- . . 'b'");
     assert_eq!(
         g.rules["r"],
-        Pattern::Sequence(vec![
-            Pattern::AnyChar,
-            Pattern::AnyChar,
+        Pattern::seq(vec![
+            Pattern::any_char(),
+            Pattern::any_char(),
             Pattern::literal("b"),
         ])
     );
@@ -1357,7 +1363,7 @@ fn skip_until_whitespace_after_operator_ok() {
 #[test]
 fn skip_until_with_charclass_stop() {
     let g = parse("r <- .. [;]");
-    let stop = Pattern::CharClass({
+    let stop = Pattern::char_class({
         let mut s = CharSet::empty();
         s.add(b';');
         s
@@ -1369,7 +1375,7 @@ fn skip_until_with_charclass_stop() {
 fn skip_until_inclusive_with_grouped_stop() {
     // Mirrors the sqlite `bracket_id` shape: stop is an OrderedChoice.
     let g = parse("r <- ..= (']' / 'x')");
-    let stop = Pattern::OrderedChoice(vec![Pattern::literal("]"), Pattern::literal("x")]);
+    let stop = Pattern::choice(vec![Pattern::literal("]"), Pattern::literal("x")]);
     assert_eq!(g.rules["r"], desugared_until_inclusive(stop));
 }
 
@@ -1389,14 +1395,14 @@ fn skip_until_inclusive_with_capture_stop() {
     // consume in `..= S` retains the same capture kind so themes
     // render the consumed delimiter consistently.
     let g = parse("r <- ..= @punctuation{'}'}");
-    let stop = Pattern::Capture("punctuation".into(), Box::new(Pattern::literal("}")));
+    let stop = Pattern::capture("punctuation", Pattern::literal("}"));
     assert_eq!(g.rules["r"], desugared_until_inclusive(stop));
 }
 
 #[test]
 fn skip_until_with_capture_stop_exclusive() {
     let g = parse("r <- .. @comment{'#'}");
-    let stop = Pattern::Capture("comment".into(), Box::new(Pattern::literal("#")));
+    let stop = Pattern::capture("comment", Pattern::literal("#"));
     assert_eq!(g.rules["r"], desugared_until_exclusive(stop));
 }
 
@@ -1405,18 +1411,16 @@ fn skip_until_with_capture_stop_exclusive() {
 /// anchor on the inner. Mirrors `lower_bracketed_close_catch` in
 /// `src/pegc/parser.rs`.
 fn desugared_bracketed_close_catch(inner: Pattern, label: &str, boundary: Pattern) -> Pattern {
-    let stop_loop = Pattern::Repeat(Box::new(Pattern::Sequence(vec![
-        Pattern::NotPredicate(Box::new(boundary.clone())),
-        Pattern::AnyChar,
-    ])));
-    let recovery = Pattern::Sequence(vec![
-        Pattern::Capture("recovery".into(), Box::new(stop_loop)),
-        boundary,
-    ]);
+    let stop_loop = Pattern::repeat(Pattern::seq(vec![
+        Pattern::not_predicate(boundary.clone()),
+        Pattern::any_char(),
+    ]));
+    let recovery = Pattern::seq(vec![Pattern::capture("recovery", stop_loop), boundary]);
     Pattern::Catch {
         inner: Box::new(inner),
         label: label.into(),
         recovery: Box::new(recovery),
+        span: Span::SYNTHETIC,
     }
 }
 
@@ -1435,7 +1439,7 @@ fn bracketed_close_catch_with_capture_boundary() {
     // consume — `}` is captured as `@punctuation` in both happy and
     // recovery paths.
     let g = parse("r <- 'a' ^^lbl ..= @punctuation{'}'}");
-    let boundary = Pattern::Capture("punctuation".into(), Box::new(Pattern::literal("}")));
+    let boundary = Pattern::capture("punctuation", Pattern::literal("}"));
     assert_eq!(
         g.rules["r"],
         desugared_bracketed_close_catch(Pattern::literal("a"), "lbl", boundary)
@@ -1463,7 +1467,7 @@ fn bracketed_close_catch_vs_boundary_catch_distinction() {
         ) => {
             // Anchored inner is a Sequence ending in AndPredicate; bracketed inner is the bare INNER.
             assert!(
-                matches!(i_anch.as_ref(), Pattern::Sequence(items) if matches!(items.last(), Some(Pattern::AndPredicate(_)))),
+                matches!(i_anch.as_ref(), Pattern::Sequence { items, .. } if matches!(items.last(), Some(Pattern::AndPredicate { .. }))),
                 "anchored form should have &B on inner: {i_anch:?}"
             );
             assert_eq!(
@@ -1473,11 +1477,11 @@ fn bracketed_close_catch_vs_boundary_catch_distinction() {
             );
             // Anchored recovery is just the capture; bracketed recovery is Seq(capture, B).
             assert!(
-                matches!(r_anch.as_ref(), Pattern::Capture(_, _)),
+                matches!(r_anch.as_ref(), Pattern::Capture { .. }),
                 "anchored recovery should be a capture, got: {r_anch:?}"
             );
             assert!(
-                matches!(r_brkt.as_ref(), Pattern::Sequence(_)),
+                matches!(r_brkt.as_ref(), Pattern::Sequence { .. }),
                 "bracketed recovery should be a Sequence, got: {r_brkt:?}"
             );
         }
@@ -1503,7 +1507,7 @@ fn bracketed_close_catch_does_not_swallow_trailing_atoms() {
     // after the boundary belong to the enclosing sequence.
     let g = parse("r <- 'a' ^^lbl ..= '}' 'c'");
     match &g.rules["r"] {
-        Pattern::Sequence(items) => {
+        Pattern::Sequence { items, .. } => {
             assert_eq!(items.len(), 2, "expected Seq(catch, 'c'), got: {items:?}");
             assert!(matches!(&items[0], Pattern::Catch { .. }));
             assert_eq!(items[1], Pattern::literal("c"));

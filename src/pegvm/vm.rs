@@ -1596,7 +1596,7 @@ mod examined_max_tests {
     //! memo map — post-run the public `run_with_memo_stats` has already
     //! discarded it.
     use super::*;
-    use crate::pegc::{Grammar, Pattern};
+    use crate::pegc::{Grammar, Pattern, Span};
     use std::collections::HashMap;
 
     fn rule(rules: &mut HashMap<String, Pattern>, name: &str, pat: Pattern) {
@@ -1614,7 +1614,7 @@ mod examined_max_tests {
             "start",
             Pattern::seq(vec![
                 Pattern::literal("x"),
-                Pattern::AndPredicate(Box::new(Pattern::literal("y"))),
+                Pattern::and_predicate(Pattern::literal("y")),
             ]),
         );
         let prog = Grammar::new(rules, "start").compile().unwrap();
@@ -1643,7 +1643,7 @@ mod examined_max_tests {
             "start",
             Pattern::seq(vec![
                 Pattern::literal("x"),
-                Pattern::AndPredicate(Box::new(Pattern::literal("z"))),
+                Pattern::and_predicate(Pattern::literal("z")),
             ]),
         );
         let prog = Grammar::new(rules, "start").compile().unwrap();
@@ -1671,10 +1671,7 @@ mod examined_max_tests {
         rule(
             &mut rules,
             "outer",
-            Pattern::seq(vec![
-                Pattern::NonTerminal("inner".into()),
-                Pattern::literal("y"),
-            ]),
+            Pattern::seq(vec![Pattern::nt("inner"), Pattern::literal("y")]),
         );
         rule(&mut rules, "inner", Pattern::literal("x"));
         let prog = Grammar::new(rules, "outer").compile().unwrap();
@@ -1709,14 +1706,8 @@ mod examined_max_tests {
             &mut rules,
             "start",
             Pattern::choice(vec![
-                Pattern::seq(vec![
-                    Pattern::NonTerminal("X".into()),
-                    Pattern::literal("aa"),
-                ]),
-                Pattern::seq(vec![
-                    Pattern::NonTerminal("X".into()),
-                    Pattern::literal("bb"),
-                ]),
+                Pattern::seq(vec![Pattern::nt("X"), Pattern::literal("aa")]),
+                Pattern::seq(vec![Pattern::nt("X"), Pattern::literal("bb")]),
             ]),
         );
         rule(&mut rules, "X", Pattern::literal("a"));
@@ -1756,14 +1747,12 @@ mod examined_max_tests {
         rule(
             &mut rules,
             "start",
-            Pattern::Repeat(Box::new(Pattern::Catch {
+            Pattern::repeat(Pattern::Catch {
                 inner: Box::new(Pattern::literal("ab")),
                 label: "recovery".into(),
-                recovery: Box::new(Pattern::Capture(
-                    "recovery".into(),
-                    Box::new(Pattern::AnyChar),
-                )),
-            })),
+                recovery: Box::new(Pattern::capture("recovery", Pattern::any_char())),
+                span: Span::SYNTHETIC,
+            }),
         );
         let prog = Grammar::new(rules, "start").compile().unwrap();
         let (result, _stats, memo) = VM::new(&prog.code, b"abxab")

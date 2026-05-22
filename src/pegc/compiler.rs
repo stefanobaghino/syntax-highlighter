@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use super::analysis::{analyze_left_recursion, LintFinding};
-use super::pattern::Pattern;
+use super::pattern::{Pattern, Span};
 use crate::pegvm::{CaptureKind, Instruction, Label, LabelId, MemoId, Program, RuleKind};
 
 #[derive(Debug)]
@@ -10,15 +10,20 @@ pub enum CompileError {
     UnknownStartRule(String),
     /// One or more `^^lbl` catches have no following context to infer
     /// their boundary from. Emitted by `resolve_inferred_boundaries`.
+    /// `span` is the source position of the `^^lbl` placeholder in the
+    /// grammar; rendered as `{line}:{col}:` in [`Display`].
     CannotInferBoundary {
         rule: String,
         label: String,
+        span: Span,
     },
     /// `lint_partial_match` returned a non-empty result. Each finding
     /// names a `(rule, caller)` pair where a trailing-nullable rule's
     /// partial-match leniency reaches an unguarded scope. Anchor with
     /// `^^lbl B` (or `^^lbl`) when the leniency is a bug, or wrap the
-    /// call site with `~p` when the leniency is intentional.
+    /// call site with `~p` when the leniency is intentional. Each
+    /// [`LintFinding`] carries the call-site's span so the rendered
+    /// message points directly at the unanchored call.
     PartialMatchLeniency(Vec<LintFinding>),
 }
 
@@ -27,9 +32,9 @@ impl std::fmt::Display for CompileError {
         match self {
             CompileError::UndefinedRule(name) => write!(f, "undefined rule: {}", name),
             CompileError::UnknownStartRule(name) => write!(f, "unknown start rule: {}", name),
-            CompileError::CannotInferBoundary { rule, label } => write!(
+            CompileError::CannotInferBoundary { rule, label, span } => write!(
                 f,
-                "cannot infer boundary for `^^{label}` in rule `{rule}`: no following context. \
+                "{span}: cannot infer boundary for `^^{label}` in rule `{rule}`: no following context. \
                  Either delete the unreachable catch or specify an explicit boundary `^^{label} B`."
             ),
             CompileError::PartialMatchLeniency(findings) => {
@@ -37,9 +42,9 @@ impl std::fmt::Display for CompileError {
                 for finding in findings {
                     writeln!(
                         f,
-                        "  - rule `{}` is called unanchored by `{}`; its trailing optional \
+                        "  - {}: rule `{}` is called unanchored by `{}`; its trailing optional \
                          can succeed on a prefix, leaving bytes the caller does not validate",
-                        finding.rule, finding.caller
+                        finding.call_site, finding.rule, finding.caller
                     )?;
                 }
                 Ok(())
@@ -141,29 +146,29 @@ impl Compiler {
 
     fn compile_pat(&mut self, p: &Pattern) {
         match p {
-            Pattern::Literal(bytes) => {
+            Pattern::Literal { bytes, .. } => {
                 for &b in bytes {
                     self.emit(Instruction::Char(b));
                 }
             }
-            Pattern::CharClass(set) => {
+            Pattern::CharClass { set, .. } => {
                 self.emit(Instruction::Set(*set));
             }
-            Pattern::AnyChar => {
+            Pattern::AnyChar { .. } => {
                 self.emit(Instruction::Any(1));
             }
-            Pattern::Sequence(items) => {
+            Pattern::Sequence { items, .. } => {
                 for it in items {
                     self.compile_pat(it);
                 }
             }
-            Pattern::OrderedChoice(items) => {
-                if items.is_empty() {
+            Pattern::OrderedChoice { alts, .. } => {
+                if alts.is_empty() {
                     return;
                 }
                 let mut commit_indices = Vec::new();
-                let last_idx = items.len() - 1;
-                for (i, item) in items.iter().enumerate() {
+                let last_idx = alts.len() - 1;
+                for (i, item) in alts.iter().enumerate() {
                     if i < last_idx {
                         let choice = self.emit(Instruction::Choice(Label(0)));
                         self.compile_pat(item);
@@ -180,7 +185,7 @@ impl Compiler {
                     self.patch_jump(idx, end);
                 }
             }
-            Pattern::Repeat(inner) => {
+            Pattern::Repeat { inner, .. } => {
                 // Choice L2 ; L_body: <p> ; PartialCommit L_body ; L2:
                 // PartialCommit re-uses the existing Backtrack — we must NOT re-execute Choice.
                 let choice = self.emit(Instruction::Choice(Label(0)));
@@ -190,12 +195,15 @@ impl Compiler {
                 let l2 = self.pos();
                 self.patch_jump(choice, l2);
             }
-            Pattern::RepeatOne(inner) => {
+            Pattern::RepeatOne { inner, span } => {
                 // <p> ; (Repeat p)
                 self.compile_pat(inner);
-                self.compile_pat(&Pattern::Repeat(inner.clone()));
+                self.compile_pat(&Pattern::Repeat {
+                    inner: inner.clone(),
+                    span: *span,
+                });
             }
-            Pattern::Optional(inner) => {
+            Pattern::Optional { inner, .. } => {
                 // Choice L1 ; <p> ; Commit L1 ; L1:
                 let choice = self.emit(Instruction::Choice(Label(0)));
                 self.compile_pat(inner);
@@ -204,7 +212,7 @@ impl Compiler {
                 self.patch_jump(choice, l1);
                 self.patch_jump(commit, l1);
             }
-            Pattern::NotPredicate(inner) => {
+            Pattern::NotPredicate { inner, .. } => {
                 // Choice L1 ; <p> ; FailTwice ; L1:
                 let choice = self.emit(Instruction::Choice(Label(0)));
                 self.compile_pat(inner);
@@ -212,7 +220,7 @@ impl Compiler {
                 let l1 = self.pos();
                 self.patch_jump(choice, l1);
             }
-            Pattern::AndPredicate(inner) => {
+            Pattern::AndPredicate { inner, .. } => {
                 // Choice L1 ; <p> ; BackCommit L2 ; L1: Fail ; L2:
                 let choice = self.emit(Instruction::Choice(Label(0)));
                 self.compile_pat(inner);
@@ -223,13 +231,13 @@ impl Compiler {
                 self.patch_jump(choice, l1);
                 self.patch_jump(back, l2);
             }
-            Pattern::NonTerminal(name) => {
+            Pattern::NonTerminal { name, .. } => {
                 let idx = self.emit(Instruction::Call(Label(0)));
                 self.pending_calls.push((idx, name.clone()));
             }
-            Pattern::Capture(name, inner) => {
-                let kind = self.intern_capture(name);
-                self.emit(Instruction::CaptureBegin(kind));
+            Pattern::Capture { kind, inner, .. } => {
+                let kind_id = self.intern_capture(kind);
+                self.emit(Instruction::CaptureBegin(kind_id));
                 self.compile_pat(inner);
                 self.emit(Instruction::CaptureEnd);
             }
@@ -237,6 +245,7 @@ impl Compiler {
                 inner,
                 label,
                 recovery,
+                ..
             } => {
                 //              RecoverScopeBegin(label)
                 //              Choice rec
@@ -280,7 +289,7 @@ impl Compiler {
             }
             // Transparent at runtime — the `~` marker affects only
             // the lint walker. See `Pattern::Lenient` documentation.
-            Pattern::Lenient(inner) => self.compile_pat(inner),
+            Pattern::Lenient { inner, .. } => self.compile_pat(inner),
             // The FOLLOW-inferred resolver must run before bytecode
             // emission; reaching this arm is a bug.
             Pattern::InferBoundaryCatch { .. } => {
@@ -426,20 +435,26 @@ fn check_refs(
     rules: &HashMap<String, Pattern>,
 ) -> Result<(), CompileError> {
     match pat {
-        Pattern::Literal(_) | Pattern::CharClass(_) | Pattern::AnyChar => Ok(()),
-        Pattern::Sequence(items) | Pattern::OrderedChoice(items) => {
+        Pattern::Literal { .. } | Pattern::CharClass { .. } | Pattern::AnyChar { .. } => Ok(()),
+        Pattern::Sequence { items, .. } => {
             for it in items {
                 check_refs(_rule, it, rules)?;
             }
             Ok(())
         }
-        Pattern::Repeat(inner)
-        | Pattern::RepeatOne(inner)
-        | Pattern::Optional(inner)
-        | Pattern::NotPredicate(inner)
-        | Pattern::AndPredicate(inner)
-        | Pattern::Capture(_, inner)
-        | Pattern::Lenient(inner) => check_refs(_rule, inner, rules),
+        Pattern::OrderedChoice { alts, .. } => {
+            for it in alts {
+                check_refs(_rule, it, rules)?;
+            }
+            Ok(())
+        }
+        Pattern::Repeat { inner, .. }
+        | Pattern::RepeatOne { inner, .. }
+        | Pattern::Optional { inner, .. }
+        | Pattern::NotPredicate { inner, .. }
+        | Pattern::AndPredicate { inner, .. }
+        | Pattern::Capture { inner, .. }
+        | Pattern::Lenient { inner, .. } => check_refs(_rule, inner, rules),
         Pattern::Catch {
             inner, recovery, ..
         } => {
@@ -447,7 +462,7 @@ fn check_refs(
             check_refs(_rule, recovery, rules)
         }
         Pattern::InferBoundaryCatch { inner, .. } => check_refs(_rule, inner, rules),
-        Pattern::NonTerminal(name) => {
+        Pattern::NonTerminal { name, .. } => {
             if rules.contains_key(name) {
                 Ok(())
             } else {
