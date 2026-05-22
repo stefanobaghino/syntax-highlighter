@@ -159,4 +159,6 @@ ident_body    <- [A-Za-z0-9_\-]
 comment       <- @comment{block_comment}
 block_comment <- '/*' (!'*/' .)* '*/'
 
+trivia        <- ws
+
 ws            <- (comment / [ \t\r\n])*

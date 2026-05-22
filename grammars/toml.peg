@@ -117,6 +117,8 @@ comment       <- @comment{'#' (!linebreak .)*}
 
 # Vertical whitespace: spaces/tabs/newlines plus comments. Each atom
 # consumes at least one byte, so the enclosing '*' cannot infinite-loop.
+trivia        <- ws
+
 ws            <- (comment / [ \t\r\n])*
 array_ws      <- ws
 

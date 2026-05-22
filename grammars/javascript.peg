@@ -381,4 +381,6 @@ comment        <- @comment{line_comment / block_comment}
 line_comment   <- '//' (!'\n' .)*
 block_comment  <- '/*' (!'*/' .)* '*/'
 
+trivia        <- ws
+
 ws             <- (comment / [ \t\r\n])*
