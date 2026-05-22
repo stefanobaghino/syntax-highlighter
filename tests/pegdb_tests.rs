@@ -387,6 +387,33 @@ fn dump_captures_recovery_span_shares_farthest_reach() {
 // ---------- explain-recoveries ----------
 
 #[test]
+fn explain_recoveries_skips_trivia_when_picking_leaf() {
+    // Shipped grammars define a `trivia <- ws` reserved-name root; the
+    // compiler cascades the trivia bit through `ws → comment →
+    // line_comment / block_comment`, and pegdb explain-recoveries pops
+    // those trailing frames before clustering. The displayed leaf is
+    // the deepest semantic (non-trivia) rule.
+    let (code, stdout, _) = run_stdin(
+        &["explain-recoveries", "-g", "grammars/rust.peg"],
+        b"fn ok() {}\n@@@ garbage @@@\nfn ok2() {}\n",
+    );
+    assert_eq!(code, 0);
+    let trivia_names = ["ws", "spacing", "comment", "line_comment", "block_comment"];
+    for line in stdout.lines() {
+        let leaf = line
+            .split(" — farthest reach ends at ")
+            .nth(1)
+            .and_then(|rest| rest.split(" (label:").next())
+            .map(str::trim)
+            .unwrap_or_else(|| panic!("could not parse leaf from: {line}"));
+        assert!(
+            !trivia_names.contains(&leaf),
+            "displayed leaf must not be a trivia rule, got `{leaf}` in: {line}"
+        );
+    }
+}
+
+#[test]
 fn explain_recoveries_clusters_by_rule_stack() {
     // Multiple `@@@` runs should collapse into a single top-level
     // cluster; non-trivial dive sites (e.g. `g` looking like the start

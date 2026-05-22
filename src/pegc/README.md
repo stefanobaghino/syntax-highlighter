@@ -356,6 +356,38 @@ absorbing the leniency — actually holds is currently a convention
 recorded in adjacent comments and unenforced by the lint; see
 `#113` for the planned tightening.
 
+### Reserved rule names
+
+The compiler treats one rule name specially:
+
+- **`trivia`** — if a grammar defines a rule with this name, every
+  rule transitively reachable from it through the call graph is
+  marked as syntactic trivia (whitespace, comments). Runtime
+  semantics are unchanged; the bit surfaces in
+  `Program::rule_is_trivia` and `pegdb explain-recoveries` pops
+  trailing trivia frames from the rule_stack when picking the
+  displayed leaf of each cluster.
+
+  The cascade is structural — only one annotation per grammar (the
+  `trivia` rule's body lists the entry points), no per-rule keyword,
+  no surface markup. Rules whose body contains a recovery catch
+  (`^lbl`, `^^lbl`, `*^`) are pinned out of the cascade so the
+  catch's diagnostic frame stays visible.
+
+  Indentation-sensitive grammars (`#43`) keep significant-whitespace
+  rules outside the `trivia` subgraph; only ignorable bytes go in.
+
+  ```peg
+  trivia        <- ws
+  ws            <- (comment / [ \t\r\n])*
+  comment       <- @comment{line_comment / block_comment}
+  line_comment  <- '//' (!'\n' .)*
+  block_comment <- '/*' (!'*/' .)* '*/'
+  ```
+
+  Grammars without a `trivia` rule leave all trivia bits false;
+  pegdb's leaf-display still works, it just won't trim.
+
 ### Reserved syntax
 
 `^<non-ident-byte>` is a parse error today and reserved for future

@@ -29,6 +29,10 @@
 //!   u16 LE      n = rule_names.len()
 //!   for each name: NUL-terminated UTF-8 bytes
 //!
+//! rule-attribute bits:
+//!   ceil(rule_names.len() / 8) bytes, bit-packed `rule_is_trivia`
+//!   (rule `i`'s bit is bit `i % 8` of byte `i / 8`, LSB-first).
+//!
 //! label-name table:
 //!   u16 LE      n = label_kinds.len()
 //!   for each name: NUL-terminated UTF-8 bytes
@@ -192,9 +196,24 @@ pub fn encode(program: &Program) -> Vec<u8> {
     let mut out = Vec::new();
     write_name_table(&mut out, &program.capture_kinds, "capture");
     write_name_table(&mut out, &program.rule_names, "rule");
+    write_bit_vec(&mut out, &program.rule_is_trivia);
     write_name_table(&mut out, &program.label_kinds, "label");
     write_instructions(&mut out, &program.code);
     out
+}
+
+fn write_bit_vec(out: &mut Vec<u8>, bits: &[bool]) {
+    let nbytes = bits.len().div_ceil(8);
+    for byte_idx in 0..nbytes {
+        let mut byte = 0u8;
+        for bit_idx in 0..8 {
+            let i = byte_idx * 8 + bit_idx;
+            if i < bits.len() && bits[i] {
+                byte |= 1 << bit_idx;
+            }
+        }
+        out.push(byte);
+    }
 }
 
 fn write_name_table(out: &mut Vec<u8>, names: &[String], label: &str) {
@@ -330,6 +349,7 @@ pub fn decode(bytes: &[u8]) -> Result<Program, Error> {
     let mut cur = Cursor::new(bytes);
     let capture_kinds = read_name_table(&mut cur, Error::InvalidCaptureName)?;
     let rule_names = read_name_table(&mut cur, Error::InvalidRuleName)?;
+    let rule_is_trivia = read_bit_vec(&mut cur, rule_names.len())?;
     let label_kinds = read_name_table(&mut cur, Error::InvalidLabelName)?;
     let code = read_instructions(&mut cur)?;
     if cur.pos != bytes.len() {
@@ -344,7 +364,23 @@ pub fn decode(bytes: &[u8]) -> Result<Program, Error> {
         rule_count,
         rule_names,
         label_kinds,
+        rule_is_trivia,
     })
+}
+
+fn read_bit_vec(cur: &mut Cursor<'_>, n_bits: usize) -> Result<Vec<bool>, Error> {
+    let nbytes = n_bits.div_ceil(8);
+    let mut bits = Vec::with_capacity(n_bits);
+    for _ in 0..nbytes {
+        let byte = cur.read_u8()?;
+        for bit_idx in 0..8 {
+            if bits.len() == n_bits {
+                break;
+            }
+            bits.push((byte >> bit_idx) & 1 == 1);
+        }
+    }
+    Ok(bits)
 }
 
 fn read_name_table(
@@ -686,8 +722,31 @@ mod tests {
             rule_count: 2,
             rule_names: vec!["start".to_string(), "other".to_string()],
             label_kinds: vec!["missing_then".to_string()],
+            rule_is_trivia: vec![false, true],
         };
         assert_roundtrip(&p);
+    }
+
+    #[test]
+    fn bit_vec_round_trips_across_byte_boundary() {
+        // 10 rules so the trivia bitmap spans 2 bytes; alternating
+        // pattern catches any off-by-one in the bit ordering.
+        let bits: Vec<bool> = (0..10).map(|i| i % 2 == 0).collect();
+        let rule_names: Vec<String> = (0..10).map(|i| format!("r{i}")).collect();
+        let p = Program {
+            code: vec![Instruction::End],
+            capture_kinds: vec![],
+            rule_count: 10,
+            rule_names,
+            label_kinds: vec![],
+            rule_is_trivia: bits,
+        };
+        let bytes = encode(&p);
+        let decoded = decode(&bytes).expect("decode succeeds");
+        assert_eq!(
+            decoded.rule_is_trivia, p.rule_is_trivia,
+            "trivia bit-vec mismatch after round-trip"
+        );
     }
 
     // ─── error paths ───────────────────────────────────────────────
@@ -824,6 +883,7 @@ mod tests {
             rule_count: 0,
             rule_names: vec![],
             label_kinds: vec![],
+            rule_is_trivia: vec![],
         };
         assert_roundtrip(&p);
     }
@@ -845,6 +905,7 @@ mod tests {
             rule_count: 99, // intentionally inconsistent with the code
             rule_names: vec![],
             label_kinds: vec![],
+            rule_is_trivia: vec![],
         };
         let bytes = encode(&p);
         let decoded = decode(&bytes).expect("decode succeeds");

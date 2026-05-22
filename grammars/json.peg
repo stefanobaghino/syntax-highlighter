@@ -36,4 +36,6 @@ false_lit   <- 'false'
 null_lit    <- 'null'
 
 hex         <- [0-9a-fA-F]
+trivia      <- spacing
+
 spacing     <- [ \t\n\r]*

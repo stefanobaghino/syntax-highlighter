@@ -995,6 +995,8 @@ keyword_word <-
 
 # --- Whitespace & comments -------------------------------------------
 
+trivia        <- ws
+
 ws            <- (comment / [ \t\n\r])*
 comment       <- line_comment / block_comment
 line_comment  <- @comment{'--' (!linebreak .)*}

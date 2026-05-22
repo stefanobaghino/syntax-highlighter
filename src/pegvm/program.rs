@@ -31,4 +31,12 @@ pub struct Program {
     /// recovery firing back to its source name. Empty for grammars
     /// that don't use labeled failures.
     pub label_kinds: Vec<String>,
+    /// Per-rule trivia flags, indexed by `MemoId.0`. `true` when the
+    /// rule is reachable from a `trivia <- …` reserved-name root in
+    /// the grammar; a rule containing a recovery catch is pinned out
+    /// of inference so the catch's frame stays visible. `pegdb
+    /// explain-recoveries` consults this to drop trailing trivia
+    /// frames from the rule_stack when picking the displayed leaf of
+    /// a recovery cluster. Length is exactly `rule_count`.
+    pub rule_is_trivia: Vec<bool>,
 }

@@ -478,4 +478,6 @@ line_comment  <- '//' (!'\n' .)*
 # the occasional mismatch is acceptable and keeps the grammar simpler.
 block_comment <- '/*' (!'*/' .)* '*/'
 
+trivia        <- ws
+
 ws            <- (comment / [ \t\r\n])*

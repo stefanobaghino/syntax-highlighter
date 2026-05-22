@@ -1845,6 +1845,92 @@ fn compile_errors_on_uninferable_boundary() {
     );
 }
 
+// ---- Trivia reserved-rule cascade --------------------------------
+
+fn trivia_idx(program: &syntax_highlighter::pegvm::Program, name: &str) -> usize {
+    program
+        .rule_names
+        .iter()
+        .position(|n| n == name)
+        .unwrap_or_else(|| {
+            panic!(
+                "rule `{name}` not indexed; rule_names = {:?}",
+                program.rule_names
+            )
+        })
+}
+
+#[test]
+fn trivia_root_marks_itself_and_no_root_leaves_bits_false() {
+    // Without a `trivia` rule the bits are all false.
+    let no_root = parse("start <- 'x'")
+        .expect("parse")
+        .compile()
+        .expect("compile");
+    assert!(no_root.rule_is_trivia.iter().all(|b| !b));
+
+    // The trivia rule itself gets the bit when present.
+    let with_root = parse("start <- trivia 'x'\ntrivia <- ' '*")
+        .expect("parse")
+        .compile()
+        .expect("compile");
+    assert!(with_root.rule_is_trivia[trivia_idx(&with_root, "trivia")]);
+    assert!(!with_root.rule_is_trivia[trivia_idx(&with_root, "start")]);
+}
+
+#[test]
+fn trivia_cascades_to_transitive_callees() {
+    let program = parse(
+        "start  <- trivia 'x'\n\
+         trivia <- ws\n\
+         ws     <- (comment / ' ')*\n\
+         comment <- '#' (!'\\n' .)*",
+    )
+    .expect("parse")
+    .compile()
+    .expect("compile");
+    assert!(program.rule_is_trivia[trivia_idx(&program, "trivia")]);
+    assert!(program.rule_is_trivia[trivia_idx(&program, "ws")]);
+    assert!(program.rule_is_trivia[trivia_idx(&program, "comment")]);
+    assert!(!program.rule_is_trivia[trivia_idx(&program, "start")]);
+}
+
+#[test]
+fn trivia_cascade_skips_catch_bearing_rules() {
+    // `victim` is reached from the trivia subgraph but has a catch
+    // in its body. The cascade pins it out so the catch's frame stays
+    // visible in `pegdb explain-recoveries`.
+    let program = parse(
+        "start  <- trivia 'x'\n\
+         trivia <- (victim / ' ')*\n\
+         victim <- 'a' ^bad 'b'",
+    )
+    .expect("parse")
+    .compile()
+    .expect("compile");
+    assert!(program.rule_is_trivia[trivia_idx(&program, "trivia")]);
+    assert!(
+        !program.rule_is_trivia[trivia_idx(&program, "victim")],
+        "rules containing a catch must not cascade to trivia"
+    );
+}
+
+#[test]
+fn trivia_cascade_handles_recursion() {
+    // Trivia subgraph with a self-cycle; fixpoint should terminate
+    // and mark every reachable rule.
+    let program = parse(
+        "start  <- trivia 'x'\n\
+         trivia <- ws\n\
+         ws     <- (ws / ' ')*",
+    )
+    .expect("parse")
+    .compile()
+    .expect("compile");
+    assert!(program.rule_is_trivia[trivia_idx(&program, "trivia")]);
+    assert!(program.rule_is_trivia[trivia_idx(&program, "ws")]);
+}
+
 #[test]
 fn all_shipped_grammars_compile_clean() {
     // Load-bearing: every grammar in `grammars/*.peg` must compile
