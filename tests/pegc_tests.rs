@@ -49,16 +49,16 @@ fn stats_json_grammar_emits_expected_record() {
         json_field_str(line, "path"),
         Some(format!("\"{json_path}\"").as_str())
     );
-    assert_eq!(
-        json_field_str(line, "instructions"),
-        Some("205"),
-        "JSON instruction count drifted"
-    );
-    assert_eq!(
-        json_field_str(line, "rules"),
-        Some("12"),
-        "JSON rule count drifted"
-    );
+    let instructions: usize = json_field_str(line, "instructions")
+        .expect("instructions present")
+        .parse()
+        .expect("instructions parses as integer");
+    assert!(instructions > 0, "expected non-zero instructions");
+    let rules: usize = json_field_str(line, "rules")
+        .expect("rules present")
+        .parse()
+        .expect("rules parses as integer");
+    assert!(rules > 0, "expected non-zero rules");
     let count: usize = json_field_str(line, "capture_kinds_count")
         .expect("capture_kinds_count present")
         .parse()
@@ -82,6 +82,24 @@ fn stats_json_grammar_emits_expected_record() {
         );
     }
     assert!(lines.next().is_none(), "stats should emit one record");
+}
+
+// `tests/fixtures/stats_canary.peg` is a deliberately tiny grammar
+// (`r <- 'a' / @keyword{'b'}`) whose only purpose is pinning `stats`'s
+// scalar output. The numbers shift only if pegc's bytecode lowering
+// for literals / alternation / capture wrapping changes — a real
+// signal worth catching. Shipped-grammar drift belongs elsewhere.
+#[test]
+fn stats_emits_correct_counts_for_canary_grammar() {
+    let path = "tests/fixtures/stats_canary.peg";
+    assert!(Path::new(path).exists(), "fixture missing: {path}");
+    let (code, stdout, stderr) = run(&["stats", path]);
+    assert_eq!(code, 0, "stderr was: {stderr}");
+    let line = stdout.lines().next().expect("at least one line");
+    assert_eq!(json_field_str(line, "instructions"), Some("11"));
+    assert_eq!(json_field_str(line, "rules"), Some("1"));
+    assert_eq!(json_field_str(line, "capture_kinds_count"), Some("1"));
+    assert_eq!(json_field_str(line, "capture_kinds"), Some("[\"keyword\"]"));
 }
 
 #[test]
