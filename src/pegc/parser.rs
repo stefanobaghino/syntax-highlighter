@@ -407,6 +407,24 @@ impl<'a> Parser<'a> {
             Some(b'"') | Some(b'\'') => self.parse_string(),
             Some(b'[') => self.parse_charclass(),
             Some(b'.') => {
+                // Three-byte lookahead disambiguates the dot family:
+                //   `..=` — skip-until inclusive (consumes the stop)
+                //   `..`  — skip-until exclusive (leaves the stop)
+                //   `.`   — AnyChar (single byte)
+                // The two dots must be immediately adjacent; the `=` of
+                // `..=` must also touch. Whitespace between the dots
+                // would parse as two separate `AnyChar` atoms.
+                if self.peek_at(1) == Some(b'.') {
+                    let inclusive = self.peek_at(2) == Some(b'=');
+                    self.pos += if inclusive { 3 } else { 2 };
+                    self.skip_ws();
+                    let stop = self.parse_prefix()?;
+                    return Ok(if inclusive {
+                        lower_until_inclusive(stop)
+                    } else {
+                        lower_until_exclusive(stop)
+                    });
+                }
                 self.pos += 1;
                 Ok(Pattern::AnyChar)
             }
@@ -645,6 +663,22 @@ fn is_ident_cont(c: u8) -> bool {
 
 fn is_atom_start(c: u8) -> bool {
     matches!(c, b'(' | b'"' | b'\'' | b'[' | b'.' | b'@' | b'!' | b'&') || is_ident_start(c)
+}
+
+/// Lower `.. S` (skip-until exclusive) to `(!S .)*`. The stop pattern
+/// is a negative lookahead; `S` is not consumed.
+fn lower_until_exclusive(stop: Pattern) -> Pattern {
+    Pattern::Repeat(Box::new(Pattern::Sequence(vec![
+        Pattern::NotPredicate(Box::new(stop)),
+        Pattern::AnyChar,
+    ])))
+}
+
+/// Lower `..= S` (skip-until inclusive) to `(!S .)* S`. The stop is
+/// matched and consumed after the skip; its capture kind (if any) is
+/// preserved on the trailing consume.
+fn lower_until_inclusive(stop: Pattern) -> Pattern {
+    Pattern::Sequence(vec![lower_until_exclusive(stop.clone()), stop])
 }
 
 /// Lower `INNER ^^lbl B` to the explicit boundary-anchored catch

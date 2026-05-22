@@ -211,6 +211,40 @@ region. Pick `*^` when "skip what you can't parse" is the right
 default and sync sets when you want recovery anchored to a specific
 delimiter.
 
+### `.. S` and `..= S` — skip until delimiter
+
+The "repeat-until-delimiter" idiom `(!S .)*` recurs across comment
+bodies, multiline strings, attribute payloads, and recovery scopes.
+The two shorthands name the consume-or-not distinction directly:
+
+| Syntax | Meaning | Lowers to |
+|---|---|---|
+| `.. S` | Skip bytes up to (but not including) `S`. The stop is a negative lookahead; `S` is left for the outer rule. | `(!S .)*` |
+| `..= S` | Skip bytes up to and including `S`. The stop is matched and consumed after the skip; its capture kind (if any) is preserved on the trailing consume. | `(!S .)* S` |
+
+The `..=` convention mirrors Rust's inclusive-range operator. Read
+`..` as "up to" and `..=` as "up to and inclusive".
+
+Two worked examples:
+
+```peg
+# Non-consuming: the newline is left for outer whitespace handling.
+line_comment <- '//' .. '\n'
+
+# Consuming: the closing `*/` is part of the comment.
+block_comment <- '/*' ..= '*/'
+```
+
+Both operators are unary today — the LHS of the skip is always `.`
+(any byte). Every site in the shipped corpus follows this shape; a
+binary `p .. S` / `p ..= S` could be added later if structured
+non-`.` bodies surface in a future grammar.
+
+The two dots must be immediately adjacent, and the `=` of `..=`
+must also touch (`. .` and `.. =` parse as separate atoms,
+preserving today's behavior). Whitespace around the operator and
+between the operator and the stop pattern is allowed.
+
 ### `inner ^label recovery` — labeled catch with recovery
 
 Tries `inner`; on failure, splices the failed attempt's deepest-reach

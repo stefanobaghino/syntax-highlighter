@@ -958,3 +958,142 @@ fn duplicate_rule_errors() {
     let err = parse_src("a <- 'x'\na <- 'y'").unwrap_err();
     assert!(err.message.contains("twice"), "got: {}", err.message);
 }
+
+/// Builds the desugared AST that `.. S` lowers to:
+/// `Repeat(Seq(NotPredicate(S), AnyChar))`. Mirrors
+/// `lower_until_exclusive` in `src/pegc/parser.rs`.
+fn desugared_until_exclusive(stop: Pattern) -> Pattern {
+    Pattern::Repeat(Box::new(Pattern::Sequence(vec![
+        Pattern::NotPredicate(Box::new(stop)),
+        Pattern::AnyChar,
+    ])))
+}
+
+/// Builds the desugared AST that `..= S` lowers to:
+/// `Seq(.. S, S)`. Mirrors `lower_until_inclusive` in
+/// `src/pegc/parser.rs`.
+fn desugared_until_inclusive(stop: Pattern) -> Pattern {
+    Pattern::Sequence(vec![desugared_until_exclusive(stop.clone()), stop])
+}
+
+#[test]
+fn skip_until_exclusive_lowers_to_repeat() {
+    let g = parse("r <- .. 'b'");
+    assert_eq!(
+        g.rules["r"],
+        desugared_until_exclusive(Pattern::literal("b"))
+    );
+}
+
+#[test]
+fn skip_until_inclusive_lowers_with_trailing_consume() {
+    let g = parse("r <- ..= 'b'");
+    assert_eq!(
+        g.rules["r"],
+        desugared_until_inclusive(Pattern::literal("b"))
+    );
+}
+
+#[test]
+fn skip_until_inclusive_vs_exclusive_distinction() {
+    // Same stop pattern; ASTs differ exactly in the trailing consume.
+    let excl = parse("r <- .. 'b'").rules["r"].clone();
+    let incl = parse("r <- ..= 'b'").rules["r"].clone();
+    assert_eq!(incl, Pattern::Sequence(vec![excl, Pattern::literal("b")]));
+}
+
+#[test]
+fn skip_until_inside_sequence() {
+    let g = parse("r <- 'x' .. 'b' 'y'");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Sequence(vec![
+            Pattern::literal("x"),
+            desugared_until_exclusive(Pattern::literal("b")),
+            Pattern::literal("y"),
+        ])
+    );
+}
+
+#[test]
+fn skip_until_requires_adjacent_dots() {
+    // `. . 'b'` (space between dots) is three atoms, not `..`.
+    let g = parse("r <- . . 'b'");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Sequence(vec![
+            Pattern::AnyChar,
+            Pattern::AnyChar,
+            Pattern::literal("b"),
+        ])
+    );
+}
+
+#[test]
+fn skip_until_inclusive_requires_adjacent_equals() {
+    // `.. = 'b'` (space between `..` and `=`) is `..` whose stop is
+    // `=`, then `'b'` as a trailing atom. Since `=` isn't a valid
+    // atom-starter, the parse should fail at `=`.
+    let err = parse_src("r <- .. = 'b'").unwrap_err();
+    assert!(
+        err.message.contains("unexpected") || err.message.contains("expected"),
+        "expected parse error on `=`, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn skip_until_whitespace_after_operator_ok() {
+    let a = parse("r <- ..'b'").rules["r"].clone();
+    let b = parse("r <- ..  'b'").rules["r"].clone();
+    assert_eq!(a, b);
+    let c = parse("r <- ..='b'").rules["r"].clone();
+    let d = parse("r <- ..=  'b'").rules["r"].clone();
+    assert_eq!(c, d);
+}
+
+#[test]
+fn skip_until_with_charclass_stop() {
+    let g = parse("r <- .. [;]");
+    let stop = Pattern::CharClass({
+        let mut s = CharSet::empty();
+        s.add(b';');
+        s
+    });
+    assert_eq!(g.rules["r"], desugared_until_exclusive(stop));
+}
+
+#[test]
+fn skip_until_inclusive_with_grouped_stop() {
+    // Mirrors the sqlite `bracket_id` shape: stop is an OrderedChoice.
+    let g = parse("r <- ..= (']' / 'x')");
+    let stop = Pattern::OrderedChoice(vec![Pattern::literal("]"), Pattern::literal("x")]);
+    assert_eq!(g.rules["r"], desugared_until_inclusive(stop));
+}
+
+#[test]
+fn skip_until_requires_right_operand() {
+    let err = parse_src("r <- ..").unwrap_err();
+    assert!(
+        err.message.contains("unexpected") || err.message.contains("expected"),
+        "expected parse error at end of `..`, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn skip_until_inclusive_with_capture_stop() {
+    // The stop pattern's capture survives lowering: the trailing
+    // consume in `..= S` retains the same capture kind so themes
+    // render the consumed delimiter consistently.
+    let g = parse("r <- ..= @punctuation{'}'}");
+    let stop = Pattern::Capture("punctuation".into(), Box::new(Pattern::literal("}")));
+    assert_eq!(g.rules["r"], desugared_until_inclusive(stop));
+}
+
+#[test]
+fn skip_until_with_capture_stop_exclusive() {
+    let g = parse("r <- .. @comment{'#'}");
+    let stop = Pattern::Capture("comment".into(), Box::new(Pattern::literal("#")));
+    assert_eq!(g.rules["r"], desugared_until_exclusive(stop));
+}
