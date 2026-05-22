@@ -1079,7 +1079,7 @@ fn end_to_end_recover_repeat_with_label_intern() {
     // `*^:bad_doc` interns the author-supplied label in
     // `Program::label_kinds`; the runtime behavior is otherwise
     // identical to the unlabeled form (one recovery capture per
-    // skipped byte, clean exit at EOF). pegdb explain-recoveries
+    // skipped byte, clean exit at EOF). pegdb recoveries explain
     // clusters by this label.
     let g = parse("doc <- @kw{\"foo\"}*^:bad_doc");
     let prog = g.compile().unwrap();

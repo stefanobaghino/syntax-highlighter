@@ -421,7 +421,7 @@ fn recover_repeat_drops_unclosed_capture_from_failed_inner_attempt() {
     //
     // Pre-fix, `RecoverToScopedMax` manufactured a close at
     // `scoped_max_sp`, leaking a phantom `@kw(0,2)="ab"` — the SQLite
-    // dump-captures "stutter" (e.g. `keyword(56,59)="rep"` from
+    // captures-dump "stutter" (e.g. `keyword(56,59)="rep"` from
     // `replace_body` matching half of `repository`). The fix drops
     // every entry whose `end.is_none()` during the splice: a still-
     // open capture at the watermark belongs to a production that
@@ -667,7 +667,7 @@ fn label_intern_shared_with_recover_repeat_recovery_kind() {
     // `*^` desugars to a `Catch` labeled with its `recovery_kind`,
     // so a hand-written catch using the same string lands on the
     // same `LabelId`. Confirms the intern is by name, not by
-    // emission site — useful so `pegdb explain-recoveries` can
+    // emission site — useful so `pegdb recoveries explain` can
     // cluster `*^` recoveries and matching `^lbl` catches under one
     // bucket when the author chose identical names.
     let p = Pattern::seq(vec![
@@ -916,7 +916,7 @@ fn recover_repeat_emits_choice_commit_skeleton() {
 fn recover_repeat_labeled_interns_author_label() {
     // `*^:bad_thing` interns the author-supplied label while leaving
     // the capture kind at its hardcoded `"recovery"` — the catch
-    // scope is renamed (so pegdb explain-recoveries clusters under
+    // scope is renamed (so pegdb recoveries explain clusters under
     // "bad_thing"), but theme styling is unaffected.
     let prog = syntax_highlighter::pegc::compile("r <- 'a'*^:bad_thing").unwrap();
     assert_eq!(prog.capture_kinds, vec!["recovery".to_string()]);
@@ -1938,7 +1938,7 @@ fn trivia_cascades_to_transitive_callees() {
 fn trivia_cascade_skips_catch_bearing_rules() {
     // `victim` is reached from the trivia subgraph but has a catch
     // in its body. The cascade pins it out so the catch's frame stays
-    // visible in `pegdb explain-recoveries`.
+    // visible in `pegdb recoveries explain`.
     let program = parse(
         "start  <- trivia 'x'\n\
          trivia <- (victim / ' ')*\n\

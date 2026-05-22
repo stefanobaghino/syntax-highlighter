@@ -14,7 +14,7 @@ Three `[[bin]]` targets, with different audiences:
 
 - `demo` (`src/bin/demo/`) — quickstart demo CLI. Reads input, emits ANSI-coloured output. The Highlighter wrapper, theme constants, and demo-specific tests all live alongside `main.rs` in this directory; ANSI presentation is a demo-only concern. Tiny by design.
 - `pegc` (`src/bin/pegc.rs`) — compile-time grammar inspection: `stats`. Operates on a grammar source; input-independent. See [`TOOLS.md`](TOOLS.md).
-- `pegdb` (`src/bin/pegdb.rs`) — debug-time grammar inspection: `dump-captures`. Operates on a parse trace. JSONL output. See [`TOOLS.md`](TOOLS.md).
+- `pegdb` (`src/bin/pegdb.rs`) — debug-time grammar inspection: `captures dump`, `recoveries dump`, `recoveries explain`. Operates on a parse trace. JSONL output for the `dump` verbs. See [`TOOLS.md`](TOOLS.md).
 
 The module boundaries are load-bearing:
 

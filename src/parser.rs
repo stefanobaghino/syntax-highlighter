@@ -186,7 +186,7 @@ impl Parser {
     }
 
     /// Per-rule trivia flags indexed by `MemoId.0` — see
-    /// [`crate::pegvm::Program::rule_is_trivia`]. `pegdb explain-recoveries`
+    /// [`crate::pegvm::Program::rule_is_trivia`]. `pegdb recoveries explain`
     /// uses this to drop trailing trivia frames from the rule_stack
     /// when picking the displayed leaf of a recovery cluster.
     pub fn rule_is_trivia(&self) -> &[bool] {

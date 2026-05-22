@@ -50,7 +50,7 @@ pub struct MemoId(pub u32);
 /// `Compiler::intern_label` and threaded through each
 /// `RecoverScopeBegin` instruction. The label is a diagnostic tag
 /// only: it flows into `RecoveryDiagnostic.label` so `pegdb
-/// explain-recoveries` clusters firings by it. The name resolves via
+/// recoveries explain` clusters firings by it. The name resolves via
 /// [`crate::pegvm::Program::label_kinds`]. Distinct namespace from
 /// `CaptureKind` so a label and a capture kind with the same name
 /// don't collide.
@@ -261,7 +261,7 @@ pub enum Instruction {
     /// The `LabelId` tags the scope with the catch's diagnostic label.
     /// `*^` / `*^[cs]` desugar to a catch labeled `"recovery"`, so every
     /// `RecoveryDiagnostic` carries a name. Used by `pegdb
-    /// explain-recoveries` to cluster recoveries by label alongside
+    /// recoveries explain` to cluster recoveries by label alongside
     /// rule stack.
     RecoverScopeBegin(LabelId),
     /// Materialize the topmost `RecoverScope`'s deepest-progress
