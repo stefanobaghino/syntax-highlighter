@@ -51,7 +51,7 @@ fn stats_json_grammar_emits_expected_record() {
     );
     assert_eq!(
         json_field_str(line, "instructions"),
-        Some("205"),
+        Some("187"),
         "JSON instruction count drifted"
     );
     assert_eq!(

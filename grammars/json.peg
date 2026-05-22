@@ -1,8 +1,8 @@
 # JSON grammar with highlight annotations.
 
-*trivia     <- \s*
+trivia      <- \s*
 
-root        <- \s* value \s*
+root        <- value
 
 value       <- @string{string}
              / @number{number}
@@ -12,22 +12,22 @@ value       <- @string{string}
              / @constant{'false'}
              / @constant{'null'}
 
-object      <- @punctuation{'{'} \s*
-               (pair (\s* @punctuation{','} \s* pair)*)?
-               \s* @punctuation{'}'}
+object      <- @punctuation{'{'}
+               (pair (@punctuation{','} pair)*)?
+               @punctuation{'}'}
 
-pair        <- @property{string} \s* @punctuation{':'} \s* value
+pair        <- @property{string} @punctuation{':'} value
 
-array       <- @punctuation{'['} \s*
-               (value (\s* @punctuation{','} \s* value)*)?
-               \s* @punctuation{']'}
+array       <- @punctuation{'['}
+               (value (@punctuation{','} value)*)?
+               @punctuation{']'}
 
-string      <- '"' string_char* '"'
-string_char <- '\\' ["\\/bfnrt]
-             / '\\' 'u' [\da-fA-F]{4}
-             / [^"\\]
+*string      <- '"' string_char* '"'
+*string_char <- '\\' ["\\/bfnrt]
+              / '\\' 'u' [\da-fA-F]{4}
+              / [^"\\]
 
-number      <- '-'? int frac? exp?
-int         <- '0' / [1-9] \d*
-frac        <- '.' \d+
-exp         <- [eE] [+\-]? \d+
+*number      <- '-'? int frac? exp?
+*int         <- '0' / [1-9] \d*
+*frac        <- '.' \d+
+*exp         <- [eE] [+\-]? \d+
