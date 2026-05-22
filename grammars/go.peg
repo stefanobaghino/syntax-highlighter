@@ -127,7 +127,7 @@ type_arg_list <- type_expr (ws @punctuation{','} ws type_expr)* (ws @punctuation
 
 # --- Statements ------------------------------------------------------
 
-block         <- @punctuation{'{'} ws ((stmt ws)* @punctuation{'}'} ^block_close @recovery{(!'}' .)*} @punctuation{'}'})
+block         <- @punctuation{'{'} ws ((stmt ws)* @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
 
 stmt          <- decl ws opt_semi
                / block
@@ -332,7 +332,7 @@ nil_lit       <- 'nil' !ident_body
 iota_lit      <- 'iota' !ident_body
 
 string_lit    <- @string{raw_string / interp_string}
-raw_string    <- '`' (!'`' .)* '`'
+raw_string    <- '`' ..= '`'
 interp_string <- '"' (str_escape / !'"' !'\n' .)* '"'
 str_escape    <- '\\' .
 
@@ -391,8 +391,8 @@ predeclared_fn <- ('append' / 'cap' / 'close' / 'complex' / 'copy'
 ~opt_semi     <- (@punctuation{';'} ws)?
 
 comment       <- @comment{line_comment / block_comment}
-line_comment  <- '//' (!'\n' .)*
-block_comment <- '/*' (!'*/' .)* '*/'
+line_comment  <- '//' .. '\n'
+block_comment <- '/*' ..= '*/'
 
 trivia        <- ws
 

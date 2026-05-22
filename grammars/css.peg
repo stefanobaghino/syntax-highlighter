@@ -77,13 +77,13 @@ class_selector <- '.' ident
 id_selector    <- '#' ident
 pseudo_element <- '::' ident pseudo_args?
 pseudo_class   <- ':' ident pseudo_args?
-pseudo_args    <- '(' (!')' .)* ')'
+pseudo_args    <- '(' ..= ')'
 attr_selector  <- @punctuation{'['} ws attr_body ws @punctuation{']'}
-attr_body      <- (!']' .)*
+attr_body      <- .. ']'
 
 # --- Blocks & declarations ------------------------------------------
 
-block         <- @punctuation{'{'} ws (block_body ws @punctuation{'}'} ^block_close @recovery{(!'}' .)*} @punctuation{'}'})
+block         <- @punctuation{'{'} ws (block_body ws @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
 block_body    <- (block_item ws)*
 block_item    <- at_rule
                 / declaration
@@ -120,7 +120,7 @@ fn_arg        <- value_term
 
 # Unquoted `url(...)` arg — bare text till the closing paren.
 url_unquoted  <- @function{'url'} @punctuation{'('} ws @string{url_body} ws @punctuation{')'}
-url_body      <- (!')' .)*
+url_body      <- .. ')'
 
 # --- Literals -------------------------------------------------------
 
@@ -157,7 +157,7 @@ ident_body    <- [A-Za-z0-9_\-]
 # CSS has only block comments.
 
 comment       <- @comment{block_comment}
-block_comment <- '/*' (!'*/' .)* '*/'
+block_comment <- '/*' ..= '*/'
 
 trivia        <- ws
 

@@ -143,7 +143,7 @@ designator    <- ws @punctuation{'['} ws expr_cond ws @punctuation{']'}
 
 # --- Statements ------------------------------------------------------
 
-compound_stmt <- @punctuation{'{'} ws ((block_item ws)* @punctuation{'}'} ^block_close @recovery{(!'}' .)*} @punctuation{'}'})
+compound_stmt <- @punctuation{'{'} ws ((block_item ws)* @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
 block_item    <- pp_line
                / decl
                / stmt
@@ -315,8 +315,8 @@ reserved_word <- 'auto' / 'break' / 'case' / 'char' / 'const' / 'continue'
 # --- Whitespace / comments ------------------------------------------
 
 comment       <- @comment{line_comment / block_comment}
-line_comment  <- '//' (!'\n' .)*
-block_comment <- '/*' (!'*/' .)* '*/'
+line_comment  <- '//' .. '\n'
+block_comment <- '/*' ..= '*/'
 
 trivia        <- ws
 
