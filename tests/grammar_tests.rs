@@ -1145,9 +1145,10 @@ fn end_to_end_inferred_catch_matches_explicit_behavior() {
     let inferred = parse("root <- list\nlist <- aliased (',' aliased)*\naliased <- 'x' ^^bad")
         .compile()
         .unwrap();
-    let explicit = parse("root <- list\nlist <- aliased (',' aliased)*\naliased <- 'x' ^^bad (',' / !.)")
-        .compile()
-        .unwrap();
+    let explicit =
+        parse("root <- list\nlist <- aliased (',' aliased)*\naliased <- 'x' ^^bad (',' / !.)")
+            .compile()
+            .unwrap();
     for input in [&b"x,x"[..], b"xy,x", b"x"].iter() {
         let r_inferred = VM::new(&inferred.code, input).run();
         let r_explicit = VM::new(&explicit.code, input).run();

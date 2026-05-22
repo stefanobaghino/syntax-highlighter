@@ -1788,9 +1788,7 @@ fn compile_errors_on_partial_match_leniency() {
     match err {
         syntax_highlighter::pegc::CompileError::PartialMatchLeniency(findings) => {
             assert!(
-                findings
-                    .iter()
-                    .any(|f| f.rule == "r" && f.caller == "root"),
+                findings.iter().any(|f| f.rule == "r" && f.caller == "root"),
                 "expected r → start finding, got: {findings:?}"
             );
         }

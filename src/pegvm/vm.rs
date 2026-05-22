@@ -1627,9 +1627,7 @@ mod examined_max_tests {
         // 1 byte unconsumed, so the overall parse fails. The memo
         // entries it built before failing are still observable.
         assert!(!result.complete, "trailing 'y' leaves bytes after !.");
-        let root = memo
-            .get(&(MemoId(0), 0))
-            .expect("root's entry missing");
+        let root = memo.get(&(MemoId(0), 0)).expect("root's entry missing");
         assert_eq!(root.end_sp, None);
         assert_eq!(
             root.examined_max, 2,

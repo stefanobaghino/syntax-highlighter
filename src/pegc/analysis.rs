@@ -1495,8 +1495,7 @@ fn body_contains_catch(pat: &Pattern) -> bool {
 /// they no-op (no inter-Sequence splicing, no `trivia?` siblings in the
 /// root wrap).
 fn auto_insertion_active(grammar: &Grammar) -> bool {
-    grammar.rules.contains_key(TRIVIA_ROOT_RULE)
-        && !grammar.atomic_rules.contains(TRIVIA_ROOT_RULE)
+    grammar.rules.contains_key(TRIVIA_ROOT_RULE) && !grammar.atomic_rules.contains(TRIVIA_ROOT_RULE)
 }
 
 /// AST-level rewrite: in every non-atomic rule's body, splice a
@@ -1581,7 +1580,7 @@ fn inject_trivia_in(pat: &mut Pattern) {
                 }
                 other => Pattern::seq(vec![trivia_call(), other]),
             };
-            *inner = Box::new(wrapped);
+            **inner = wrapped;
         }
         Pattern::Optional { inner, .. }
         | Pattern::NotPredicate { inner, .. }
