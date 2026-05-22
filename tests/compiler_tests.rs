@@ -1971,6 +1971,38 @@ fn trivia_cascade_handles_recursion() {
 }
 
 #[test]
+fn backslash_cap_r_matches_crlf_atomically() {
+    // `\R` lowers to `'\r\n' / '\n' / '\r'` — CRLF is matched as one
+    // two-byte unit, not two separate line breaks.
+    let g = parse("r <- \\R").expect("parse");
+    let prog = g.compile().expect("compile");
+    let r = VM::new(&prog.code, b"\r\n").run();
+    assert!(r.complete, "\\R should match CRLF");
+    assert_eq!(r.matched, 2, "\\R should consume both CR and LF atomically");
+
+    let r = VM::new(&prog.code, b"\n").run();
+    assert!(r.complete, "\\R should match bare LF");
+    assert_eq!(r.matched, 1);
+
+    let r = VM::new(&prog.code, b"\r").run();
+    assert!(r.complete, "\\R should match bare CR");
+    assert_eq!(r.matched, 1);
+}
+
+#[test]
+fn backslash_z_matches_eof() {
+    // `\z` lowers to `!.` — succeeds at end of input, fails otherwise.
+    let g = parse("r <- \\z").expect("parse");
+    let prog = g.compile().expect("compile");
+    let r = VM::new(&prog.code, b"").run();
+    assert!(r.complete, "\\z should match empty input");
+    assert_eq!(r.matched, 0);
+
+    let r = VM::new(&prog.code, b"x").run();
+    assert!(!r.complete, "\\z should fail when bytes remain");
+}
+
+#[test]
 fn all_shipped_grammars_compile_clean() {
     // Load-bearing: every grammar in `grammars/*.peg` must compile
     // cleanly via `pegc::compile`. Re-introducing partial-match
