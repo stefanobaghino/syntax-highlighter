@@ -54,10 +54,10 @@
 
 # --- Top level --------------------------------------------------------
 
-*trivia    <- (comment / \s)*
+trivia    <- (comment / \s)*
 
-root       <- (trivia statement stmt_sep?)*^[;] trivia
-stmt_sep   <- trivia @punctuation{';'} trivia
+root       <- (statement stmt_sep?)*^[;]
+stmt_sep   <- @punctuation{';'}
 statement       <- explain_stmt / statement_body
 statement_body  <- select_stmt
                  / insert_stmt
@@ -90,58 +90,58 @@ statement_body  <- select_stmt
 # Trailing `limit_clause?` absorbed by `sql_file`'s top-level `*^[;]`.
 ~select_stmt   <- with_clause? select_core compound_tail* order_clause? limit_clause?
 
-with_clause    <- kw_with (trivia kw_recursive)? trivia cte_defn (trivia @punctuation{','} trivia cte_defn)* trivia
+with_clause    <- kw_with (kw_recursive)? cte_defn (@punctuation{','} cte_defn)*
 cte_defn       <- @type{bare_ident}
-                  (trivia @punctuation{'('} trivia ident_list trivia @punctuation{')'})?
-                  trivia kw_as trivia @punctuation{'('} trivia select_stmt trivia @punctuation{')'}
+                  (@punctuation{'('} ident_list @punctuation{')'})?
+                  kw_as @punctuation{'('} select_stmt @punctuation{')'}
 
 # Trailing `(window_clause)?` absorbed by `*^[;]`.
-~select_core   <- kw_select (trivia (kw_distinct / kw_all))? trivia result_list
-                  (trivia from_clause)? (trivia where_clause)? (trivia group_clause)? (trivia having_clause)?
-                  (trivia window_clause)?
+~select_core   <- kw_select ((kw_distinct / kw_all))? result_list
+                  (from_clause)? (where_clause)? (group_clause)? (having_clause)?
+                  (window_clause)?
 
-result_list    <- result_column (trivia @punctuation{','} trivia result_column)*
+result_list    <- result_column (@punctuation{','} result_column)*
 # A column expression that didn't reach a known boundary is treated
-# as malformed. The `^^bad_column (trivia result_column_boundary)`
+# as malformed. The `^^bad_column (result_column_boundary)`
 # operator anchors the inner branch on the boundary (so e.g.
 # `blob.rid IN leaf` fails because `IN` isn't in the boundary set)
-# and synthesizes the recovery body `(!(trivia result_column_boundary) .)*`
+# and synthesizes the recovery body `(!(result_column_boundary) .)*`
 # from the same argument.
 result_column  <- (table_star / @operator{'*'} / aliased_expr)
-                  ^^bad_column (trivia result_column_boundary)
+                  ^^bad_column (result_column_boundary)
 result_column_boundary <- @punctuation{','} / @punctuation{')'} / @punctuation{';'}
                         / kw_from / kw_where / kw_group / kw_having
                         / kw_order / kw_limit / kw_offset / kw_window
                         / kw_union / kw_intersect / kw_except
                         / !.
 table_star     <- @type{bare_ident_nonkw} @punctuation{'.'} @operator{'*'}
-aliased_expr   <- expr (trivia kw_as trivia @variable{bare_ident_nonkw}
-                      / trivia @variable{bare_ident_nonkw})?
+aliased_expr   <- expr (kw_as @variable{bare_ident_nonkw}
+                      / @variable{bare_ident_nonkw})?
 
-compound_tail  <- trivia (kw_union (trivia kw_all)? / kw_intersect / kw_except) trivia select_core
+compound_tail  <- (kw_union (kw_all)? / kw_intersect / kw_except) select_core
 
-from_clause    <- kw_from trivia table_or_subquery (trivia join_clause)*
-table_or_subquery <- @punctuation{'('} trivia select_stmt trivia @punctuation{')'} (trivia table_alias)?
-                   / qualified_table_name (trivia table_alias)?
+from_clause    <- kw_from table_or_subquery (join_clause)*
+table_or_subquery <- @punctuation{'('} select_stmt @punctuation{')'} (table_alias)?
+                   / qualified_table_name (table_alias)?
 # Trailing `(.ident)?` leniency absorbed by `sql_file`'s `*^[;]`.
 ~qualified_table_name <- @type{bare_ident_nonkw} (@punctuation{'.'} @type{bare_ident_nonkw})?
-table_alias    <- kw_as trivia @variable{bare_ident_nonkw}
+table_alias    <- kw_as @variable{bare_ident_nonkw}
                 / @variable{bare_ident_nonkw}
 
 # Trailing `(join_constraint)?` absorbed by `*^[;]`.
-~join_clause   <- join_op trivia table_or_subquery (trivia join_constraint)?
+~join_clause   <- join_op table_or_subquery (join_constraint)?
 join_op        <- @punctuation{','}
-                / kw_natural (trivia join_type)? trivia kw_join
-                / join_type trivia kw_join
+                / kw_natural (join_type)? kw_join
+                / join_type kw_join
                 / kw_join
-join_type      <- kw_left (trivia kw_outer)?
-                / kw_right (trivia kw_outer)?
-                / kw_full (trivia kw_outer)?
+join_type      <- kw_left (kw_outer)?
+                / kw_right (kw_outer)?
+                / kw_full (kw_outer)?
                 / kw_inner
                 / kw_cross
-join_constraint<- kw_on trivia expr
-                / kw_using trivia @punctuation{'('} trivia ident_list trivia @punctuation{')'}
-ident_list     <- @variable{bare_ident_nonkw} (trivia @punctuation{','} trivia @variable{bare_ident_nonkw})*
+join_constraint<- kw_on expr
+                / kw_using @punctuation{'('} ident_list @punctuation{')'}
+ident_list     <- @variable{bare_ident_nonkw} (@punctuation{','} @variable{bare_ident_nonkw})*
 
 # Like `result_column`, `where_clause` uses `^^bad_where` to turn
 # partial-parse leftovers (e.g. `WHERE x NOT IN phantom ORDER BY …`
@@ -149,22 +149,22 @@ ident_list     <- @variable{bare_ident_nonkw} (trivia @punctuation{','} trivia @
 # The operator sits *inside* the `kw_where` match so a missing WHERE
 # keyword still fails the rule cleanly (no spurious empty recovery
 # captures on clean SELECTs).
-where_clause   <- kw_where trivia (expr ^^bad_where (trivia where_clause_boundary))
+where_clause   <- kw_where (expr ^^bad_where (where_clause_boundary))
 where_clause_boundary <- @punctuation{')'} / @punctuation{';'}
                        / kw_group / kw_having / kw_order / kw_limit
                        / kw_offset / kw_window / kw_returning
                        / kw_union / kw_intersect / kw_except
                        / !.
-group_clause   <- kw_group trivia kw_by trivia expr (trivia @punctuation{','} trivia expr)*
-having_clause  <- kw_having trivia expr
+group_clause   <- kw_group kw_by expr (@punctuation{','} expr)*
+having_clause  <- kw_having expr
 
-order_clause   <- trivia kw_order trivia kw_by trivia order_item (trivia @punctuation{','} trivia order_item)*
+order_clause   <- kw_order kw_by order_item (@punctuation{','} order_item)*
 # Trailing `(asc/desc)?` absorbed by `*^[;]`.
-~order_item    <- expr (trivia (kw_asc / kw_desc))?
+~order_item    <- expr ((kw_asc / kw_desc))?
 
 # Trailing `(offset)?` absorbed by `*^[;]`.
-~limit_clause  <- trivia kw_limit trivia expr (trivia kw_offset trivia expr
-                                      / trivia @punctuation{','} trivia expr)?
+~limit_clause  <- kw_limit expr (kw_offset expr
+                                      / @punctuation{','} expr)?
 
 # --- Window functions & WINDOW clause --------------------------------
 # Not counted as reserved keywords in SQLite aside from WINDOW and
@@ -173,33 +173,33 @@ order_clause   <- trivia kw_order trivia kw_by trivia order_item (trivia @punctu
 # are matched positionally here, so existing SELECTs that use any of
 # those as identifiers keep working.
 
-window_clause  <- kw_window trivia named_window (trivia @punctuation{','} trivia named_window)*
-named_window   <- @variable{bare_ident_nonkw} trivia kw_as trivia window_defn
+window_clause  <- kw_window named_window (@punctuation{','} named_window)*
+named_window   <- @variable{bare_ident_nonkw} kw_as window_defn
 
-filter_clause  <- kw_filter trivia @punctuation{'('} trivia kw_where trivia expr trivia @punctuation{')'}
+filter_clause  <- kw_filter @punctuation{'('} kw_where expr @punctuation{')'}
 
-window_defn    <- @punctuation{'('} trivia
-                      (!window_section_keyword @variable{bare_ident_nonkw} trivia)?
-                      (kw_partition trivia kw_by trivia expr (trivia @punctuation{','} trivia expr)* trivia)?
-                      (window_order_body trivia)?
-                      (frame_spec trivia)? @punctuation{')'}
+window_defn    <- @punctuation{'('}
+                      (!window_section_keyword @variable{bare_ident_nonkw})?
+                      (kw_partition kw_by expr (@punctuation{','} expr)*)?
+                      (window_order_body)?
+                      (frame_spec)? @punctuation{')'}
 # Guard the optional base-window-name slot against consuming a keyword
 # that actually starts the next positional section (PARTITION / ORDER /
 # RANGE / ROWS / GROUPS). Without the lookahead, PEG would eat
 # `PARTITION` as a bare identifier and then fail on the partition clause.
 window_section_keyword <- kw_partition / kw_order / kw_range / kw_rows / kw_groups
-window_order_body <- kw_order trivia kw_by trivia order_item (trivia @punctuation{','} trivia order_item)*
+window_order_body <- kw_order kw_by order_item (@punctuation{','} order_item)*
 window_ref     <- window_defn / @variable{bare_ident_nonkw}
 
-frame_spec     <- (kw_range / kw_rows / kw_groups) trivia
-                  (kw_between trivia frame_bound trivia kw_and trivia frame_bound
+frame_spec     <- (kw_range / kw_rows / kw_groups)
+                  (kw_between frame_bound kw_and frame_bound
                    / frame_bound)
-                  (trivia kw_exclude trivia frame_exclude)?
-frame_bound    <- kw_unbounded trivia (kw_preceding / kw_following)
-                / kw_current trivia kw_row
-                / expr trivia (kw_preceding / kw_following)
-frame_exclude  <- kw_no trivia kw_others
-                / kw_current trivia kw_row
+                  (kw_exclude frame_exclude)?
+frame_bound    <- kw_unbounded (kw_preceding / kw_following)
+                / kw_current kw_row
+                / expr (kw_preceding / kw_following)
+frame_exclude  <- kw_no kw_others
+                / kw_current kw_row
                 / kw_group
                 / kw_ties
 
@@ -208,42 +208,42 @@ frame_exclude  <- kw_no trivia kw_others
 # `update_set_list`, which is defined here.
 
 # Trailing `(returning_clause)?` absorbed by `*^[;]`.
-~insert_stmt   <- with_clause? insert_prefix trivia kw_into trivia qualified_table_name
-                  (trivia kw_as trivia @variable{bare_ident_nonkw})?
-                  (trivia @punctuation{'('} trivia ident_list trivia @punctuation{')'})?
-                  trivia insert_source
-                  (trivia upsert_clause)*
-                  (trivia returning_clause)?
+~insert_stmt   <- with_clause? insert_prefix kw_into qualified_table_name
+                  (kw_as @variable{bare_ident_nonkw})?
+                  (@punctuation{'('} ident_list @punctuation{')'})?
+                  insert_source
+                  (upsert_clause)*
+                  (returning_clause)?
 
-insert_prefix  <- kw_insert (trivia kw_or trivia conflict_action)?
+insert_prefix  <- kw_insert (kw_or conflict_action)?
                 / kw_replace
 
-insert_source  <- kw_default trivia kw_values
-                / kw_values trivia values_row (trivia @punctuation{','} trivia values_row)*
+insert_source  <- kw_default kw_values
+                / kw_values values_row (@punctuation{','} values_row)*
                 / select_stmt
-values_row     <- @punctuation{'('} trivia expr (trivia @punctuation{','} trivia expr)* trivia @punctuation{')'}
+values_row     <- @punctuation{'('} expr (@punctuation{','} expr)* @punctuation{')'}
 
 conflict_action <- kw_rollback / kw_abort / kw_fail / kw_ignore / kw_replace
 
-upsert_clause  <- kw_on trivia kw_conflict
-                  (trivia @punctuation{'('} trivia indexed_col_list trivia @punctuation{')'} (trivia where_clause)?)?
-                  trivia kw_do trivia (kw_nothing
-                             / kw_update trivia kw_set trivia update_set_list (trivia where_clause)?)
+upsert_clause  <- kw_on kw_conflict
+                  (@punctuation{'('} indexed_col_list @punctuation{')'} (where_clause)?)?
+                  kw_do (kw_nothing
+                             / kw_update kw_set update_set_list (where_clause)?)
 
-indexed_col_list <- indexed_col (trivia @punctuation{','} trivia indexed_col)*
-indexed_col      <- expr (trivia kw_collate trivia @type{bare_ident})? (trivia (kw_asc / kw_desc))?
+indexed_col_list <- indexed_col (@punctuation{','} indexed_col)*
+indexed_col      <- expr (kw_collate @type{bare_ident})? ((kw_asc / kw_desc))?
 
-update_set_list <- update_set_item (trivia @punctuation{','} trivia update_set_item)*
-update_set_item <- @variable{bare_ident_nonkw} trivia @operator{'='} trivia expr
-                 / @punctuation{'('} trivia ident_list trivia @punctuation{')'} trivia @operator{'='} trivia row_value
+update_set_list <- update_set_item (@punctuation{','} update_set_item)*
+update_set_item <- @variable{bare_ident_nonkw} @operator{'='} expr
+                 / @punctuation{'('} ident_list @punctuation{')'} @operator{'='} row_value
 # RHS of a column-tuple assignment: parens-wrapped row-value (literal
 # list or sub-select) or a single expression that yields a row.
-row_value        <- @punctuation{'('} trivia
-                    (select_stmt / expr (trivia @punctuation{','} trivia expr)*)
-                    trivia @punctuation{')'}
+row_value        <- @punctuation{'('}
+                    (select_stmt / expr (@punctuation{','} expr)*)
+                    @punctuation{')'}
                   / expr
 
-returning_clause <- kw_returning trivia result_list
+returning_clause <- kw_returning result_list
 
 # --- DML: UPDATE, DELETE ---------------------------------------------
 # UPDATE FROM and DELETE reuse `from_clause` and `where_clause` from
@@ -252,20 +252,20 @@ returning_clause <- kw_returning trivia result_list
 # should not pretend the syntax doesn't exist.
 
 # Trailing `(returning_clause)?` absorbed by `*^[;]`.
-~update_stmt <- with_clause? kw_update (trivia kw_or trivia conflict_action)? trivia
-               qualified_table_name (trivia table_alias)?
-               trivia kw_set trivia update_set_list
-               (trivia from_clause)?
-               (trivia where_clause)?
+~update_stmt <- with_clause? kw_update (kw_or conflict_action)?
+               qualified_table_name (table_alias)?
+               kw_set update_set_list
+               (from_clause)?
+               (where_clause)?
                order_clause?
                limit_clause?
-               (trivia returning_clause)?
+               (returning_clause)?
 
-~delete_stmt <- with_clause? kw_delete trivia kw_from trivia qualified_table_name (trivia table_alias)?
-               (trivia where_clause)?
+~delete_stmt <- with_clause? kw_delete kw_from qualified_table_name (table_alias)?
+               (where_clause)?
                order_clause?
                limit_clause?
-               (trivia returning_clause)?
+               (returning_clause)?
 
 # --- DDL: CREATE / DROP / ALTER TABLE --------------------------------
 # Interleaves column_def with table_constraint because SQLite does
@@ -274,133 +274,133 @@ returning_clause <- kw_returning trivia result_list
 # requires a non-keyword leading identifier, while table_constraint
 # starts with CONSTRAINT, PRIMARY, UNIQUE, CHECK, or FOREIGN.
 
-create_table_stmt <- kw_create (trivia (kw_temporary / kw_temp))? trivia kw_table
-                     (trivia kw_if trivia kw_not trivia kw_exists)?
-                     trivia qualified_table_name
-                     trivia (@punctuation{'('} trivia
+create_table_stmt <- kw_create ((kw_temporary / kw_temp))? kw_table
+                     (kw_if kw_not kw_exists)?
+                     qualified_table_name
+                     (@punctuation{'('}
                              (column_def / table_constraint)
-                             (trivia @punctuation{','} trivia (column_def / table_constraint))*
-                         trivia @punctuation{')'}
-                         (trivia table_option (trivia @punctuation{','} trivia table_option)*)?
-                       / kw_as trivia select_stmt)
+                             (@punctuation{','} (column_def / table_constraint))*
+                         @punctuation{')'}
+                         (table_option (@punctuation{','} table_option)*)?
+                       / kw_as select_stmt)
 
 # Trailing `(column_constraint)*` leniency absorbed by `*^[;]`.
 ~column_def    <- @variable{bare_ident_nonkw}
-                  (trivia type_name)?
-                  (trivia column_constraint)*
+                  (type_name)?
+                  (column_constraint)*
 
 # SQLite accepts multi-word type names like `DOUBLE PRECISION` and
 # `UNSIGNED BIG INT`. Consume consecutive non-keyword identifiers.
 # Trailing `(...)?` leniency absorbed by `*^[;]`.
-~type_name     <- @type{bare_ident_nonkw} (trivia @type{bare_ident_nonkw})*
-                  (trivia @punctuation{'('} trivia signed_number
-                       (trivia @punctuation{','} trivia signed_number)? trivia @punctuation{')'})?
+~type_name     <- @type{bare_ident_nonkw} (@type{bare_ident_nonkw})*
+                  (@punctuation{'('} signed_number
+                       (@punctuation{','} signed_number)? @punctuation{')'})?
 
-signed_number  <- (@operator{'-'} / @operator{'+'})? trivia @number{number_body}
+signed_number  <- (@operator{'-'} / @operator{'+'})? @number{number_body}
 
-column_constraint      <- (kw_constraint trivia @variable{bare_ident_nonkw} trivia)? column_constraint_body
+column_constraint      <- (kw_constraint @variable{bare_ident_nonkw})? column_constraint_body
 column_constraint_body <-
-      kw_primary trivia kw_key (trivia (kw_asc / kw_desc))? (trivia conflict_clause)? (trivia kw_autoincrement)?
-    / (kw_not trivia)? kw_null (trivia conflict_clause)?
-    / kw_unique (trivia conflict_clause)?
-    / kw_check trivia @punctuation{'('} trivia expr trivia @punctuation{')'}
-    / kw_default trivia (signed_number / literal / @punctuation{'('} trivia expr trivia @punctuation{')'})
-    / kw_collate trivia @type{bare_ident}
+      kw_primary kw_key ((kw_asc / kw_desc))? (conflict_clause)? (kw_autoincrement)?
+    / (kw_not)? kw_null (conflict_clause)?
+    / kw_unique (conflict_clause)?
+    / kw_check @punctuation{'('} expr @punctuation{')'}
+    / kw_default (signed_number / literal / @punctuation{'('} expr @punctuation{')'})
+    / kw_collate @type{bare_ident}
     / foreign_key_clause
-    / (kw_generated trivia kw_always trivia)? kw_as trivia @punctuation{'('} trivia expr trivia @punctuation{')'}
-      (trivia (kw_stored / kw_virtual))?
+    / (kw_generated kw_always)? kw_as @punctuation{'('} expr @punctuation{')'}
+      ((kw_stored / kw_virtual))?
 
-table_constraint      <- (kw_constraint trivia @variable{bare_ident_nonkw} trivia)? table_constraint_body
+table_constraint      <- (kw_constraint @variable{bare_ident_nonkw})? table_constraint_body
 table_constraint_body <-
-      (kw_primary trivia kw_key / kw_unique)
-          trivia @punctuation{'('} trivia indexed_col_list trivia @punctuation{')'}
-          (trivia conflict_clause)?
-    / kw_check trivia @punctuation{'('} trivia expr trivia @punctuation{')'}
-    / kw_foreign trivia kw_key trivia @punctuation{'('} trivia ident_list trivia @punctuation{')'}
-          trivia foreign_key_clause
+      (kw_primary kw_key / kw_unique)
+          @punctuation{'('} indexed_col_list @punctuation{')'}
+          (conflict_clause)?
+    / kw_check @punctuation{'('} expr @punctuation{')'}
+    / kw_foreign kw_key @punctuation{'('} ident_list @punctuation{')'}
+          foreign_key_clause
 
 # Trailing `(fk_deferrable)?` absorbed by `*^[;]`.
-~foreign_key_clause <- kw_references trivia @type{bare_ident_nonkw}
-                      (trivia @punctuation{'('} trivia ident_list trivia @punctuation{')'})?
-                      (trivia fk_action)*
-                      (trivia fk_deferrable)?
-fk_action      <- kw_on trivia (kw_delete / kw_update) trivia fk_action_body
-                / kw_match trivia @variable{bare_ident_nonkw}
-fk_action_body <- kw_set trivia (kw_null / kw_default)
+~foreign_key_clause <- kw_references @type{bare_ident_nonkw}
+                      (@punctuation{'('} ident_list @punctuation{')'})?
+                      (fk_action)*
+                      (fk_deferrable)?
+fk_action      <- kw_on (kw_delete / kw_update) fk_action_body
+                / kw_match @variable{bare_ident_nonkw}
+fk_action_body <- kw_set (kw_null / kw_default)
                 / kw_cascade
                 / kw_restrict
-                / kw_no trivia kw_action
+                / kw_no kw_action
 # Trailing `(initially)?` absorbed by `*^[;]`.
-~fk_deferrable <- (kw_not trivia)? kw_deferrable (trivia kw_initially trivia (kw_immediate / kw_deferred))?
+~fk_deferrable <- (kw_not)? kw_deferrable (kw_initially (kw_immediate / kw_deferred))?
 
-conflict_clause <- kw_on trivia kw_conflict trivia conflict_action
+conflict_clause <- kw_on kw_conflict conflict_action
 
-table_option   <- kw_without trivia kw_rowid / kw_strict
+table_option   <- kw_without kw_rowid / kw_strict
 
-drop_table_stmt <- kw_drop trivia kw_table (trivia kw_if trivia kw_exists)? trivia qualified_table_name
+drop_table_stmt <- kw_drop kw_table (kw_if kw_exists)? qualified_table_name
 
-alter_table_stmt <- kw_alter trivia kw_table trivia qualified_table_name trivia (
-      kw_rename trivia kw_to trivia @type{bare_ident_nonkw}
-    / kw_rename (trivia kw_column)? trivia @variable{bare_ident_nonkw}
-        trivia kw_to trivia @variable{bare_ident_nonkw}
-    / kw_add (trivia kw_column)? trivia column_def
-    / kw_drop (trivia kw_column)? trivia @variable{bare_ident_nonkw}
+alter_table_stmt <- kw_alter kw_table qualified_table_name (
+      kw_rename kw_to @type{bare_ident_nonkw}
+    / kw_rename (kw_column)? @variable{bare_ident_nonkw}
+        kw_to @variable{bare_ident_nonkw}
+    / kw_add (kw_column)? column_def
+    / kw_drop (kw_column)? @variable{bare_ident_nonkw}
   )
 
 # --- DDL: CREATE / DROP INDEX and VIEW -------------------------------
 
 # Trailing `(where_clause)?` absorbed by `*^[;]`.
-~create_index_stmt <- kw_create (trivia kw_unique)? trivia kw_index
-                     (trivia kw_if trivia kw_not trivia kw_exists)?
-                     trivia qualified_table_name
-                     trivia kw_on trivia @type{bare_ident_nonkw}
-                     trivia @punctuation{'('} trivia indexed_col_list trivia @punctuation{')'}
-                     (trivia where_clause)?
+~create_index_stmt <- kw_create (kw_unique)? kw_index
+                     (kw_if kw_not kw_exists)?
+                     qualified_table_name
+                     kw_on @type{bare_ident_nonkw}
+                     @punctuation{'('} indexed_col_list @punctuation{')'}
+                     (where_clause)?
 
-drop_index_stmt   <- kw_drop trivia kw_index (trivia kw_if trivia kw_exists)? trivia qualified_table_name
+drop_index_stmt   <- kw_drop kw_index (kw_if kw_exists)? qualified_table_name
 
-create_view_stmt  <- kw_create (trivia (kw_temporary / kw_temp))? trivia kw_view
-                     (trivia kw_if trivia kw_not trivia kw_exists)?
-                     trivia qualified_table_name
-                     (trivia @punctuation{'('} trivia ident_list trivia @punctuation{')'})?
-                     trivia kw_as trivia select_stmt
+create_view_stmt  <- kw_create ((kw_temporary / kw_temp))? kw_view
+                     (kw_if kw_not kw_exists)?
+                     qualified_table_name
+                     (@punctuation{'('} ident_list @punctuation{')'})?
+                     kw_as select_stmt
 
-drop_view_stmt    <- kw_drop trivia kw_view (trivia kw_if trivia kw_exists)? trivia qualified_table_name
+drop_view_stmt    <- kw_drop kw_view (kw_if kw_exists)? qualified_table_name
 
 # --- DDL: CREATE / DROP TRIGGER --------------------------------------
 # Trigger bodies are `;`-separated sequences of DML/SELECT wrapped in
 # BEGIN...END. The inner `;` is mandatory after each body statement,
 # which keeps the nesting disjoint from sql_file's top-level stmt_sep.
 
-create_trigger_stmt <- kw_create (trivia (kw_temporary / kw_temp))? trivia kw_trigger
-                       (trivia kw_if trivia kw_not trivia kw_exists)?
-                       trivia qualified_table_name
-                       (trivia (kw_before / kw_after / kw_instead trivia kw_of))?
-                       trivia trigger_event
-                       trivia kw_on trivia @type{bare_ident_nonkw}
-                       (trivia kw_for trivia kw_each trivia kw_row)?
-                       (trivia kw_when trivia expr)?
-                       trivia kw_begin
-                       trivia (trigger_body_stmt trivia @punctuation{';'} trivia)+
+create_trigger_stmt <- kw_create ((kw_temporary / kw_temp))? kw_trigger
+                       (kw_if kw_not kw_exists)?
+                       qualified_table_name
+                       ((kw_before / kw_after / kw_instead kw_of))?
+                       trigger_event
+                       kw_on @type{bare_ident_nonkw}
+                       (kw_for kw_each kw_row)?
+                       (kw_when expr)?
+                       kw_begin
+                       (trigger_body_stmt @punctuation{';'})+
                        kw_end
 trigger_event     <- kw_delete
                    / kw_insert
-                   / kw_update (trivia kw_of trivia ident_list)?
+                   / kw_update (kw_of ident_list)?
 trigger_body_stmt <- insert_stmt / update_stmt / delete_stmt / select_stmt
 
-drop_trigger_stmt <- kw_drop trivia kw_trigger (trivia kw_if trivia kw_exists)? trivia qualified_table_name
+drop_trigger_stmt <- kw_drop kw_trigger (kw_if kw_exists)? qualified_table_name
 
 # --- Transactions & savepoints ---------------------------------------
 
 # Trailing `(transaction-mode)?` absorbed by `*^[;]`.
-~begin_stmt    <- kw_begin (trivia (kw_deferred / kw_immediate / kw_exclusive))?
-                  (trivia kw_transaction)?
+~begin_stmt    <- kw_begin ((kw_deferred / kw_immediate / kw_exclusive))?
+                  (kw_transaction)?
 # Trailing `(transaction)?` absorbed by `*^[;]`.
-~commit_stmt   <- (kw_commit / kw_end) (trivia kw_transaction)?
-~rollback_stmt <- kw_rollback (trivia kw_transaction)?
-                  (trivia kw_to (trivia kw_savepoint)? trivia @variable{bare_ident_nonkw})?
-savepoint_stmt <- kw_savepoint trivia @variable{bare_ident_nonkw}
-release_stmt   <- kw_release (trivia kw_savepoint)? trivia @variable{bare_ident_nonkw}
+~commit_stmt   <- (kw_commit / kw_end) (kw_transaction)?
+~rollback_stmt <- kw_rollback (kw_transaction)?
+                  (kw_to (kw_savepoint)? @variable{bare_ident_nonkw})?
+savepoint_stmt <- kw_savepoint @variable{bare_ident_nonkw}
+release_stmt   <- kw_release (kw_savepoint)? @variable{bare_ident_nonkw}
 
 # --- PRAGMA, admin statements, EXPLAIN, CREATE VIRTUAL TABLE ---------
 # EXPLAIN wraps statement_body rather than statement, so
@@ -410,32 +410,32 @@ release_stmt   <- kw_release (trivia kw_savepoint)? trivia @variable{bare_ident_
 # the module is invoked, not merely referenced.
 
 # Trailing `(value)?` absorbed by `*^[;]`.
-~pragma_stmt    <- kw_pragma trivia qualified_table_name
-                   (trivia @operator{'='} trivia pragma_value
-                    / trivia @punctuation{'('} trivia pragma_value trivia @punctuation{')'})?
+~pragma_stmt    <- kw_pragma qualified_table_name
+                   (@operator{'='} pragma_value
+                    / @punctuation{'('} pragma_value @punctuation{')'})?
 pragma_value    <- signed_number / string_lit / @variable{bare_ident}
 
 # Trailing `(into)?` absorbed by `*^[;]`.
-~vacuum_stmt    <- kw_vacuum (trivia @type{bare_ident_nonkw})? (trivia kw_into trivia string_lit)?
+~vacuum_stmt    <- kw_vacuum (@type{bare_ident_nonkw})? (kw_into string_lit)?
 
-attach_stmt     <- kw_attach (trivia kw_database)? trivia expr trivia kw_as
-                   trivia @type{bare_ident_nonkw}
-detach_stmt     <- kw_detach (trivia kw_database)? trivia @type{bare_ident_nonkw}
+attach_stmt     <- kw_attach (kw_database)? expr kw_as
+                   @type{bare_ident_nonkw}
+detach_stmt     <- kw_detach (kw_database)? @type{bare_ident_nonkw}
 
 # Trailing `(target)?` absorbed by `*^[;]`.
-~reindex_stmt   <- kw_reindex (trivia qualified_table_name)?
-~analyze_stmt   <- kw_analyze (trivia qualified_table_name)?
+~reindex_stmt   <- kw_reindex (qualified_table_name)?
+~analyze_stmt   <- kw_analyze (qualified_table_name)?
 
-explain_stmt    <- kw_explain (trivia kw_query trivia kw_plan)? trivia statement_body
+explain_stmt    <- kw_explain (kw_query kw_plan)? statement_body
 
 # Trailing `(args)?` absorbed by `*^[;]`.
 ~create_virtual_table_stmt <-
-    kw_create trivia kw_virtual trivia kw_table
-    (trivia kw_if trivia kw_not trivia kw_exists)?
-    trivia qualified_table_name
-    trivia kw_using trivia @function{bare_ident_nonkw}
-    (trivia @punctuation{'('} trivia vtab_args? trivia @punctuation{')'})?
-vtab_args       <- vtab_arg (trivia @punctuation{','} trivia vtab_arg)*
+    kw_create kw_virtual kw_table
+    (kw_if kw_not kw_exists)?
+    qualified_table_name
+    kw_using @function{bare_ident_nonkw}
+    (@punctuation{'('} vtab_args? @punctuation{')'})?
+vtab_args       <- vtab_arg (@punctuation{','} vtab_arg)*
 # Module args are deliberately permissive — fts5/rtree/etc have
 # module-specific mini-grammars that are not worth modelling.
 vtab_arg        <- (!@punctuation{','} !@punctuation{')'} .)+
@@ -446,30 +446,30 @@ vtab_arg        <- (!@punctuation{','} !@punctuation{')'} .)+
 # operator. No shared-prefix issues between levels.
 
 expr        <- or_expr
-or_expr     <- and_expr (trivia kw_or trivia and_expr)*
-and_expr    <- not_expr (trivia kw_and trivia not_expr)*
-not_expr    <- kw_not trivia not_expr / cmp_expr
+or_expr     <- and_expr (kw_or and_expr)*
+and_expr    <- not_expr (kw_and not_expr)*
+not_expr    <- kw_not not_expr / cmp_expr
 cmp_expr    <- bit_expr cmp_tail*
-cmp_tail    <- trivia kw_is trivia (kw_not trivia)? bit_expr
-             / trivia (kw_not trivia)? kw_between trivia bit_expr trivia kw_and trivia bit_expr
-             / trivia (kw_not trivia)? kw_in trivia @punctuation{'('} trivia in_args? trivia @punctuation{')'}
-             / trivia (kw_not trivia)? kw_like trivia bit_expr (trivia kw_escape trivia bit_expr)?
-             / trivia (kw_not trivia)? kw_glob trivia bit_expr
-             / trivia (kw_not trivia)? kw_match trivia bit_expr
-             / trivia (kw_not trivia)? kw_regexp trivia bit_expr
-             / trivia cmp_op trivia bit_expr
-in_args     <- select_stmt / expr (trivia @punctuation{','} trivia expr)*
+cmp_tail    <- kw_is (kw_not)? bit_expr
+             / (kw_not)? kw_between bit_expr kw_and bit_expr
+             / (kw_not)? kw_in @punctuation{'('} in_args? @punctuation{')'}
+             / (kw_not)? kw_like bit_expr (kw_escape bit_expr)?
+             / (kw_not)? kw_glob bit_expr
+             / (kw_not)? kw_match bit_expr
+             / (kw_not)? kw_regexp bit_expr
+             / cmp_op bit_expr
+in_args     <- select_stmt / expr (@punctuation{','} expr)*
 cmp_op      <- @operator{'=='} / @operator{'<='} / @operator{'>='}
              / @operator{'!='} / @operator{'<>'} / @operator{'='}
              / @operator{'<'} / @operator{'>'}
-bit_expr    <- add_expr (trivia bit_op trivia add_expr)*
+bit_expr    <- add_expr (bit_op add_expr)*
 bit_op      <- @operator{'<<'} / @operator{'>>'} / @operator{'&'} / @operator{'|'}
-add_expr    <- mul_expr (trivia add_op trivia mul_expr)*
+add_expr    <- mul_expr (add_op mul_expr)*
 add_op      <- @operator{'+'} / @operator{'-'}
-mul_expr    <- concat_expr (trivia mul_op trivia concat_expr)*
+mul_expr    <- concat_expr (mul_op concat_expr)*
 mul_op      <- @operator{'*'} / @operator{'/'} / @operator{'%'}
-concat_expr <- unary_expr (trivia @operator{'||'} trivia unary_expr)*
-unary_expr  <- (@operator{'-'} / @operator{'+'} / @operator{'~'}) trivia unary_expr
+concat_expr <- unary_expr (@operator{'||'} unary_expr)*
+unary_expr  <- (@operator{'-'} / @operator{'+'} / @operator{'~'}) unary_expr
              / primary
 
 # Shared-prefix hotspots: function_call / qualified_column_ref /
@@ -485,24 +485,24 @@ primary     <- literal
              / column_ref_bare
              / bind_param
 
-paren_primary <- @punctuation{'('} trivia (select_stmt / expr) trivia @punctuation{')'}
+paren_primary <- @punctuation{'('} (select_stmt / expr) @punctuation{')'}
 
 # Trailing `(filter)? (over window)?` absorbed by `*^[;]`.
-~function_call <- @function{bare_ident_nonkw} trivia @punctuation{'('} trivia func_args? trivia @punctuation{')'}
-                 (trivia filter_clause)?
-                 (trivia kw_over trivia window_ref)?
+~function_call <- @function{bare_ident_nonkw} @punctuation{'('} func_args? @punctuation{')'}
+                 (filter_clause)?
+                 (kw_over window_ref)?
 func_args   <- @operator{'*'}
-             / (kw_distinct trivia)? expr (trivia @punctuation{','} trivia expr)*
+             / (kw_distinct)? expr (@punctuation{','} expr)*
 
 qualified_column_ref <- @variable{bare_ident_nonkw} @punctuation{'.'} @variable{bare_ident_nonkw}
 column_ref_bare      <- @variable{bare_ident_nonkw}
 
-case_expr   <- kw_case (trivia expr)? (trivia when_clause)+ (trivia kw_else trivia expr)? trivia kw_end
-when_clause <- kw_when trivia expr trivia kw_then trivia expr
+case_expr   <- kw_case (expr)? (when_clause)+ (kw_else expr)? kw_end
+when_clause <- kw_when expr kw_then expr
 
-cast_expr   <- kw_cast trivia @punctuation{'('} trivia expr trivia kw_as trivia @type{bare_ident} trivia @punctuation{')'}
+cast_expr   <- kw_cast @punctuation{'('} expr kw_as @type{bare_ident} @punctuation{')'}
 
-exists_expr <- kw_exists trivia @punctuation{'('} trivia select_stmt trivia @punctuation{')'}
+exists_expr <- kw_exists @punctuation{'('} select_stmt @punctuation{')'}
 
 # --- Literals ---------------------------------------------------------
 # Order matters: blob before string (X' prefix consumed first); number
@@ -510,27 +510,27 @@ exists_expr <- kw_exists trivia @punctuation{'('} trivia select_stmt trivia @pun
 
 literal     <- blob_lit / string_lit / @number{number_body} / null_lit / bool_lit
 
-null_lit    <- @constant{null_body !ident_char}
-bool_lit    <- @constant{bool_body !ident_char}
-null_body   <- [nN][uU][lL][lL]
-bool_body   <- [tT][rR][uU][eE] / [fF][aA][lL][sS][eE]
+*null_lit    <- @constant{null_body !ident_char}
+*bool_lit    <- @constant{bool_body !ident_char}
+*null_body   <- [nN][uU][lL][lL]
+*bool_body   <- [tT][rR][uU][eE] / [fF][aA][lL][sS][eE]
 
-blob_lit    <- @string{blob_body}
-blob_body   <- [xX] "'" [\da-fA-F]* "'"
-string_lit  <- @string{string_body}
-string_body <- "'" ("''" / !"'" .)* "'"
+*blob_lit    <- @string{blob_body}
+*blob_body   <- [xX] "'" [\da-fA-F]* "'"
+*string_lit  <- @string{string_body}
+*string_body <- "'" ("''" / !"'" .)* "'"
 
-number_body <- '0x' [\da-fA-F]+ !ident_char
+*number_body <- '0x' [\da-fA-F]+ !ident_char
              / float_body
              / int_body
-float_body  <- \d+ '.' \d+ ([eE] [+\-]? \d+)?
+*float_body  <- \d+ '.' \d+ ([eE] [+\-]? \d+)?
              / \d+ [eE] [+\-]? \d+
-int_body    <- \d+
+*int_body    <- \d+
 
 # Bind parameters are placeholders bound at execute time — lexically
 # variables, not named constants.
-bind_param  <- @variable{bind_body}
-bind_body   <- '?' \d*
+*bind_param  <- @variable{bind_body}
+*bind_body   <- '?' \d*
              / [:@$] ident_start ident_cont*
 
 # --- Identifiers ------------------------------------------------------
@@ -541,18 +541,18 @@ bind_body   <- '?' \d*
 # names and CTE heads where a keyword like INTEGER is actually the
 # content we want to capture as @type).
 
-bare_ident_nonkw  <- quoted_ident / !keyword_word bare_raw
-bare_ident        <- quoted_ident / bare_raw
-quoted_ident      <- double_quoted_id / backtick_id / bracket_id
+*bare_ident_nonkw  <- quoted_ident / !keyword_word bare_raw
+*bare_ident        <- quoted_ident / bare_raw
+*quoted_ident      <- double_quoted_id / backtick_id / bracket_id
 
-bare_raw          <- ident_start ident_cont*
-ident_start       <- [a-zA-Z_]
-ident_cont        <- [a-zA-Z\d_]
-ident_char        <- [a-zA-Z\d_]
+*bare_raw          <- ident_start ident_cont*
+*ident_start       <- [a-zA-Z_]
+*ident_cont        <- [a-zA-Z\d_]
+*ident_char        <- [a-zA-Z\d_]
 
-double_quoted_id  <- '"' ('""' / !'"' !\R .)* '"'
-backtick_id       <- '`' ('``' / !'`' !\R .)* '`'
-bracket_id        <- '[' .. (']' / \R) ']'
+*double_quoted_id  <- '"' ('""' / !'"' !\R .)* '"'
+*backtick_id       <- '`' ('``' / !'`' !\R .)* '`'
+*bracket_id        <- '[' .. (']' / \R) ']'
 
 # --- Keywords (case-insensitive) --------------------------------------
 # Per-letter character classes give case-insensitive matching without
@@ -561,295 +561,295 @@ bracket_id        <- '[' .. (']' / \R) ']'
 # `SELECTED`. `keyword_word` reuses the same boundary for the
 # identifier-exclusion negative lookahead.
 
-kw_select    <- @keyword{sel_body !ident_char}
-kw_from      <- @keyword{from_body !ident_char}
-kw_where     <- @keyword{where_body !ident_char}
-kw_group     <- @keyword{group_body !ident_char}
-kw_by        <- @keyword{by_body !ident_char}
-kw_having    <- @keyword{having_body !ident_char}
-kw_order     <- @keyword{order_body !ident_char}
-kw_asc       <- @keyword{asc_body !ident_char}
-kw_desc      <- @keyword{desc_body !ident_char}
-kw_limit     <- @keyword{limit_body !ident_char}
-kw_offset    <- @keyword{offset_body !ident_char}
-kw_join      <- @keyword{join_body !ident_char}
-kw_inner     <- @keyword{inner_body !ident_char}
-kw_left      <- @keyword{left_body !ident_char}
-kw_right     <- @keyword{right_body !ident_char}
-kw_full      <- @keyword{full_body !ident_char}
-kw_outer     <- @keyword{outer_body !ident_char}
-kw_cross     <- @keyword{cross_body !ident_char}
-kw_natural   <- @keyword{natural_body !ident_char}
-kw_on        <- @keyword{on_body !ident_char}
-kw_using     <- @keyword{using_body !ident_char}
-kw_as        <- @keyword{as_body !ident_char}
-kw_distinct  <- @keyword{distinct_body !ident_char}
-kw_all       <- @keyword{all_body !ident_char}
-kw_union     <- @keyword{union_body !ident_char}
-kw_intersect <- @keyword{intersect_body !ident_char}
-kw_except    <- @keyword{except_body !ident_char}
-kw_with      <- @keyword{with_body !ident_char}
-kw_and       <- @keyword{and_body !ident_char}
-kw_or        <- @keyword{or_body !ident_char}
-kw_not       <- @keyword{not_body !ident_char}
-kw_is        <- @keyword{is_body !ident_char}
-kw_in        <- @keyword{in_body !ident_char}
-kw_like      <- @keyword{like_body !ident_char}
-kw_glob      <- @keyword{glob_body !ident_char}
-kw_match     <- @keyword{match_body !ident_char}
-kw_regexp    <- @keyword{regexp_body !ident_char}
-kw_between   <- @keyword{between_body !ident_char}
-kw_escape    <- @keyword{escape_body !ident_char}
-kw_case      <- @keyword{case_body !ident_char}
-kw_when      <- @keyword{when_body !ident_char}
-kw_then      <- @keyword{then_body !ident_char}
-kw_else      <- @keyword{else_body !ident_char}
-kw_end       <- @keyword{end_body !ident_char}
-kw_cast      <- @keyword{cast_body !ident_char}
-kw_exists    <- @keyword{exists_body !ident_char}
-kw_collate   <- @keyword{collate_body !ident_char}
+*kw_select    <- @keyword{sel_body !ident_char}
+*kw_from      <- @keyword{from_body !ident_char}
+*kw_where     <- @keyword{where_body !ident_char}
+*kw_group     <- @keyword{group_body !ident_char}
+*kw_by        <- @keyword{by_body !ident_char}
+*kw_having    <- @keyword{having_body !ident_char}
+*kw_order     <- @keyword{order_body !ident_char}
+*kw_asc       <- @keyword{asc_body !ident_char}
+*kw_desc      <- @keyword{desc_body !ident_char}
+*kw_limit     <- @keyword{limit_body !ident_char}
+*kw_offset    <- @keyword{offset_body !ident_char}
+*kw_join      <- @keyword{join_body !ident_char}
+*kw_inner     <- @keyword{inner_body !ident_char}
+*kw_left      <- @keyword{left_body !ident_char}
+*kw_right     <- @keyword{right_body !ident_char}
+*kw_full      <- @keyword{full_body !ident_char}
+*kw_outer     <- @keyword{outer_body !ident_char}
+*kw_cross     <- @keyword{cross_body !ident_char}
+*kw_natural   <- @keyword{natural_body !ident_char}
+*kw_on        <- @keyword{on_body !ident_char}
+*kw_using     <- @keyword{using_body !ident_char}
+*kw_as        <- @keyword{as_body !ident_char}
+*kw_distinct  <- @keyword{distinct_body !ident_char}
+*kw_all       <- @keyword{all_body !ident_char}
+*kw_union     <- @keyword{union_body !ident_char}
+*kw_intersect <- @keyword{intersect_body !ident_char}
+*kw_except    <- @keyword{except_body !ident_char}
+*kw_with      <- @keyword{with_body !ident_char}
+*kw_and       <- @keyword{and_body !ident_char}
+*kw_or        <- @keyword{or_body !ident_char}
+*kw_not       <- @keyword{not_body !ident_char}
+*kw_is        <- @keyword{is_body !ident_char}
+*kw_in        <- @keyword{in_body !ident_char}
+*kw_like      <- @keyword{like_body !ident_char}
+*kw_glob      <- @keyword{glob_body !ident_char}
+*kw_match     <- @keyword{match_body !ident_char}
+*kw_regexp    <- @keyword{regexp_body !ident_char}
+*kw_between   <- @keyword{between_body !ident_char}
+*kw_escape    <- @keyword{escape_body !ident_char}
+*kw_case      <- @keyword{case_body !ident_char}
+*kw_when      <- @keyword{when_body !ident_char}
+*kw_then      <- @keyword{then_body !ident_char}
+*kw_else      <- @keyword{else_body !ident_char}
+*kw_end       <- @keyword{end_body !ident_char}
+*kw_cast      <- @keyword{cast_body !ident_char}
+*kw_exists    <- @keyword{exists_body !ident_char}
+*kw_collate   <- @keyword{collate_body !ident_char}
 
 # Window-function vocabulary. Only WINDOW and OVER are reserved; the
 # rest are matched positionally inside window_defn / frame_spec and
 # remain usable as identifiers outside those positions.
-kw_recursive <- @keyword{recursive_body !ident_char}
-kw_window    <- @keyword{window_body !ident_char}
-kw_over      <- @keyword{over_body !ident_char}
-kw_filter    <- @keyword{filter_body !ident_char}
-kw_partition <- @keyword{partition_body !ident_char}
-kw_range     <- @keyword{range_body !ident_char}
-kw_rows      <- @keyword{rows_body !ident_char}
-kw_groups    <- @keyword{groups_body !ident_char}
-kw_unbounded <- @keyword{unbounded_body !ident_char}
-kw_preceding <- @keyword{preceding_body !ident_char}
-kw_following <- @keyword{following_body !ident_char}
-kw_current   <- @keyword{current_body !ident_char}
-kw_row       <- @keyword{row_body !ident_char}
-kw_exclude   <- @keyword{exclude_body !ident_char}
-kw_ties      <- @keyword{ties_body !ident_char}
-kw_others    <- @keyword{others_body !ident_char}
-kw_no        <- @keyword{no_body !ident_char}
+*kw_recursive <- @keyword{recursive_body !ident_char}
+*kw_window    <- @keyword{window_body !ident_char}
+*kw_over      <- @keyword{over_body !ident_char}
+*kw_filter    <- @keyword{filter_body !ident_char}
+*kw_partition <- @keyword{partition_body !ident_char}
+*kw_range     <- @keyword{range_body !ident_char}
+*kw_rows      <- @keyword{rows_body !ident_char}
+*kw_groups    <- @keyword{groups_body !ident_char}
+*kw_unbounded <- @keyword{unbounded_body !ident_char}
+*kw_preceding <- @keyword{preceding_body !ident_char}
+*kw_following <- @keyword{following_body !ident_char}
+*kw_current   <- @keyword{current_body !ident_char}
+*kw_row       <- @keyword{row_body !ident_char}
+*kw_exclude   <- @keyword{exclude_body !ident_char}
+*kw_ties      <- @keyword{ties_body !ident_char}
+*kw_others    <- @keyword{others_body !ident_char}
+*kw_no        <- @keyword{no_body !ident_char}
 
 # DML (INSERT family). UPDATE lands in a later commit but its keyword
 # rule goes here so UPSERT's DO UPDATE path can use it now.
-kw_insert    <- @keyword{insert_body !ident_char}
-kw_replace   <- @keyword{replace_body !ident_char}
-kw_into      <- @keyword{into_body !ident_char}
-kw_values    <- @keyword{values_body !ident_char}
-kw_default   <- @keyword{default_body !ident_char}
-kw_conflict  <- @keyword{conflict_body !ident_char}
-kw_do        <- @keyword{do_body !ident_char}
-kw_nothing   <- @keyword{nothing_body !ident_char}
-kw_rollback  <- @keyword{rollback_body !ident_char}
-kw_abort     <- @keyword{abort_body !ident_char}
-kw_fail      <- @keyword{fail_body !ident_char}
-kw_ignore    <- @keyword{ignore_body !ident_char}
-kw_set       <- @keyword{set_body !ident_char}
-kw_returning <- @keyword{returning_body !ident_char}
-kw_update    <- @keyword{update_body !ident_char}
-kw_delete    <- @keyword{delete_body !ident_char}
+*kw_insert    <- @keyword{insert_body !ident_char}
+*kw_replace   <- @keyword{replace_body !ident_char}
+*kw_into      <- @keyword{into_body !ident_char}
+*kw_values    <- @keyword{values_body !ident_char}
+*kw_default   <- @keyword{default_body !ident_char}
+*kw_conflict  <- @keyword{conflict_body !ident_char}
+*kw_do        <- @keyword{do_body !ident_char}
+*kw_nothing   <- @keyword{nothing_body !ident_char}
+*kw_rollback  <- @keyword{rollback_body !ident_char}
+*kw_abort     <- @keyword{abort_body !ident_char}
+*kw_fail      <- @keyword{fail_body !ident_char}
+*kw_ignore    <- @keyword{ignore_body !ident_char}
+*kw_set       <- @keyword{set_body !ident_char}
+*kw_returning <- @keyword{returning_body !ident_char}
+*kw_update    <- @keyword{update_body !ident_char}
+*kw_delete    <- @keyword{delete_body !ident_char}
 
 # DDL (CREATE / ALTER / DROP TABLE, constraints, foreign-key actions).
-kw_create    <- @keyword{create_body !ident_char}
-kw_table     <- @keyword{table_body !ident_char}
-kw_alter     <- @keyword{alter_body !ident_char}
-kw_drop      <- @keyword{drop_body !ident_char}
-kw_rename    <- @keyword{rename_body !ident_char}
-kw_add       <- @keyword{add_body !ident_char}
-kw_column    <- @keyword{column_body !ident_char}
-kw_if        <- @keyword{if_body !ident_char}
-kw_temp      <- @keyword{temp_body !ident_char}
-kw_temporary <- @keyword{temporary_body !ident_char}
-kw_primary   <- @keyword{primary_body !ident_char}
-kw_key       <- @keyword{key_body !ident_char}
-kw_unique    <- @keyword{unique_body !ident_char}
-kw_check     <- @keyword{check_body !ident_char}
-kw_null      <- @keyword{null_body !ident_char}
-kw_references <- @keyword{references_body !ident_char}
-kw_generated <- @keyword{generated_body !ident_char}
-kw_always    <- @keyword{always_body !ident_char}
-kw_stored    <- @keyword{stored_body !ident_char}
-kw_virtual   <- @keyword{virtual_body !ident_char}
-kw_constraint<- @keyword{constraint_body !ident_char}
-kw_foreign   <- @keyword{foreign_body !ident_char}
-kw_action    <- @keyword{action_body !ident_char}
-kw_cascade   <- @keyword{cascade_body !ident_char}
-kw_restrict  <- @keyword{restrict_body !ident_char}
-kw_deferrable<- @keyword{deferrable_body !ident_char}
-kw_initially <- @keyword{initially_body !ident_char}
-kw_immediate <- @keyword{immediate_body !ident_char}
-kw_deferred  <- @keyword{deferred_body !ident_char}
-kw_autoincrement <- @keyword{autoincrement_body !ident_char}
-kw_rowid     <- @keyword{rowid_body !ident_char}
-kw_strict    <- @keyword{strict_body !ident_char}
-kw_without   <- @keyword{without_body !ident_char}
-kw_to        <- @keyword{to_body !ident_char}
-kw_index     <- @keyword{index_body !ident_char}
-kw_view      <- @keyword{view_body !ident_char}
-kw_trigger   <- @keyword{trigger_body !ident_char}
-kw_before    <- @keyword{before_body !ident_char}
-kw_after     <- @keyword{after_body !ident_char}
-kw_instead   <- @keyword{instead_body !ident_char}
-kw_of        <- @keyword{of_body !ident_char}
-kw_for       <- @keyword{for_body !ident_char}
-kw_each      <- @keyword{each_body !ident_char}
-kw_begin     <- @keyword{begin_body !ident_char}
-kw_commit    <- @keyword{commit_body !ident_char}
-kw_transaction <- @keyword{transaction_body !ident_char}
-kw_savepoint <- @keyword{savepoint_body !ident_char}
-kw_release   <- @keyword{release_body !ident_char}
-kw_exclusive <- @keyword{exclusive_body !ident_char}
-kw_pragma    <- @keyword{pragma_body !ident_char}
-kw_vacuum    <- @keyword{vacuum_body !ident_char}
-kw_attach    <- @keyword{attach_body !ident_char}
-kw_detach    <- @keyword{detach_body !ident_char}
-kw_database  <- @keyword{database_body !ident_char}
-kw_reindex   <- @keyword{reindex_body !ident_char}
-kw_analyze   <- @keyword{analyze_body !ident_char}
-kw_explain   <- @keyword{explain_body !ident_char}
-kw_query     <- @keyword{query_body !ident_char}
-kw_plan      <- @keyword{plan_body !ident_char}
+*kw_create    <- @keyword{create_body !ident_char}
+*kw_table     <- @keyword{table_body !ident_char}
+*kw_alter     <- @keyword{alter_body !ident_char}
+*kw_drop      <- @keyword{drop_body !ident_char}
+*kw_rename    <- @keyword{rename_body !ident_char}
+*kw_add       <- @keyword{add_body !ident_char}
+*kw_column    <- @keyword{column_body !ident_char}
+*kw_if        <- @keyword{if_body !ident_char}
+*kw_temp      <- @keyword{temp_body !ident_char}
+*kw_temporary <- @keyword{temporary_body !ident_char}
+*kw_primary   <- @keyword{primary_body !ident_char}
+*kw_key       <- @keyword{key_body !ident_char}
+*kw_unique    <- @keyword{unique_body !ident_char}
+*kw_check     <- @keyword{check_body !ident_char}
+*kw_null      <- @keyword{null_body !ident_char}
+*kw_references <- @keyword{references_body !ident_char}
+*kw_generated <- @keyword{generated_body !ident_char}
+*kw_always    <- @keyword{always_body !ident_char}
+*kw_stored    <- @keyword{stored_body !ident_char}
+*kw_virtual   <- @keyword{virtual_body !ident_char}
+*kw_constraint<- @keyword{constraint_body !ident_char}
+*kw_foreign   <- @keyword{foreign_body !ident_char}
+*kw_action    <- @keyword{action_body !ident_char}
+*kw_cascade   <- @keyword{cascade_body !ident_char}
+*kw_restrict  <- @keyword{restrict_body !ident_char}
+*kw_deferrable<- @keyword{deferrable_body !ident_char}
+*kw_initially <- @keyword{initially_body !ident_char}
+*kw_immediate <- @keyword{immediate_body !ident_char}
+*kw_deferred  <- @keyword{deferred_body !ident_char}
+*kw_autoincrement <- @keyword{autoincrement_body !ident_char}
+*kw_rowid     <- @keyword{rowid_body !ident_char}
+*kw_strict    <- @keyword{strict_body !ident_char}
+*kw_without   <- @keyword{without_body !ident_char}
+*kw_to        <- @keyword{to_body !ident_char}
+*kw_index     <- @keyword{index_body !ident_char}
+*kw_view      <- @keyword{view_body !ident_char}
+*kw_trigger   <- @keyword{trigger_body !ident_char}
+*kw_before    <- @keyword{before_body !ident_char}
+*kw_after     <- @keyword{after_body !ident_char}
+*kw_instead   <- @keyword{instead_body !ident_char}
+*kw_of        <- @keyword{of_body !ident_char}
+*kw_for       <- @keyword{for_body !ident_char}
+*kw_each      <- @keyword{each_body !ident_char}
+*kw_begin     <- @keyword{begin_body !ident_char}
+*kw_commit    <- @keyword{commit_body !ident_char}
+*kw_transaction <- @keyword{transaction_body !ident_char}
+*kw_savepoint <- @keyword{savepoint_body !ident_char}
+*kw_release   <- @keyword{release_body !ident_char}
+*kw_exclusive <- @keyword{exclusive_body !ident_char}
+*kw_pragma    <- @keyword{pragma_body !ident_char}
+*kw_vacuum    <- @keyword{vacuum_body !ident_char}
+*kw_attach    <- @keyword{attach_body !ident_char}
+*kw_detach    <- @keyword{detach_body !ident_char}
+*kw_database  <- @keyword{database_body !ident_char}
+*kw_reindex   <- @keyword{reindex_body !ident_char}
+*kw_analyze   <- @keyword{analyze_body !ident_char}
+*kw_explain   <- @keyword{explain_body !ident_char}
+*kw_query     <- @keyword{query_body !ident_char}
+*kw_plan      <- @keyword{plan_body !ident_char}
 
 # Keyword bodies — raw letter matchers, no boundary check.
 
-sel_body       <- [sS][eE][lL][eE][cC][tT]
-from_body      <- [fF][rR][oO][mM]
-where_body     <- [wW][hH][eE][rR][eE]
-group_body     <- [gG][rR][oO][uU][pP]
-by_body        <- [bB][yY]
-having_body    <- [hH][aA][vV][iI][nN][gG]
-order_body     <- [oO][rR][dD][eE][rR]
-asc_body       <- [aA][sS][cC]
-desc_body      <- [dD][eE][sS][cC]
-limit_body     <- [lL][iI][mM][iI][tT]
-offset_body    <- [oO][fF][fF][sS][eE][tT]
-join_body      <- [jJ][oO][iI][nN]
-inner_body     <- [iI][nN][nN][eE][rR]
-left_body      <- [lL][eE][fF][tT]
-right_body     <- [rR][iI][gG][hH][tT]
-full_body      <- [fF][uU][lL][lL]
-outer_body     <- [oO][uU][tT][eE][rR]
-cross_body     <- [cC][rR][oO][sS][sS]
-natural_body   <- [nN][aA][tT][uU][rR][aA][lL]
-on_body        <- [oO][nN]
-using_body     <- [uU][sS][iI][nN][gG]
-as_body        <- [aA][sS]
-distinct_body  <- [dD][iI][sS][tT][iI][nN][cC][tT]
-all_body       <- [aA][lL][lL]
-union_body     <- [uU][nN][iI][oO][nN]
-intersect_body <- [iI][nN][tT][eE][rR][sS][eE][cC][tT]
-except_body    <- [eE][xX][cC][eE][pP][tT]
-with_body      <- [wW][iI][tT][hH]
-and_body       <- [aA][nN][dD]
-or_body        <- [oO][rR]
-not_body       <- [nN][oO][tT]
-is_body        <- [iI][sS]
-in_body        <- [iI][nN]
-like_body      <- [lL][iI][kK][eE]
-glob_body      <- [gG][lL][oO][bB]
-match_body     <- [mM][aA][tT][cC][hH]
-regexp_body    <- [rR][eE][gG][eE][xX][pP]
-between_body   <- [bB][eE][tT][wW][eE][eE][nN]
-escape_body    <- [eE][sS][cC][aA][pP][eE]
-case_body      <- [cC][aA][sS][eE]
-when_body      <- [wW][hH][eE][nN]
-then_body      <- [tT][hH][eE][nN]
-else_body      <- [eE][lL][sS][eE]
-end_body       <- [eE][nN][dD]
-cast_body      <- [cC][aA][sS][tT]
-exists_body    <- [eE][xX][iI][sS][tT][sS]
-collate_body   <- [cC][oO][lL][lL][aA][tT][eE]
-recursive_body <- [rR][eE][cC][uU][rR][sS][iI][vV][eE]
-window_body    <- [wW][iI][nN][dD][oO][wW]
-over_body      <- [oO][vV][eE][rR]
-filter_body    <- [fF][iI][lL][tT][eE][rR]
-partition_body <- [pP][aA][rR][tT][iI][tT][iI][oO][nN]
-range_body     <- [rR][aA][nN][gG][eE]
-rows_body      <- [rR][oO][wW][sS]
-groups_body    <- [gG][rR][oO][uU][pP][sS]
-unbounded_body <- [uU][nN][bB][oO][uU][nN][dD][eE][dD]
-preceding_body <- [pP][rR][eE][cC][eE][dD][iI][nN][gG]
-following_body <- [fF][oO][lL][lL][oO][wW][iI][nN][gG]
-current_body   <- [cC][uU][rR][rR][eE][nN][tT]
-row_body       <- [rR][oO][wW]
-exclude_body   <- [eE][xX][cC][lL][uU][dD][eE]
-ties_body      <- [tT][iI][eE][sS]
-others_body    <- [oO][tT][hH][eE][rR][sS]
-no_body        <- [nN][oO]
-insert_body    <- [iI][nN][sS][eE][rR][tT]
-replace_body   <- [rR][eE][pP][lL][aA][cC][eE]
-into_body      <- [iI][nN][tT][oO]
-values_body    <- [vV][aA][lL][uU][eE][sS]
-default_body   <- [dD][eE][fF][aA][uU][lL][tT]
-conflict_body  <- [cC][oO][nN][fF][lL][iI][cC][tT]
-do_body        <- [dD][oO]
-nothing_body   <- [nN][oO][tT][hH][iI][nN][gG]
-rollback_body  <- [rR][oO][lL][lL][bB][aA][cC][kK]
-abort_body     <- [aA][bB][oO][rR][tT]
-fail_body      <- [fF][aA][iI][lL]
-ignore_body    <- [iI][gG][nN][oO][rR][eE]
-set_body       <- [sS][eE][tT]
-returning_body <- [rR][eE][tT][uU][rR][nN][iI][nN][gG]
-update_body    <- [uU][pP][dD][aA][tT][eE]
-delete_body    <- [dD][eE][lL][eE][tT][eE]
-create_body    <- [cC][rR][eE][aA][tT][eE]
-table_body     <- [tT][aA][bB][lL][eE]
-alter_body     <- [aA][lL][tT][eE][rR]
-drop_body      <- [dD][rR][oO][pP]
-rename_body    <- [rR][eE][nN][aA][mM][eE]
-add_body       <- [aA][dD][dD]
-column_body    <- [cC][oO][lL][uU][mM][nN]
-if_body        <- [iI][fF]
-temp_body      <- [tT][eE][mM][pP]
-temporary_body <- [tT][eE][mM][pP][oO][rR][aA][rR][yY]
-primary_body   <- [pP][rR][iI][mM][aA][rR][yY]
-key_body       <- [kK][eE][yY]
-unique_body    <- [uU][nN][iI][qQ][uU][eE]
-check_body     <- [cC][hH][eE][cC][kK]
-references_body <- [rR][eE][fF][eE][rR][eE][nN][cC][eE][sS]
-generated_body <- [gG][eE][nN][eE][rR][aA][tT][eE][dD]
-always_body    <- [aA][lL][wW][aA][yY][sS]
-stored_body    <- [sS][tT][oO][rR][eE][dD]
-virtual_body   <- [vV][iI][rR][tT][uU][aA][lL]
-constraint_body<- [cC][oO][nN][sS][tT][rR][aA][iI][nN][tT]
-foreign_body   <- [fF][oO][rR][eE][iI][gG][nN]
-action_body    <- [aA][cC][tT][iI][oO][nN]
-cascade_body   <- [cC][aA][sS][cC][aA][dD][eE]
-restrict_body  <- [rR][eE][sS][tT][rR][iI][cC][tT]
-deferrable_body<- [dD][eE][fF][eE][rR][rR][aA][bB][lL][eE]
-initially_body <- [iI][nN][iI][tT][iI][aA][lL][lL][yY]
-immediate_body <- [iI][mM][mM][eE][dD][iI][aA][tT][eE]
-deferred_body  <- [dD][eE][fF][eE][rR][rR][eE][dD]
-autoincrement_body <- [aA][uU][tT][oO][iI][nN][cC][rR][eE][mM][eE][nN][tT]
-rowid_body     <- [rR][oO][wW][iI][dD]
-strict_body    <- [sS][tT][rR][iI][cC][tT]
-without_body   <- [wW][iI][tT][hH][oO][uU][tT]
-to_body        <- [tT][oO]
-index_body     <- [iI][nN][dD][eE][xX]
-view_body      <- [vV][iI][eE][wW]
-trigger_body   <- [tT][rR][iI][gG][gG][eE][rR]
-before_body    <- [bB][eE][fF][oO][rR][eE]
-after_body     <- [aA][fF][tT][eE][rR]
-instead_body   <- [iI][nN][sS][tT][eE][aA][dD]
-of_body        <- [oO][fF]
-for_body       <- [fF][oO][rR]
-each_body      <- [eE][aA][cC][hH]
-begin_body     <- [bB][eE][gG][iI][nN]
-commit_body    <- [cC][oO][mM][mM][iI][tT]
-transaction_body <- [tT][rR][aA][nN][sS][aA][cC][tT][iI][oO][nN]
-savepoint_body <- [sS][aA][vV][eE][pP][oO][iI][nN][tT]
-release_body   <- [rR][eE][lL][eE][aA][sS][eE]
-exclusive_body <- [eE][xX][cC][lL][uU][sS][iI][vV][eE]
-pragma_body    <- [pP][rR][aA][gG][mM][aA]
-vacuum_body    <- [vV][aA][cC][uU][uU][mM]
-attach_body    <- [aA][tT][tT][aA][cC][hH]
-detach_body    <- [dD][eE][tT][aA][cC][hH]
-database_body  <- [dD][aA][tT][aA][bB][aA][sS][eE]
-reindex_body   <- [rR][eE][iI][nN][dD][eE][xX]
-analyze_body   <- [aA][nN][aA][lL][yY][zZ][eE]
-explain_body   <- [eE][xX][pP][lL][aA][iI][nN]
-query_body     <- [qQ][uU][eE][rR][yY]
-plan_body      <- [pP][lL][aA][nN]
+*sel_body       <- [sS][eE][lL][eE][cC][tT]
+*from_body      <- [fF][rR][oO][mM]
+*where_body     <- [wW][hH][eE][rR][eE]
+*group_body     <- [gG][rR][oO][uU][pP]
+*by_body        <- [bB][yY]
+*having_body    <- [hH][aA][vV][iI][nN][gG]
+*order_body     <- [oO][rR][dD][eE][rR]
+*asc_body       <- [aA][sS][cC]
+*desc_body      <- [dD][eE][sS][cC]
+*limit_body     <- [lL][iI][mM][iI][tT]
+*offset_body    <- [oO][fF][fF][sS][eE][tT]
+*join_body      <- [jJ][oO][iI][nN]
+*inner_body     <- [iI][nN][nN][eE][rR]
+*left_body      <- [lL][eE][fF][tT]
+*right_body     <- [rR][iI][gG][hH][tT]
+*full_body      <- [fF][uU][lL][lL]
+*outer_body     <- [oO][uU][tT][eE][rR]
+*cross_body     <- [cC][rR][oO][sS][sS]
+*natural_body   <- [nN][aA][tT][uU][rR][aA][lL]
+*on_body        <- [oO][nN]
+*using_body     <- [uU][sS][iI][nN][gG]
+*as_body        <- [aA][sS]
+*distinct_body  <- [dD][iI][sS][tT][iI][nN][cC][tT]
+*all_body       <- [aA][lL][lL]
+*union_body     <- [uU][nN][iI][oO][nN]
+*intersect_body <- [iI][nN][tT][eE][rR][sS][eE][cC][tT]
+*except_body    <- [eE][xX][cC][eE][pP][tT]
+*with_body      <- [wW][iI][tT][hH]
+*and_body       <- [aA][nN][dD]
+*or_body        <- [oO][rR]
+*not_body       <- [nN][oO][tT]
+*is_body        <- [iI][sS]
+*in_body        <- [iI][nN]
+*like_body      <- [lL][iI][kK][eE]
+*glob_body      <- [gG][lL][oO][bB]
+*match_body     <- [mM][aA][tT][cC][hH]
+*regexp_body    <- [rR][eE][gG][eE][xX][pP]
+*between_body   <- [bB][eE][tT][wW][eE][eE][nN]
+*escape_body    <- [eE][sS][cC][aA][pP][eE]
+*case_body      <- [cC][aA][sS][eE]
+*when_body      <- [wW][hH][eE][nN]
+*then_body      <- [tT][hH][eE][nN]
+*else_body      <- [eE][lL][sS][eE]
+*end_body       <- [eE][nN][dD]
+*cast_body      <- [cC][aA][sS][tT]
+*exists_body    <- [eE][xX][iI][sS][tT][sS]
+*collate_body   <- [cC][oO][lL][lL][aA][tT][eE]
+*recursive_body <- [rR][eE][cC][uU][rR][sS][iI][vV][eE]
+*window_body    <- [wW][iI][nN][dD][oO][wW]
+*over_body      <- [oO][vV][eE][rR]
+*filter_body    <- [fF][iI][lL][tT][eE][rR]
+*partition_body <- [pP][aA][rR][tT][iI][tT][iI][oO][nN]
+*range_body     <- [rR][aA][nN][gG][eE]
+*rows_body      <- [rR][oO][wW][sS]
+*groups_body    <- [gG][rR][oO][uU][pP][sS]
+*unbounded_body <- [uU][nN][bB][oO][uU][nN][dD][eE][dD]
+*preceding_body <- [pP][rR][eE][cC][eE][dD][iI][nN][gG]
+*following_body <- [fF][oO][lL][lL][oO][wW][iI][nN][gG]
+*current_body   <- [cC][uU][rR][rR][eE][nN][tT]
+*row_body       <- [rR][oO][wW]
+*exclude_body   <- [eE][xX][cC][lL][uU][dD][eE]
+*ties_body      <- [tT][iI][eE][sS]
+*others_body    <- [oO][tT][hH][eE][rR][sS]
+*no_body        <- [nN][oO]
+*insert_body    <- [iI][nN][sS][eE][rR][tT]
+*replace_body   <- [rR][eE][pP][lL][aA][cC][eE]
+*into_body      <- [iI][nN][tT][oO]
+*values_body    <- [vV][aA][lL][uU][eE][sS]
+*default_body   <- [dD][eE][fF][aA][uU][lL][tT]
+*conflict_body  <- [cC][oO][nN][fF][lL][iI][cC][tT]
+*do_body        <- [dD][oO]
+*nothing_body   <- [nN][oO][tT][hH][iI][nN][gG]
+*rollback_body  <- [rR][oO][lL][lL][bB][aA][cC][kK]
+*abort_body     <- [aA][bB][oO][rR][tT]
+*fail_body      <- [fF][aA][iI][lL]
+*ignore_body    <- [iI][gG][nN][oO][rR][eE]
+*set_body       <- [sS][eE][tT]
+*returning_body <- [rR][eE][tT][uU][rR][nN][iI][nN][gG]
+*update_body    <- [uU][pP][dD][aA][tT][eE]
+*delete_body    <- [dD][eE][lL][eE][tT][eE]
+*create_body    <- [cC][rR][eE][aA][tT][eE]
+*table_body     <- [tT][aA][bB][lL][eE]
+*alter_body     <- [aA][lL][tT][eE][rR]
+*drop_body      <- [dD][rR][oO][pP]
+*rename_body    <- [rR][eE][nN][aA][mM][eE]
+*add_body       <- [aA][dD][dD]
+*column_body    <- [cC][oO][lL][uU][mM][nN]
+*if_body        <- [iI][fF]
+*temp_body      <- [tT][eE][mM][pP]
+*temporary_body <- [tT][eE][mM][pP][oO][rR][aA][rR][yY]
+*primary_body   <- [pP][rR][iI][mM][aA][rR][yY]
+*key_body       <- [kK][eE][yY]
+*unique_body    <- [uU][nN][iI][qQ][uU][eE]
+*check_body     <- [cC][hH][eE][cC][kK]
+*references_body <- [rR][eE][fF][eE][rR][eE][nN][cC][eE][sS]
+*generated_body <- [gG][eE][nN][eE][rR][aA][tT][eE][dD]
+*always_body    <- [aA][lL][wW][aA][yY][sS]
+*stored_body    <- [sS][tT][oO][rR][eE][dD]
+*virtual_body   <- [vV][iI][rR][tT][uU][aA][lL]
+*constraint_body<- [cC][oO][nN][sS][tT][rR][aA][iI][nN][tT]
+*foreign_body   <- [fF][oO][rR][eE][iI][gG][nN]
+*action_body    <- [aA][cC][tT][iI][oO][nN]
+*cascade_body   <- [cC][aA][sS][cC][aA][dD][eE]
+*restrict_body  <- [rR][eE][sS][tT][rR][iI][cC][tT]
+*deferrable_body<- [dD][eE][fF][eE][rR][rR][aA][bB][lL][eE]
+*initially_body <- [iI][nN][iI][tT][iI][aA][lL][lL][yY]
+*immediate_body <- [iI][mM][mM][eE][dD][iI][aA][tT][eE]
+*deferred_body  <- [dD][eE][fF][eE][rR][rR][eE][dD]
+*autoincrement_body <- [aA][uU][tT][oO][iI][nN][cC][rR][eE][mM][eE][nN][tT]
+*rowid_body     <- [rR][oO][wW][iI][dD]
+*strict_body    <- [sS][tT][rR][iI][cC][tT]
+*without_body   <- [wW][iI][tT][hH][oO][uU][tT]
+*to_body        <- [tT][oO]
+*index_body     <- [iI][nN][dD][eE][xX]
+*view_body      <- [vV][iI][eE][wW]
+*trigger_body   <- [tT][rR][iI][gG][gG][eE][rR]
+*before_body    <- [bB][eE][fF][oO][rR][eE]
+*after_body     <- [aA][fF][tT][eE][rR]
+*instead_body   <- [iI][nN][sS][tT][eE][aA][dD]
+*of_body        <- [oO][fF]
+*for_body       <- [fF][oO][rR]
+*each_body      <- [eE][aA][cC][hH]
+*begin_body     <- [bB][eE][gG][iI][nN]
+*commit_body    <- [cC][oO][mM][mM][iI][tT]
+*transaction_body <- [tT][rR][aA][nN][sS][aA][cC][tT][iI][oO][nN]
+*savepoint_body <- [sS][aA][vV][eE][pP][oO][iI][nN][tT]
+*release_body   <- [rR][eE][lL][eE][aA][sS][eE]
+*exclusive_body <- [eE][xX][cC][lL][uU][sS][iI][vV][eE]
+*pragma_body    <- [pP][rR][aA][gG][mM][aA]
+*vacuum_body    <- [vV][aA][cC][uU][uU][mM]
+*attach_body    <- [aA][tT][tT][aA][cC][hH]
+*detach_body    <- [dD][eE][tT][aA][cC][hH]
+*database_body  <- [dD][aA][tT][aA][bB][aA][sS][eE]
+*reindex_body   <- [rR][eE][iI][nN][dD][eE][xX]
+*analyze_body   <- [aA][nN][aA][lL][yY][zZ][eE]
+*explain_body   <- [eE][xX][pP][lL][aA][iI][nN]
+*query_body     <- [qQ][uU][eE][rR][yY]
+*plan_body      <- [pP][lL][aA][nN]
 
 # Keyword negative-lookahead for the identifier rule.
 #
@@ -868,7 +868,7 @@ plan_body      <- [pP][lL][aA][nN]
 #
 # `!ident_char` is applied once on the outside so each body stays
 # boundary-free.
-keyword_word <-
+*keyword_word <-
     ( autoincrement_body   # 13
     / transaction_body     # 11
     / constraint_body      # 10
@@ -997,4 +997,4 @@ keyword_word <-
 
 # --- Whitespace & comments -------------------------------------------
 
-comment       <- @comment{'--' .. \R / '/*' ..= '*/'}
+*comment       <- @comment{'--' .. \R / '/*' ..= '*/'}
