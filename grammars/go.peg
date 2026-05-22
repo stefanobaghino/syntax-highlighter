@@ -340,18 +340,18 @@ rune_lit      <- @string{"'" (char_escape / !"'" .)* "'"}
 char_escape   <- '\\' .
 
 number_lit    <- @number{num_body}
-num_body      <- '0x' hex_digits ('.' hex_digits?)? ([pP] [+\-]? [0-9]+)? imag?
-               / '0X' hex_digits ('.' hex_digits?)? ([pP] [+\-]? [0-9]+)? imag?
+num_body      <- '0x' hex_digits ('.' hex_digits?)? ([pP] [+\-]? \d+)? imag?
+               / '0X' hex_digits ('.' hex_digits?)? ([pP] [+\-]? \d+)? imag?
                / '0o' oct_digits imag?
                / '0b' bin_digits imag?
                / digit_seq '.' digit_seq? exp_part? imag?
                / '.' digit_seq exp_part? imag?
                / digit_seq exp_part? imag?
-digit_seq     <- [0-9] ([0-9_])*
-hex_digits    <- [0-9a-fA-F] [0-9a-fA-F_]*
+digit_seq     <- \d ([\d_])*
+hex_digits    <- [\da-fA-F] [\da-fA-F_]*
 oct_digits    <- [0-7] [0-7_]*
 bin_digits    <- [01] [01_]*
-exp_part      <- [eE] [+\-]? [0-9]+
+exp_part      <- [eE] [+\-]? \d+
 imag          <- 'i'
 
 # --- Identifiers / predeclared names ---------------------------------
@@ -360,7 +360,7 @@ ident         <- !reserved ident_start ident_body*
 upper_ident   <- !reserved [A-Z] ident_body*
 lower_ident   <- !reserved [a-z_] ident_body*
 ident_start   <- [A-Za-z_]
-ident_body    <- [A-Za-z0-9_]
+ident_body    <- [A-Za-z\d_]
 
 # Reserved keywords blocking identifier capture.
 reserved      <- reserved_word !ident_body
@@ -396,4 +396,4 @@ block_comment <- '/*' ..= '*/'
 
 trivia        <- ws
 
-ws            <- (comment / [ \t\r\n])*
+ws            <- (comment / \s)*

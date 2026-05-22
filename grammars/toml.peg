@@ -15,7 +15,7 @@
 #     kind; revisit when a theme-file is introduced.
 #   - inf / nan are @constant (like true/false), not @number.
 
-toml          <- ws (entry (entry_sep entry)*)? ws !.
+toml          <- ws (entry (entry_sep entry)*)? ws \z
 
 entry         <- array_of_tables_header / table_header / pair
 entry_sep     <- inline_space comment? linebreak ws
@@ -35,7 +35,7 @@ key_path      <- key_seg_type (inline_space @punctuation{'.'} inline_space key_s
 key_seg_prop  <- @property{key_seg_body}
 key_seg_type  <- @type{key_seg_body}
 key_seg_body  <- bare_key / basic_string / literal_string
-bare_key      <- [A-Za-z0-9_\-]+
+bare_key      <- [A-Za-z\d_\-]+
 
 # Values. Order matters: try longer-prefixed / more-specific alternatives
 # first so PEG's first-match semantics pick the right one.
@@ -75,15 +75,15 @@ multiline_literal_body <- .. "'''"
 integer       <- @number{int_body}
 int_body      <- hex_int / oct_int / bin_int / dec_int
 dec_int       <- [+\-]? unsigned_dec
-unsigned_dec  <- '0' / [1-9] ('_'? [0-9])*
+unsigned_dec  <- '0' / [1-9] ('_'? \d)*
 hex_int       <- '0x' hex ('_'? hex)*
 oct_int       <- '0o' [0-7] ('_'? [0-7])*
 bin_int       <- '0b' [01] ('_'? [01])*
 
 float         <- @number{float_body}
 float_body    <- [+\-]? unsigned_dec (frac exp? / exp)
-frac          <- '.' [0-9] ('_'? [0-9])*
-exp           <- [eE] [+\-]? [0-9] ('_'? [0-9])*
+frac          <- '.' \d ('_'? \d)*
+exp           <- [eE] [+\-]? \d ('_'? \d)*
 
 inf_nan       <- [+\-]? ('inf' / 'nan')
 bool_lit      <- 'true' / 'false'
@@ -96,10 +96,10 @@ local_datetime <- date date_time_sep time
 local_date    <- date
 local_time    <- time
 date_time_sep <- 'T' / 't' / ' '
-date          <- [0-9] [0-9] [0-9] [0-9] '-' [0-9] [0-9] '-' [0-9] [0-9]
-time          <- [0-9] [0-9] ':' [0-9] [0-9] ':' [0-9] [0-9] time_frac?
-time_frac     <- '.' [0-9]+
-time_offset   <- 'Z' / 'z' / [+\-] [0-9] [0-9] ':' [0-9] [0-9]
+date          <- \d \d \d \d '-' \d \d '-' \d \d
+time          <- \d \d ':' \d \d ':' \d \d time_frac?
+time_frac     <- '.' \d+
+time_offset   <- 'Z' / 'z' / [+\-] \d \d ':' \d \d
 
 # --- Arrays (multiline, trailing comma, interior comments allowed) -----
 array         <- @punctuation{'['} array_ws array_body? array_ws @punctuation{']'}
@@ -111,15 +111,15 @@ inline_table_body <- inline_pair (inline_space @punctuation{','} inline_space in
 inline_pair   <- key inline_space @punctuation{'='} inline_space value
 
 # --- Whitespace & comments --------------------------------------------
-inline_space  <- [ \t]*
-linebreak     <- '\r'? '\n'
+inline_space  <- \h*
+linebreak     <- \R
 comment       <- @comment{'#' .. linebreak}
 
 # Vertical whitespace: spaces/tabs/newlines plus comments. Each atom
 # consumes at least one byte, so the enclosing '*' cannot infinite-loop.
 trivia        <- ws
 
-ws            <- (comment / [ \t\r\n])*
+ws            <- (comment / \s)*
 array_ws      <- ws
 
-hex           <- [0-9a-fA-F]
+hex           <- [\da-fA-F]

@@ -450,12 +450,12 @@ int_num       <- '0x' hex_digits num_suffix?
                / '0o' oct_digits num_suffix?
                / '0b' bin_digits num_suffix?
                / digit_seq num_suffix?
-digit_seq     <- [0-9] ([0-9_])*
-hex_digits    <- [0-9a-fA-F] [0-9a-fA-F_]*
+digit_seq     <- \d ([\d_])*
+hex_digits    <- [\da-fA-F] [\da-fA-F_]*
 oct_digits    <- [0-7] [0-7_]*
 bin_digits    <- [01] [01_]*
 exp_part      <- [eE] [+\-]? digit_seq
-num_suffix    <- [a-zA-Z_] [a-zA-Z0-9_]*
+num_suffix    <- [a-zA-Z_] [a-zA-Z\d_]*
 
 # --- Lifetimes and identifiers -----------------------------------------
 
@@ -468,7 +468,7 @@ ident_any     <- @type{upper_ident}
 upper_ident   <- 'r#'? [A-Z] ident_body*
 lower_ident   <- 'r#'? [a-z_] ident_body*
 ident         <- 'r#'? [A-Za-z_] ident_body*
-ident_body    <- [A-Za-z0-9_]
+ident_body    <- [A-Za-z\d_]
 
 # --- Whitespace and comments ------------------------------------------
 
@@ -480,4 +480,4 @@ block_comment <- '/*' ..= '*/'
 
 trivia        <- ws
 
-ws            <- (comment / [ \t\r\n])*
+ws            <- (comment / \s)*
