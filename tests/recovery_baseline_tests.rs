@@ -3,12 +3,12 @@
 //!
 //! Per #75, this watches a channel the rest of CI doesn't: `*^` converts
 //! grammar gaps into silent recovery captures with exit 0, so a bug only
-//! becomes visible if someone runs `pegdb dump-captures` and inspects
+//! becomes visible if someone runs `pegdb captures dump` and inspects
 //! the JSONL. Asserting `recovery == 0` across the bench corpus makes
 //! regressions fail at PR time.
 //!
 //! Mechanism is exact-match on raw `Capture` count, matching the
-//! "one JSON object per capture" definition that `pegdb dump-captures`
+//! "one JSON object per capture" definition that `pegdb captures dump`
 //! uses. Hand-written malformed-input tests that intentionally exercise
 //! `*^` live alongside their grammar's `tests/grammar_<lang>_tests.rs`;
 //! the channels stay separate.
@@ -101,7 +101,7 @@ fn benches_fixtures_have_no_recovery_captures() {
             "Unexpected `recovery` captures on bench fixtures (see #75).\n\
              Each entry below is a fixture where the parser fell into the `*^` recovery\n\
              loop. Likely cause: a grammar bug producing silent recoveries. Run\n\
-             `pegdb dump-captures -g grammars/<grammar>.peg <fixture>` to inspect.\n\n",
+             `pegdb captures dump -g grammars/<grammar>.peg <fixture>` to inspect.\n\n",
         );
         for (path, count) in &mismatches {
             let rel = path

@@ -1289,7 +1289,7 @@ pub(crate) const TRIVIA_ROOT_RULE: &str = "trivia";
 /// [`TRIVIA_ROOT_RULE`], excluding rules whose body contains a recovery
 /// catch (`Pattern::Catch` or `Pattern::InferBoundaryCatch`). The
 /// catch-exclusion preserves diagnostic visibility for catch-bearing
-/// frames in `pegdb explain-recoveries`: the catch is the author's
+/// frames in `pegdb recoveries explain`: the catch is the author's
 /// signal that the rule's frame is load-bearing, and silently trimming
 /// it would hide exactly the rule the catch lives in.
 ///

@@ -20,23 +20,24 @@ pub struct Program {
     /// Compile-time rule names, indexed by `MemoId.0`. Populated by
     /// [`crate::pegc`] in the same order rules receive their `MemoId`s
     /// (start rule first, then alphabetical). Used by diagnostic
-    /// consumers (e.g. `pegdb dump-captures`'s `farthest_reach.rule_stack`
-    /// and `pegdb explain-recoveries`) to render rule-stack snapshots
-    /// back into human-readable names. Length is exactly `rule_count`.
+    /// consumers (e.g. `pegdb recoveries dump`'s `rule_stack` column
+    /// and `pegdb recoveries explain`'s leaf display) to render
+    /// rule-stack snapshots back into human-readable names. Length is
+    /// exactly `rule_count`.
     pub rule_names: Vec<String>,
     /// Compile-time label names, indexed by `LabelId.0`. Populated by
     /// [`crate::pegc`] in the order labels are interned (which is
-    /// deterministic given a fixed compile-time pattern walk).
-    /// `pegdb explain-recoveries` resolves the label of a labeled
+    /// deterministic given a fixed compile-time pattern walk). The
+    /// `recoveries` subcommands resolve the label of a labeled
     /// recovery firing back to its source name. Empty for grammars
     /// that don't use labeled failures.
     pub label_kinds: Vec<String>,
     /// Per-rule trivia flags, indexed by `MemoId.0`. `true` when the
     /// rule is reachable from a `trivia <- …` reserved-name root in
     /// the grammar; a rule containing a recovery catch is pinned out
-    /// of inference so the catch's frame stays visible. `pegdb
-    /// explain-recoveries` consults this to drop trailing trivia
+    /// of inference so the catch's frame stays visible. The
+    /// `recoveries` subcommands consult this to drop trailing trivia
     /// frames from the rule_stack when picking the displayed leaf of
-    /// a recovery cluster. Length is exactly `rule_count`.
+    /// a recovery cluster or span. Length is exactly `rule_count`.
     pub rule_is_trivia: Vec<bool>,
 }

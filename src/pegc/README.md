@@ -122,7 +122,7 @@ covers the case in one extra range).
 | `p+^` | At-least-once recovery form — desugars to `p (p*^)`. |
 | `p*^[charset]` | Repetition with delimiter-scoped recovery: on inner failure, skip to and consume the next byte in `charset`. |
 | `p+^[charset]` | At-least-once delimiter-scoped recovery — desugars to `p (p*^[charset])`. |
-| `p*^:lbl` / `p*^[charset]:lbl` / `p+^:lbl` / `p+^[charset]:lbl` | Optional `:label` suffix on any of the above, naming the catch scope for `pegdb explain-recoveries` clustering. Default label is `"recovery"`. |
+| `p*^:lbl` / `p*^[charset]:lbl` / `p+^:lbl` / `p+^[charset]:lbl` | Optional `:label` suffix on any of the above, naming the catch scope for `pegdb recoveries explain` clustering. Default label is `"recovery"`. |
 
 ### Prefix operators
 
@@ -184,7 +184,7 @@ interns label `"bad_doc"` instead of the default `"recovery"`. The
 `:` must touch the preceding `^` and the identifier must touch `:`
 — same tight-binding rule as `^label`. The capture kind is
 unaffected (still `recovery`); only the label changes. `pegdb
-explain-recoveries` clusters by this label, so per-site naming
+recoveries explain` clusters by this label, so per-site naming
 lets distinct call sites surface as their own buckets.
 
 **Lowering.** `p*^` is syntactic sugar for a labeled catch wrapped in
@@ -292,7 +292,7 @@ stmt <- (assign / call) ^bad_stmt @err{ (!';' .)* } ';'
 ```
 
 The `label` is mandatory: it tags this scope so `pegdb
-explain-recoveries` can cluster firings — the author's name for "what
+recoveries explain` can cluster firings — the author's name for "what
 went wrong here." Labels intern into `Program::label_kinds` (a
 separate namespace from `capture_kinds`); `*^` interns its
 `recovery_kind` string as a label the same way, so a `^foo` catch and
@@ -478,7 +478,7 @@ The compiler treats one rule name specially:
   rule transitively reachable from it through the call graph is
   marked as syntactic trivia (whitespace, comments). Runtime
   semantics are unchanged; the bit surfaces in
-  `Program::rule_is_trivia` and `pegdb explain-recoveries` pops
+  `Program::rule_is_trivia` and `pegdb recoveries explain` pops
   trailing trivia frames from the rule_stack when picking the
   displayed leaf of each cluster.
 
@@ -510,7 +510,7 @@ catch operator pending real-grammar evidence that they're needed:
 
 - **Anonymous catch (`^_` / `^^_`).** A catch with no label.
   Always emits a placeholder diagnostic. Today's mandatory-label
-  rule keeps `pegdb explain-recoveries` clusters meaningful by
+  rule keeps `pegdb recoveries explain` clusters meaningful by
   forcing every recovery point to be named.
 - **Throw atom (`^!label` / `^^!label`).** A zero-byte pattern that
   always fails with `label`, with Maidl-style cross-rule routing

@@ -251,7 +251,7 @@ impl Compiler {
                 // `label` is a diagnostic tag threaded into the
                 // `RecoverScope` frame so `RecoverToScopedMax`'s
                 // emitted `RecoveryDiagnostic` carries it; `pegdb
-                // explain-recoveries` clusters firings by it.
+                // recoveries explain` clusters firings by it.
                 //
                 // `RecoverScope` preserves the failed attempt's
                 // deepest-reach captures via `RecoverToScopedMax`
@@ -342,7 +342,7 @@ pub(crate) fn compile_rules(
     // Compute the per-rule trivia bit by cascading from any `trivia <- …`
     // reserved-name root the grammar defines. Catch-bearing rules are
     // pinned out of the cascade so their frames stay visible in
-    // `pegdb explain-recoveries`.
+    // `pegdb recoveries explain`.
     let trivia_bits = super::analysis::compute_trivia_rules(rules);
 
     let mut c = Compiler::new();

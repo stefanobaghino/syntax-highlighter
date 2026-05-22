@@ -20,7 +20,7 @@ pub enum Pattern {
     /// the catch fails to its enclosing backtrack.
     ///
     /// The `label` is mandatory and serves as a diagnostic tag:
-    /// `pegdb explain-recoveries` clusters firings by it so a grammar
+    /// `pegdb recoveries explain` clusters firings by it so a grammar
     /// author can see which catch is recovering on which input. It
     /// has no effect on failure propagation — every catch fires on
     /// any anonymous failure of `inner`. Future overlays (`^!label`
@@ -82,7 +82,7 @@ impl Pattern {
 
     /// Labeled catch — equivalent to `inner ^label recovery` in source.
     /// The label is a diagnostic tag flowed into `RecoveryDiagnostic` so
-    /// `pegdb explain-recoveries` can cluster firings by it.
+    /// `pegdb recoveries explain` can cluster firings by it.
     pub fn catch(inner: Pattern, label: impl Into<String>, recovery: Pattern) -> Pattern {
         Pattern::Catch {
             inner: Box::new(inner),

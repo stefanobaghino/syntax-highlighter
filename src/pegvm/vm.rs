@@ -105,9 +105,10 @@ enum StackEntry {
         /// measurably regress the highlighter hot path (memo bench
         /// showed ~5–10% across the corpus before this shape).
         /// Cloned from `VM::current_rule_stack` inside `maybe_snapshot`
-        /// whenever the scope's `scoped_max_sp` advances. Drives the
-        /// `farthest_reach.rule_stack` field that `pegdb dump-captures`
-        /// emits on recovery rows.
+        /// whenever the scope's `scoped_max_sp` advances. Surfaced by
+        /// `pegdb recoveries dump`'s `rule_stack` column and used by
+        /// `pegdb recoveries explain` to cluster firings by deepest
+        /// semantic rule.
         ///
         /// `Box<Vec<…>>` (vs `Vec<…>`) is deliberate: paired with the
         /// `Option` it gives niche optimisation down to 8 bytes for
@@ -117,7 +118,7 @@ enum StackEntry {
         scoped_max_rule_stack: Option<Box<Vec<MemoId>>>,
         /// Diagnostic tag for this scope. Set from the
         /// `RecoverScopeBegin` instruction's payload; flows into the
-        /// `RecoveryDiagnostic` so `pegdb explain-recoveries` can
+        /// `RecoveryDiagnostic` so `pegdb recoveries explain` can
         /// cluster firings by label. Has no effect on failure
         /// propagation — every scope catches anonymous failures
         /// alike.
@@ -155,9 +156,8 @@ pub struct MatchResult {
     /// capture, in the same order as `captures`'s `kind == recovery`
     /// entries. Populated only when the VM was built with
     /// [`VM::with_track_recovery_diagnostics(true)`]; otherwise empty.
-    /// Consumed by `pegdb dump-captures` to emit the `farthest_reach`
-    /// field and by `pegdb explain-recoveries` to cluster by rule
-    /// stack.
+    /// Consumed by `pegdb recoveries dump` (per-span detail) and
+    /// `pegdb recoveries explain` (clustered by rule stack and label).
     pub recovery_diagnostics: Vec<RecoveryDiagnostic>,
 }
 
@@ -166,7 +166,7 @@ pub struct MatchResult {
 /// reached during the failed iteration that produced this recovery byte,
 /// plus the rule-call stack at the moment that farthest reach was
 /// recorded. Aggregated across an adjacent recovery span by consumers
-/// (`pegdb dump-captures` / `explain-recoveries`).
+/// (`pegdb recoveries dump` / `pegdb recoveries explain`).
 ///
 /// Only produced when the VM is built with
 /// [`VM::with_track_recovery_diagnostics(true)`]; the default path emits
@@ -188,7 +188,7 @@ pub struct RecoveryDiagnostic {
     /// the `RecoverScopeBegin` instruction's payload — every recovery
     /// firing carries one (labeled catches use the author's label;
     /// `*^` desugars to a catch labeled `"recovery"`). Lets `pegdb
-    /// explain-recoveries` cluster recoveries by `(rule_stack, label)`.
+    /// recoveries explain` cluster recoveries by `(rule_stack, label)`.
     pub label: LabelId,
 }
 
@@ -403,8 +403,8 @@ impl<'p, 'i> VM<'p, 'i> {
     /// iteration's farthest input position and the rule-call stack at
     /// that point. Records land in [`MatchResult::recovery_diagnostics`].
     ///
-    /// Default `false`. Consumers like `pegdb dump-captures` /
-    /// `pegdb explain-recoveries` opt in; the highlighter path leaves it
+    /// Default `false`. Consumers like `pegdb recoveries dump` /
+    /// `pegdb recoveries explain` opt in; the highlighter path leaves it
     /// off so its hot loop pays nothing beyond the (already cheap)
     /// `current_rule_stack` push/pop maintenance.
     pub fn with_track_recovery_diagnostics(mut self, enable: bool) -> Self {
@@ -1787,8 +1787,8 @@ mod recovery_diagnostic_tests {
     //! [`VM::with_track_recovery_diagnostics`], every `kind == recovery`
     //! capture has a paired [`RecoveryDiagnostic`] reporting the
     //! iteration's farthest reach and the rule-call stack at that
-    //! point. Drives `pegdb dump-captures`'s `farthest_reach` field and
-    //! the `explain-recoveries` cluster output.
+    //! point. Drives the per-span detail in `pegdb recoveries dump` and
+    //! the cluster summary in `pegdb recoveries explain`.
 
     use super::*;
     use crate::pegc;
