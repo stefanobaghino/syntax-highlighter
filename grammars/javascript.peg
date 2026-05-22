@@ -56,7 +56,7 @@ stmt           <- import_decl
                 / continue_stmt
                 / debugger_stmt
                 / labeled_stmt
-                / block_stmt
+                / block
                 / empty_stmt
                 / expr opt_semi
 
@@ -158,7 +158,6 @@ throw_stmt     <- @keyword{'throw'} expr opt_semi
 ~continue_stmt <- @keyword{'continue'} (@variable{ident})? opt_semi
 debugger_stmt  <- @keyword{'debugger'} opt_semi
 labeled_stmt   <- @variable{ident} @punctuation{':'} stmt
-block_stmt     <- block
 block          <- @punctuation{'{'} (stmt* @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
 
 # --- Function params and patterns -------------------------------------
