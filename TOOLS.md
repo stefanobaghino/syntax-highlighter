@@ -7,9 +7,10 @@ inspection** of a grammar source and **runtime debugging** of a parse:
   Operates on a `<grammar.peg>` source; input-independent. Future
   seats for serialization (`pegc compile -o foo.bc`) and disassembly
   (`pegc disasm`) live here.
-- **`pegdb`** — debug surface for grammar authors. Subcommands today:
-  `dump-captures`, `explain-recoveries`. Both operate on a parse — they
-  need a grammar source (`-g <grammar.peg>`) and a fixture input.
+- **`pegdb`** — debug surface for grammar authors. Noun-verb
+  subcommands today: `captures dump`, `recoveries dump`,
+  `recoveries explain`. Each operates on a parse — it needs a grammar
+  source (`-g <grammar.peg>`) and a fixture input.
 
 Both are distinct from the `demo` CLI at `src/bin/demo/`, which is a
 quickstart showcase of ANSI highlighting; reach for `pegc`/`pegdb`
@@ -19,12 +20,12 @@ Build and run:
 
 ```
 cargo run --bin pegc  -- <subcommand> [options] [args]
-cargo run --bin pegdb -- <subcommand> [options] [args]
+cargo run --bin pegdb -- <noun> <verb> [options] [args]
 ```
 
-`pegc stats` and `pegdb dump-captures` emit **JSONL**: one JSON object
-per `\n`-delimited line. Streamable, `jq`-composable, and trivially
-decodable by any standard JSON parser.
+`pegc stats`, `pegdb captures dump`, and `pegdb recoveries dump` emit
+**JSONL**: one JSON object per `\n`-delimited line. Streamable,
+`jq`-composable, and trivially decodable by any standard JSON parser.
 
 `pegdb` is a debug tool for *any* grammar source: every fixture-taking
 subcommand requires `-g <grammar.peg>` (or its long form `--grammar`,
@@ -41,20 +42,26 @@ debugging but enjoy no special privilege; the `demo` CLI in
 - **`pegc stats`** — *static* shape report. Answers "how big is this
   grammar's bytecode?" Useful as a sanity check after non-trivial
   grammar edits. Input-independent.
-- **`pegdb dump-captures`** — *the post-mortem*. Per-capture spans +
-  kinds, byte-precise. Use when a kind-mismatch test fails or when
-  you want to see exactly which spans the grammar produced over a
-  given input: "what kind did the grammar give byte N?" → one `jq`
-  filter answers it. On rows where `kind == "recovery"`, an
-  additional `farthest_reach` object reports the deepest position
-  reached by the failed `*^` iteration and the rule-call stack at
-  that point — see the schema table below.
-- **`pegdb explain-recoveries`** — *cluster view*. Same data source
-  as the `farthest_reach` field, but rolled up per rule-stack: one
-  line per cluster instead of one per recovery byte. Use when
-  `dump-captures` is too noisy to read directly — e.g. a fixture
-  with tens of thousands of recoveries collapses into a handful of
-  bug-class lines sorted by count.
+- **`pegdb captures dump`** — *per-capture post-mortem*. Spans + kinds
+  for every capture the parser produced, byte-precise. Use when a
+  kind-mismatch test fails or when you want to see exactly which
+  spans the grammar produced over a given input: "what kind did the
+  grammar give byte N?" → one `jq` filter answers it. Recovery
+  diagnostics (label, deepest reach, trimmed rule stack) live in the
+  `recoveries` subcommands — `captures dump` is intentionally lean.
+- **`pegdb recoveries dump`** — *per-span recovery detail*. One row
+  per maximal contiguous recovery span, with the capture half (byte
+  range, literal) and the diagnostic half (label, deepest position,
+  trimmed rule stack) inline. The first place to look when a recovery
+  fires unexpectedly or doesn't fire when expected. Surfaces
+  capture⇄diagnostic accounting mismatches as `"sanity":"orphan_*"`
+  rows when present — silent in well-formed runs.
+- **`pegdb recoveries explain`** — *cluster summary*. Same underlying
+  data as `recoveries dump`, rolled up per `(rule_stack, label)` with
+  counts sorted descending. Use when `recoveries dump` is too noisy —
+  e.g. a fixture with hundreds of recoveries collapses into a handful
+  of bug-class lines. Surfaces accounting mismatches as
+  `[sanity]`-prefixed lines when present.
 
 Walker correctness — that the renderer's segment stream tiles input
 bytes exactly, with no gaps or overlaps — is a structural property of
@@ -102,12 +109,23 @@ $ for g in grammars/*.peg; do pegc stats "$g"; done \
 
 # `pegdb`
 
-## `dump-captures -g <grammar.peg> [--max-literal=N] [<path>]`
+`pegdb` uses a noun-verb subcommand layout. Each noun is a kind of
+parse-event observation; each verb is a presentation mode.
+
+```
+pegdb captures dump        # JSONL, one row per capture
+pegdb recoveries dump      # JSONL, one row per recovery span
+pegdb recoveries explain   # plain text, recovery clusters by count
+```
+
+---
+
+## `captures dump -g <grammar.peg> [--max-literal=N] [<path>]`
 
 Print one capture per line as a JSON object. The byte-precise
 diagnostic for "what spans got which kind?"
 
-**Synopsis:** `pegdb dump-captures -g <grammar.peg> [--max-literal=N] [<path>]`
+**Synopsis:** `pegdb captures dump -g <grammar.peg> [--max-literal=N] [<path>]`
 
 **Grammar:** required via `-g` / `--grammar` / `--grammar=<path>`; no
 fallback. The grammar is read from disk and compiled fresh on every
@@ -117,14 +135,19 @@ invocation.
 
 **Output fields (each line is a JSON object):**
 
-| Field            | Meaning                                                                           |
-|------------------|-----------------------------------------------------------------------------------|
-| `start`          | Byte offset of the capture's first byte in the input (inclusive).                |
-| `end`            | Byte offset just past the capture's last byte (exclusive).                       |
-| `kind`           | Capture-kind name (one of the names listed in `pegc stats … capture_kinds`).     |
-| `depth`          | Nesting level: `0` for an outermost capture, `1+` for one nested inside another. |
-| `literal`        | The captured bytes as a JSON string. Control bytes (including `0x1b` ESC) are escaped. |
-| `farthest_reach` | **Recovery rows only.** `{"pos":N,"rule_stack":[...]}` — see *Recovery diagnostics* below. |
+| Field     | Meaning                                                                           |
+|-----------|-----------------------------------------------------------------------------------|
+| `start`   | Byte offset of the capture's first byte in the input (inclusive).                |
+| `end`     | Byte offset just past the capture's last byte (exclusive).                       |
+| `kind`    | Capture-kind name (one of the names listed in `pegc stats … capture_kinds`).     |
+| `depth`   | Nesting level: `0` for an outermost capture, `1+` for one nested inside another. |
+| `literal` | The captured bytes as a JSON string. Control bytes (including `0x1b` ESC) are escaped. |
+
+Recovery diagnostics (label, deepest position, rule stack) are *not*
+emitted on `captures dump` rows — that information lives in
+`recoveries dump` and `recoveries explain`, where one row per span
+collapses the per-byte recovery captures into a single record with
+the full diagnostic context inline.
 
 **Nesting:** PEG grammars can wrap a captured rule around another that
 itself contains capture annotations — the inner capture sits inside
@@ -147,25 +170,8 @@ arbitrary bytes via any JSON parser.
 UTF-8 char boundary, appending a `…` ellipsis before JSON-encoding. No
 truncation by default; agent consumers want exact bytes.
 
-**Recovery diagnostics (`farthest_reach`).** On every row whose `kind`
-is `"recovery"`, a `farthest_reach` object surfaces *why* the parser
-fell into the `*^` byte-eater at that position:
-
-| Sub-field    | Meaning                                                                              |
-|--------------|--------------------------------------------------------------------------------------|
-| `pos`        | Deepest byte offset reached by the failed `*^` iterations contributing to this contiguous recovery span. May sit anywhere relative to `end`; it's where the deepest dive happened, not where resync succeeded. |
-| `rule_stack` | Array of rule names (root-to-leaf) at the moment `pos` was set. The leaf is the most actionable signal — "the deepest reach was inside rule X." |
-
-A *recovery span* is a maximal contiguous run of `recovery`-kind
-captures (`cap[i].end == cap[i+1].start`). Every row in the same span
-carries identical `farthest_reach` data; consumers that want one
-record per span can `jq 'del(.farthest_reach) | unique'` or use
-`pegdb explain-recoveries` instead. The field is additive — older
-consumers that filter on `kind` and ignore unknown fields keep
-working.
-
 **Partial-match handling:** when the parser doesn't reach `End` (the
-input doesn't fully match the grammar), `dump-captures` still emits
+input doesn't fully match the grammar), `captures dump` still emits
 all captures the VM produced over `input[..matched]` — that's the
 diagnostic surface a grammar author needs when their grammar is broken.
 A final stderr line of the form `partial-match <path-or-stdin>: matched M of L bytes`
@@ -178,48 +184,118 @@ grammar-compile error.
 **Examples:**
 
 ```
-$ pegdb dump-captures -g grammars/json.peg benches/fixtures/small.json | head -3
+$ pegdb captures dump -g grammars/json.peg benches/fixtures/small.json | head -3
 {"start":0,"end":1,"kind":"punctuation","depth":0,"literal":"{"}
 {"start":1,"end":5,"kind":"property","depth":0,"literal":"\"id\""}
 {"start":5,"end":6,"kind":"punctuation","depth":0,"literal":":"}
 
 # Find the capture covering byte 1234 in a Rust fixture:
-$ pegdb dump-captures -g grammars/rust.peg benches/fixtures/medium.rs \
+$ pegdb captures dump -g grammars/rust.peg benches/fixtures/medium.rs \
     | jq 'select(.start <= 1234 and .end > 1234)'
 
 # Pipeline-friendly: cap literals to 40 bytes for tabular previews:
-$ pegdb dump-captures -g grammars/rust.peg --max-literal=40 benches/fixtures/medium.rs \
+$ pegdb captures dump -g grammars/rust.peg --max-literal=40 benches/fixtures/medium.rs \
     | jq -r '[.start, .end, .kind, .literal] | @tsv' | column -t
 
 # Summarise distinct capture kinds emitted on a fixture:
-$ pegdb dump-captures -g grammars/rust.peg benches/fixtures/medium.rs \
+$ pegdb captures dump -g grammars/rust.peg benches/fixtures/medium.rs \
     | jq -r '.kind' | sort | uniq -c
-
-# Inspect the deepest rule reached at each recovery span:
-$ pegdb dump-captures -g grammars/rust.peg /tmp/broken.rs \
-    | jq 'select(.kind == "recovery") | .farthest_reach'
 ```
 
 ---
 
-## `explain-recoveries -g <grammar.peg> [<path>]`
+## `recoveries dump -g <grammar.peg> [--max-literal=N] [<path>]`
+
+Print one JSON object per surviving recovery span. The detail view
+for "what did the parser actually recover from, and where?"
+
+**Synopsis:** `pegdb recoveries dump -g <grammar.peg> [--max-literal=N] [<path>]`
+
+**Grammar / stdin:** same conventions as `captures dump`.
+
+**Output fields:**
+
+| Field        | Meaning                                                                              |
+|--------------|--------------------------------------------------------------------------------------|
+| `start`      | First byte of the span (inclusive).                                                  |
+| `end`        | One past the last byte of the span (exclusive).                                      |
+| `kind`       | Capture-kind name — always `"recovery"`. Emitted for symmetry with `captures dump`. |
+| `label`      | The catch's label name — author-supplied for `^label`, or `recovery_kind`'s intern for bare `*^`. |
+| `pos`        | Deepest byte offset reached by the failed iterations that contributed to this span. May sit anywhere relative to `end` — it's where the deepest dive happened, not where resync succeeded. |
+| `rule_stack` | The full trivia-trimmed call stack at the moment `pos` was set, root-to-leaf. Trailing frames reached from the reserved `trivia` rule are popped; the leaf is the deepest semantically interesting rule. |
+| `literal`    | The span's bytes as a JSON string (subject to `--max-literal=N`).                   |
+
+A *recovery span* is a maximal contiguous run of `kind == "recovery"`
+captures touching end-to-start (`cap[i].end == cap[i+1].start`). The
+`*^` loop emits one single-byte recovery capture per failed iteration;
+`recoveries dump` collapses adjacent ones into a single row carrying
+the argmax-`pos` diagnostic across the span.
+
+**`--max-literal=N`** truncates `literal` like `captures dump`.
+
+**Accounting cross-check.** When the capture-half and diagnostic-half
+of a recovery event disagree (a class of bug that previously hid in
+the gap between `captures dump`'s per-byte rows and the cluster
+summary), `recoveries dump` appends extra rows with a discriminating
+`sanity` key:
+
+| Sanity row                  | Meaning                                                                   |
+|-----------------------------|---------------------------------------------------------------------------|
+| `{"sanity":"orphan_capture",…}`    | A `kind == "recovery"` capture survived but had no matching diagnostic. |
+| `{"sanity":"orphan_diagnostic",…}` | A diagnostic survived but its `capture_index` doesn't point at any span. |
+
+Silent in well-formed runs — both lists are empty under correct VM
+state. Consumers that want only the data rows can filter with
+`jq 'select(has("sanity") | not)'`.
+
+**Partial-match handling and exit codes:** same as `captures dump`.
+
+**Examples:**
+
+```
+$ pegdb recoveries dump -g grammars/rust.peg /tmp/broken.rs
+{"start":42,"end":58,"kind":"recovery","label":"bad_column","pos":53,"rule_stack":["sql_file","sql_stmt","result_column"],"literal":"IN leaf AS leaf"}
+{"start":120,"end":121,"kind":"recovery","label":"recovery","pos":120,"rule_stack":["rust_file"],"literal":"@"}
+
+# Just the labels and where they fired:
+$ pegdb recoveries dump -g grammars/rust.peg /tmp/broken.rs \
+    | jq -r 'select(has("sanity") | not) | [.start, .end, .label, .rule_stack[-1]] | @tsv'
+
+# Catch any accounting drift in CI:
+$ pegdb recoveries dump -g grammars/rust.peg testdata/regression.rs \
+    | jq -e 'select(has("sanity"))' && echo "DRIFT" || echo "clean"
+```
+
+---
+
+## `recoveries explain -g <grammar.peg> [<path>]`
 
 Cluster `*^` recoveries by the rule-call stack reached during the
 failed iteration, sorted by count descending. Use to collapse
-thousands of `dump-captures` recovery rows into a handful of
-bug-class lines.
+thousands of recovery rows into a handful of bug-class lines.
 
-**Synopsis:** `pegdb explain-recoveries -g <grammar.peg> [<path>]`
+**Synopsis:** `pegdb recoveries explain -g <grammar.peg> [<path>]`
 
-**Grammar / stdin:** same conventions as `dump-captures` —
-`-g`/`--grammar`/`--grammar=<path>` required, stdin used when no
-fixture path is given.
+**Grammar / stdin:** same conventions as `captures dump`.
 
 **Output:** one cluster per line on stdout in the form
-`<count> recoveries — farthest reach ends at <rule>`, where `<rule>`
-is the leaf of the rule stack the failed iterations reached deepest.
+`<count> recoveries — farthest reach ends at <rule> (label: <name>)`,
+where `<rule>` is the leaf of the trivia-trimmed rule stack the failed
+iterations reached deepest, and `<name>` is the catch label.
 Clusters are sorted by `<count>` descending. When the parse produces
-no recoveries the single line `no recoveries` is emitted.
+no recoveries and no orphan rows, the single line `no recoveries` is
+emitted.
+
+**Accounting cross-check.** Same span-aggregation drift `recoveries
+dump` surfaces as JSONL `sanity` rows shows up here as
+`[sanity]`-prefixed lines appended after the cluster output:
+
+```
+[sanity] 2 orphan recovery captures (no diagnostic): bytes 42..43, 88..89
+[sanity] orphan diagnostic (no surviving capture): pos=57 rule=expression label=block_close
+```
+
+Silent in well-formed runs.
 
 **Exit codes:** 0 on full parse, 1 on partial parse, 2 on usage, 3 on
 grammar-compile error.
@@ -227,25 +303,23 @@ grammar-compile error.
 **Examples:**
 
 ```
-$ pegdb explain-recoveries -g grammars/rust.peg /tmp/broken.rs
-5 recoveries — farthest reach ends at rust_file
-4 recoveries — farthest reach ends at line_comment
-1 recoveries — farthest reach ends at ws
+$ pegdb recoveries explain -g grammars/rust.peg /tmp/broken.rs
+5 recoveries — farthest reach ends at rust_file (label: recovery)
+2 recoveries — farthest reach ends at block (label: block_close)
 
 # Pipe to `head` to see the top bug class only:
-$ pegdb explain-recoveries -g grammars/go.peg benches/fixtures/xlarge.go | head -1
+$ pegdb recoveries explain -g grammars/go.peg benches/fixtures/xlarge.go | head -1
 ```
 
-The cluster key is the full rule stack — two recoveries are in the
-same cluster iff they have identical `farthest_reach.rule_stack`
-values. Future work may add suffix-clustering (`--suffix=N` keeps
-only the last N frames as the key); v1 is full-stack only.
+The cluster key is the full trivia-trimmed rule stack plus the catch
+label — two recoveries are in the same cluster iff they reached the
+same leaf via the same intermediate frames under the same label.
 
 ---
 
 ## What lives in `--help` vs. this file
 
-Each binary's `--help` strings (top-level and per-subcommand) are
+Each binary's `--help` strings (top-level, per-noun, per-verb) are
 intentionally one-liner usage summaries. The full contract — JSONL
 field schemas, exit-code semantics, partial-match behavior — lives
 here. Keeps the binary's help output short and the contract in one
