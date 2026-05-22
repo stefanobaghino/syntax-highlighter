@@ -38,8 +38,8 @@ name2 <-  body2
   (no `trivia` injected inside this rule's body). The two compose:
   `~*name` and `*~name` are equivalent. `*trivia <- …` is the
   special case that disables auto-insertion grammar-wide.
-- **Position constraint:** when present, `trivia` is the first rule
-  in the file; `root` is first, or immediately after `trivia`. Other
+- **Position constraint:** `root` is always the first rule. When a
+  `trivia` rule is present it sits immediately after `root`. Other
   rules follow in any order.
 - **Identifiers** are ASCII `[A-Za-z_][A-Za-z0-9_]*`.
 - **Whitespace** (space, tab, newline, carriage return) separates

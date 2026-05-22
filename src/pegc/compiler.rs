@@ -13,9 +13,10 @@ pub enum CompileError {
     /// grammars in tests bypass the parser.
     MissingRootRule,
     /// Grammar defines `root` but not at the expected source position.
-    /// `expected_pos` is `0` when no `trivia` rule is present, `1` when
-    /// `trivia` is the first rule. Only raised for parsed grammars
-    /// (hand-built ones have no recorded source order).
+    /// `root` must always be the first rule (parse-time enforcement
+    /// also requires `trivia`, when present, to sit immediately
+    /// after). Only raised for parsed grammars (hand-built ones have
+    /// no recorded source order).
     RootRulePosition {
         expected_pos: usize,
         has_trivia: bool,
@@ -44,20 +45,8 @@ impl std::fmt::Display for CompileError {
             ),
             CompileError::RootRulePosition {
                 expected_pos: _,
-                has_trivia,
-            } => {
-                if *has_trivia {
-                    write!(
-                        f,
-                        "`root` must immediately follow `trivia` when both are defined"
-                    )
-                } else {
-                    write!(
-                        f,
-                        "`root` must be the first rule when no `trivia` rule is defined"
-                    )
-                }
-            }
+                has_trivia: _,
+            } => write!(f, "`root` must be the first rule"),
             CompileError::CannotInferBoundary { rule, label } => write!(
                 f,
                 "cannot infer boundary for `^^{label}` in rule `{rule}`: no following context. \

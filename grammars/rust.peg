@@ -24,9 +24,9 @@
 # malformed bodies (fn, match arm, etc.) resync at the closing `}`
 # instead of failing the enclosing item.
 
-trivia        <- (comment / \s)*
-
 root          <- (item)*^
+
+trivia        <- (comment / \s)*
 
 # --- Items -------------------------------------------------------------
 #

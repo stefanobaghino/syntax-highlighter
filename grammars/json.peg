@@ -1,8 +1,8 @@
 # JSON grammar with highlight annotations.
 
-trivia      <- \s*
-
 root        <- value
+
+trivia      <- \s*
 
 value       <- @string{string}
              / @number{number}

@@ -29,9 +29,9 @@
 # `^block_close` catch so malformed function bodies resync at the
 # closing `}` instead of failing the enclosing `fn_def`.
 
-trivia        <- (comment / \s)*
-
 root          <- (external_decl)*^
+
+trivia        <- (comment / \s)*
 
 # --- Preprocessor directives (absorbed as @comment) ------------------
 

@@ -24,9 +24,9 @@
 # malformed function/control-flow bodies resync at the closing `}`
 # instead of failing the enclosing declaration.
 
-trivia        <- (comment / \s)*
-
 root          <- package_clause import_decl* (top_decl)*^
+
+trivia        <- (comment / \s)*
 
 # --- Package / imports ----------------------------------------------
 

@@ -53,9 +53,9 @@
 
 # --- Top level --------------------------------------------------------
 
-trivia    <- (comment / \s)*
-
 root       <- (statement stmt_sep?)*^[;]
+
+trivia    <- (comment / \s)*
 stmt_sep   <- @punctuation{';'}
 statement       <- explain_stmt / statement_body
 statement_body  <- select_stmt

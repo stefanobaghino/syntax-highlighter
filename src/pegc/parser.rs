@@ -98,21 +98,19 @@ impl Grammar {
             return Err(CompileError::MissingRootRule);
         }
         // When the grammar was parsed from source, enforce that `root`
-        // sits at the start of the file (or immediately after `trivia`).
-        // Hand-built grammars from `Grammar::new` skip this — the
-        // ordered list is empty for them.
+        // is the first rule and `trivia` — when present — is the
+        // second. Hand-built grammars from `Grammar::new` skip this —
+        // the ordered list is empty for them.
         if !self.rule_order.is_empty() {
-            let has_trivia = self.rules.contains_key(TRIVIA_RULE);
             let root_pos = self
                 .rule_order
                 .iter()
                 .position(|n| n == ROOT_RULE)
                 .expect("ROOT_RULE presence checked above");
-            let expected_pos = if has_trivia { 1 } else { 0 };
-            if root_pos != expected_pos {
+            if root_pos != 0 {
                 return Err(CompileError::RootRulePosition {
-                    expected_pos,
-                    has_trivia,
+                    expected_pos: 0,
+                    has_trivia: self.rules.contains_key(TRIVIA_RULE),
                 });
             }
         }
@@ -224,14 +222,14 @@ impl<'a> Parser<'a> {
         }
         // Reserved-name enforcement for `trivia`'s position is parse-
         // time so the error points at the offending source location.
-        // `root`'s presence (and `root`'s position relative to
-        // `trivia`) is enforced by `Grammar::compile` — that lets
-        // AST-only parser tests build fixtures with arbitrary rule
-        // names without inventing a `root` placeholder.
+        // `root`'s presence (and the requirement that `root` itself
+        // sits at the top) is enforced by `Grammar::compile` — that
+        // lets AST-only parser tests build fixtures with arbitrary
+        // rule names without inventing a `root` placeholder.
         if let Some(trivia_pos) = order.iter().position(|n| n == TRIVIA_RULE) {
-            if trivia_pos != 0 {
+            if trivia_pos != 1 {
                 return Err(self.err(format!(
-                    "`{TRIVIA_RULE}` must be the first rule when present"
+                    "`{TRIVIA_RULE}` must be the second rule (immediately after `{ROOT_RULE}`) when present"
                 )));
             }
         }

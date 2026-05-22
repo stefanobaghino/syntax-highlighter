@@ -23,9 +23,9 @@
 # malformed declarations inside a rule/at-rule body resync at the
 # closing `}` instead of failing the enclosing statement.
 
-trivia        <- (comment / \s)*
-
 root          <- (statement)*^
+
+trivia        <- (comment / \s)*
 
 statement     <- at_rule
                 / rule

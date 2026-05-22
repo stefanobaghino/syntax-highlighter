@@ -29,9 +29,9 @@
 # function/control-flow bodies resync at the closing `}` instead of
 # failing the enclosing statement.
 
-trivia         <- (comment / \s)*
-
 root           <- (stmt)*^
+
+trivia         <- (comment / \s)*
 
 # --- Statements -------------------------------------------------------
 #

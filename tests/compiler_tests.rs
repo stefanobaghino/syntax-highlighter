@@ -1949,7 +1949,7 @@ fn trivia_root_marks_itself_and_no_root_leaves_bits_false() {
     // The trivia rule itself gets the bit when present. `*trivia`
     // disables auto-insertion, so explicit `trivia` calls inside
     // `root` remain in the body.
-    let with_root = parse("*trivia <- ' '*\nroot <- trivia 'x'")
+    let with_root = parse("root <- trivia 'x'\n*trivia <- ' '*")
         .expect("parse")
         .compile()
         .expect("compile");
@@ -1960,8 +1960,8 @@ fn trivia_root_marks_itself_and_no_root_leaves_bits_false() {
 #[test]
 fn trivia_cascades_to_transitive_callees() {
     let program = parse(
-        "*trivia <- ws\n\
-         root    <- trivia 'x'\n\
+        "root    <- trivia 'x'\n\
+         *trivia <- ws\n\
          ws      <- (comment / ' ')*\n\
          comment <- '#' (!'\\n' .)*",
     )
@@ -1980,8 +1980,8 @@ fn trivia_cascade_skips_catch_bearing_rules() {
     // in its body. The cascade pins it out so the catch's frame stays
     // visible in `pegdb recoveries explain`.
     let program = parse(
-        "*trivia <- (victim / ' ')*\n\
-         root    <- trivia 'x'\n\
+        "root    <- trivia 'x'\n\
+         *trivia <- (victim / ' ')*\n\
          victim  <- 'a' ^bad 'b'",
     )
     .expect("parse")
@@ -1999,8 +1999,8 @@ fn trivia_cascade_handles_recursion() {
     // Trivia subgraph with a self-cycle; fixpoint should terminate
     // and mark every reachable rule.
     let program = parse(
-        "*trivia <- ws\n\
-         root    <- trivia 'x'\n\
+        "root    <- trivia 'x'\n\
+         *trivia <- ws\n\
          ws      <- (ws / ' ')*",
     )
     .expect("parse")
@@ -2018,8 +2018,8 @@ fn auto_trivia_handles_inter_repeat_whitespace() {
     // already covers). Without the prepend, ` , 2 , 3` would fail on
     // the second iteration's leading space.
     let prog = parse(
-        "trivia <- ' '*\n\
-         root   <- 'x' (',' 'x')*",
+        "root   <- 'x' (',' 'x')*\n\
+         trivia <- ' '*",
     )
     .expect("parse")
     .compile()

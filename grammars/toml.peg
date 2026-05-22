@@ -25,9 +25,9 @@
 
 # Vertical whitespace: spaces/tabs/newlines plus comments. Each atom
 # consumes at least one byte, so the enclosing '*' cannot infinite-loop.
-*trivia       <- (comment / \s)*
-
 root          <- trivia (entry (entry_sep entry)*)? trivia
+
+*trivia       <- (comment / \s)*
 
 entry         <- array_of_tables_header / table_header / pair
 entry_sep     <- inline_space comment? \R trivia
