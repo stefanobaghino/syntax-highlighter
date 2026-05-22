@@ -542,6 +542,22 @@ Two rule names get compile-time treatment:
   when the diagnostic cascade is still wanted but the trivia rule's
   shape (e.g. line-sensitive newline handling) can't be auto-spliced.
 
+  *Why the per-iteration prepend matters.* The auto-insertion
+  splices `trivia` at every inter-item boundary of a `Sequence`, but
+  `Repeat` iterations have no parent `Sequence` to splice into —
+  inserting between items of the body covers one iteration's
+  interior, not the boundary between iteration N and iteration
+  N+1. So the rewriter also prepends a `trivia` call to the body of
+  every `Repeat` / `RepeatOne`. Consider `pair (',' pair)*` parsing
+  `pair, pair, pair` with spaces between every token. Without the
+  prepend, the Repeat body is `',' trivia pair`: the first
+  iteration's `,` matches at the position just after the outer
+  Sequence's `pair trivia` — but the second iteration starts on a
+  space, so its `,` rejects and the loop ends with one pair
+  missing. With the prepend the body becomes `trivia ',' trivia
+  pair`, and each iteration begins by consuming whatever
+  inter-iteration whitespace is sitting in front of it.
+
 ### `*name <-` — atomic-rule marker
 
 A `*` prefix on the rule name opts the rule out of `trivia`
