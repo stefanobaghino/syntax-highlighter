@@ -2049,9 +2049,9 @@ fn backslash_cap_r_matches_crlf_atomically() {
 }
 
 #[test]
-fn backslash_not_dot_matches_eof() {
-    // `\z` was removed; the post-migration spelling is the explicit
-    // `!.`. Verifies it succeeds at end-of-input and fails otherwise.
+fn not_any_matches_eof() {
+    // `!.` is the explicit end-of-input assertion. Verify it succeeds
+    // at end-of-input and fails otherwise.
     let g = parse("root <- !.").expect("parse");
     let prog = g.compile().expect("compile");
     let r = VM::new(&prog.code, b"").run();

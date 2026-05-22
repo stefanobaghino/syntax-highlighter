@@ -1011,20 +1011,6 @@ fn backslash_cap_r_linebreak_atom() {
 }
 
 #[test]
-fn backslash_z_atom_is_a_migration_error() {
-    // `\z` (the old end-of-input alias) was removed; the `root` rule's
-    // wrap supplies the same assertion automatically. The parser must
-    // raise a migration-flavored error so authors with old grammars
-    // see exactly where to remove it.
-    let err = parse_src("r <- \\z").unwrap_err();
-    assert!(
-        err.message.contains("\\z") && err.message.contains("removed"),
-        "expected migration error mentioning `\\z` was removed, got: {}",
-        err.message
-    );
-}
-
-#[test]
 fn backslash_d_in_class_unions_digits() {
     let g = parse("r <- [\\d_]");
     let mut s = CharSet::from_ranges(&[(b'0', b'9')]);
@@ -1078,16 +1064,6 @@ fn backslash_cap_r_in_class_rejected() {
     assert!(
         err.message.contains("multi-byte") && err.message.contains("\\R"),
         "expected tailored multi-byte error for \\R in class, got: {}",
-        err.message
-    );
-}
-
-#[test]
-fn backslash_z_in_class_rejected() {
-    let err = parse_src("r <- [\\z]").unwrap_err();
-    assert!(
-        err.message.contains("zero-width") && err.message.contains("\\z"),
-        "expected tailored zero-width error for \\z in class, got: {}",
         err.message
     );
 }

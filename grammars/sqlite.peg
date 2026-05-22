@@ -1,5 +1,4 @@
 # Full SQLite grammar with highlight annotations.
-# The first rule is the start rule.
 #
 # Scope: the SQLite dialect. SELECT (with WITH RECURSIVE, compound
 # SELECT, CTEs, window functions), DML (INSERT with UPSERT and

@@ -1,5 +1,13 @@
 # TOML v1.0 grammar with highlight annotations.
-# The first rule is the start rule.
+#
+# The grammar keeps the `*trivia` adapter so `trivia` auto-insertion
+# is disabled grammar-wide. TOML is line-oriented — entries are
+# newline-separated via `entry_sep`, key-value pairs can't span
+# lines, and arrays / inline tables have their own whitespace
+# disciplines. Auto-inserting a trivia rule that consumes newlines
+# would let `key\n= value` parse as a single pair. Whitespace is
+# threaded explicitly via `inline_space` (horizontal only) and the
+# `entry_sep` rule (newline-terminated).
 #
 # Capture kinds used (all present in src/highlight/theme.rs):
 #   comment, property, type, string, number, constant, punctuation.

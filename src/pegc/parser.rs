@@ -630,12 +630,6 @@ impl<'a> Parser<'a> {
     /// The six byte-set escapes are *also* recognized inside `[...]`
     /// by `parse_charclass`; `\R` is rejected there with a pointer
     /// back to this form.
-    ///
-    /// `\z` was a former alias for `!.` (end-of-input). It is now
-    /// rejected with a migration error: the `root` rule's wrap supplies
-    /// the same end-of-input assertion automatically, and the rare
-    /// non-`root` site that genuinely needs `!.` can spell it
-    /// out (`!.` is still a valid atom).
     fn parse_backslash_atom(&mut self) -> Result<Pattern, ParseError> {
         debug_assert_eq!(self.peek(), Some(b'\\'));
         self.pos += 1;
@@ -651,14 +645,6 @@ impl<'a> Parser<'a> {
                     Pattern::literal("\n"),
                     Pattern::literal("\r"),
                 ]))
-            }
-            Some(b'z') => {
-                self.pos += 1;
-                Err(self.err(
-                    "`\\z` was removed; the `root` rule asserts end-of-input automatically. \
-                     Drop it, or use `!.` directly when an inner rule needs the assertion"
-                        .into(),
-                ))
             }
             Some(c) => Err(self.err(format!(
                 "unknown atom '\\{}' (valid: \\d \\D \\s \\S \\h \\H \\R)",
@@ -714,10 +700,10 @@ impl<'a> Parser<'a> {
         while self.peek().is_some() && self.peek() != Some(b']') {
             // Class-shortcut path: `\d`, `\D`, `\s`, `\S`, `\h`, `\H`
             // expand into the surrounding set instead of contributing
-            // a single byte. `\R` and `\z` don't fit inside `[...]`
-            // (multi-byte / zero-width respectively) — reject with a
-            // pointer back to the top-level form. Other escapes fall
-            // through to the existing per-byte `parse_class_char`.
+            // a single byte. `\R` is multi-byte and doesn't fit inside
+            // `[...]` — reject with a pointer back to the top-level
+            // form. Other escapes fall through to the existing
+            // per-byte `parse_class_char`.
             if self.peek() == Some(b'\\') {
                 if let Some(c) = self.peek_at(1) {
                     if let Some(shortcut) = class_for_shortcut(c) {
@@ -739,11 +725,6 @@ impl<'a> Parser<'a> {
                     if c == b'R' {
                         return Err(self.err(
                             "'\\R' is a multi-byte sequence and can't appear in a character class — use \\R as a standalone atom".into(),
-                        ));
-                    }
-                    if c == b'z' {
-                        return Err(self.err(
-                            "'\\z' is a zero-width assertion and can't appear in a character class — use \\z as a standalone atom".into(),
                         ));
                     }
                 }

@@ -25,7 +25,22 @@ name  <-  body
 name2 <-  body2
 ```
 
-- The **first rule** is the start rule.
+- Every grammar must define a **`root` rule** — that's the entry
+  point. The compiler wraps its body as `trivia? root_body trivia? !.`
+  so end-of-input is implicit (any trailing junk fails the parse).
+- An optional **`trivia` rule** acts as the auto-insertion target:
+  when present, the compiler splices a `trivia` call between every
+  pair of consecutive items in non-atomic rule bodies, including
+  between iterations of `*` / `+`. Without a `trivia` rule, no
+  auto-insertion happens.
+- Rules may carry **prefix sigils**: `~name <-` for the intentional
+  leniency marker (see below) and `*name <-` for the atomic marker
+  (no `trivia` injected inside this rule's body). The two compose:
+  `~*name` and `*~name` are equivalent. `*trivia <- …` is the
+  special case that disables auto-insertion grammar-wide.
+- **Position constraint:** when present, `trivia` is the first rule
+  in the file; `root` is first, or immediately after `trivia`. Other
+  rules follow in any order.
 - **Identifiers** are ASCII `[A-Za-z_][A-Za-z0-9_]*`.
 - **Whitespace** (space, tab, newline, carriage return) separates
   tokens but is otherwise ignored.
@@ -60,7 +75,7 @@ the whole rule as intentionally lenient — see
 | `"abc"` / `'abc'` | Literal byte sequence. |
 | `[a-z]` / `[^"\\]` | Character class — a set of bytes; leading `^` negates. |
 | `.` | Any single byte (fails only at end of input). |
-| `\d \D \s \S \h \H \R \z` | Built-in character classes — see below. |
+| `\d \D \s \S \h \H \R` | Built-in character classes — see below. |
 | `ident` | Reference to another rule. |
 | `(...)` | Grouping — any pattern. |
 | `@name{...}` | Named capture — see below. |
@@ -91,7 +106,6 @@ fixed:
 | `\s` / `\S` | `[ \t\n\r]` / complement | ASCII whitespace and its complement. |
 | `\h` / `\H` | `[ \t]` / complement | Horizontal whitespace and its complement. |
 | `\R` | `'\r\n' / '\n' / '\r'` | Linebreak — CRLF matched atomically. |
-| `\z` | `!.` | End of input (zero-width). |
 
 The six byte-set escapes (`\d`, `\D`, `\s`, `\S`, `\h`, `\H`) are also
 recognized **inside `[...]`** and union into the surrounding class:
@@ -100,10 +114,9 @@ class shortcut cannot be a range bound — `[\d-z]` is a parse error
 because the shortcut is a set, not a single byte. A leading `^` still
 negates the whole class: `[^\d]` ≡ `\D`.
 
-`\R` and `\z` are atom-only. `\R` matches a multi-byte sequence (CRLF
-atomic) and `\z` is a zero-width assertion — neither has a meaningful
-shape inside `[...]`, and both are rejected with a tailored error
-pointing back at the top-level form.
+`\R` is atom-only: it matches a multi-byte sequence (CRLF atomic) and
+has no meaningful shape inside `[...]`, so it's rejected there with a
+tailored error pointing back at the top-level form.
 
 Deliberately excluded: `\w` / `\W` (word character varies meaningfully
 per language — Rust raw idents, SQL `$`, CSS hyphens), `\v` / `\V`
@@ -490,21 +503,29 @@ recorded in adjacent comments and unenforced by the lint; see
 
 ### Reserved rule names
 
-The compiler treats one rule name specially:
+Two rule names get compile-time treatment:
 
-- **`trivia`** — if a grammar defines a rule with this name, every
-  rule transitively reachable from it through the call graph is
-  marked as syntactic trivia (whitespace, comments). Runtime
-  semantics are unchanged; the bit surfaces in
-  `Program::rule_is_trivia` and `pegdb recoveries explain` pops
-  trailing trivia frames from the rule_stack when picking the
-  displayed leaf of each cluster.
+- **`root`** — the start rule (mandatory). The compiler wraps its
+  body as `trivia? root_body trivia? !.` so end-of-input is always
+  asserted, and a `trivia` rule (when present and non-atomic) pads
+  the leading and trailing whitespace. The wrap means a grammar
+  source like `root <- value` parses whole inputs, not just longest
+  prefixes — the implicit `!.` rejects trailing junk.
 
-  The cascade is structural — only one annotation per grammar (the
-  `trivia` rule's body lists the entry points), no per-rule keyword,
-  no surface markup. Rules whose body contains a recovery catch
-  (`^lbl`, `^^lbl`, `*^`) are pinned out of the cascade so the
-  catch's diagnostic frame stays visible.
+- **`trivia`** — the optional auto-insertion target. When defined
+  *and* non-atomic, the compiler injects a call to `trivia` between
+  every pair of consecutive items in every non-atomic rule's
+  `Sequence`, plus prepends one to each iteration of `*` / `+`.
+  This replaces the explicit `ws` / `spacing` calls that used to
+  appear between tokens.
+
+  The rule also seeds the diagnostic *trivia cascade*: every rule
+  transitively reachable from `trivia` through the call graph gets
+  `Program::rule_is_trivia = true`, and `pegdb recoveries explain`
+  pops trailing trivia frames from the rule_stack when picking the
+  displayed leaf of each cluster. Rules whose body contains a
+  recovery catch (`^lbl`, `^^lbl`, `*^`) are pinned out of the
+  cascade so the catch's diagnostic frame stays visible.
 
   Indentation-sensitive grammars (`#43`) keep significant-whitespace
   rules outside the `trivia` subgraph; only ignorable bytes go in.
@@ -514,8 +535,32 @@ The compiler treats one rule name specially:
   comment       <- @comment{'//' .. '\n' / '/*' ..= '*/'}
   ```
 
-  Grammars without a `trivia` rule leave all trivia bits false;
-  pegdb's leaf-display still works, it just won't trim.
+  Grammars without a `trivia` rule (e.g. indent-sensitive shapes)
+  get no auto-insertion and no trivia-padding wrap on `root`; the
+  EOF assertion is still applied. `*trivia <- …` disables
+  auto-insertion grammar-wide without removing the rule — useful
+  when the diagnostic cascade is still wanted but the trivia rule's
+  shape (e.g. line-sensitive newline handling) can't be auto-spliced.
+
+### `*name <-` — atomic-rule marker
+
+A `*` prefix on the rule name opts the rule out of `trivia`
+auto-insertion: the rewriter walks the body but does not splice
+`trivia` between `Sequence` items or prepend one to `Repeat`
+iterations. The two prefix sigils compose: `~*name` and `*~name`
+are both valid.
+
+```peg
+*string_lit   <- '"' (str_escape / !'"' .)* '"'
+*ident        <- [A-Za-z_] [A-Za-z0-9_]*
+```
+
+Used on token-shape rules — string / number / char literals,
+identifiers, multi-byte keyword spellings — where injecting trivia
+between adjacent bytes would let whitespace appear inside the
+token. The atomic boundary stops at `NonTerminal` calls: a
+non-atomic rule called from inside an atomic body still gets
+auto-insertion in its own body.
 
 ### Reserved syntax
 
