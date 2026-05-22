@@ -54,7 +54,7 @@
 
 # --- Top level --------------------------------------------------------
 
-sql_file   <- (ws statement stmt_sep?)*^[;] ws !.
+sql_file   <- (ws statement stmt_sep?)*^[;] ws \z
 stmt_sep   <- ws @punctuation{';'} ws
 statement       <- explain_stmt / statement_body
 statement_body  <- select_stmt
@@ -111,7 +111,7 @@ result_column_boundary <- @punctuation{','} / @punctuation{')'} / @punctuation{'
                         / kw_from / kw_where / kw_group / kw_having
                         / kw_order / kw_limit / kw_offset / kw_window
                         / kw_union / kw_intersect / kw_except
-                        / !.
+                        / \z
 table_star     <- @type{bare_ident_nonkw} @punctuation{'.'} @operator{'*'}
 aliased_expr   <- expr (ws kw_as ws @variable{bare_ident_nonkw}
                       / ws @variable{bare_ident_nonkw})?
@@ -152,7 +152,7 @@ where_clause_boundary <- @punctuation{')'} / @punctuation{';'}
                        / kw_group / kw_having / kw_order / kw_limit
                        / kw_offset / kw_window / kw_returning
                        / kw_union / kw_intersect / kw_except
-                       / !.
+                       / \z
 group_clause   <- kw_group ws kw_by ws expr (ws @punctuation{','} ws expr)*
 having_clause  <- kw_having ws expr
 
@@ -514,21 +514,21 @@ null_body   <- [nN][uU][lL][lL]
 bool_body   <- [tT][rR][uU][eE] / [fF][aA][lL][sS][eE]
 
 blob_lit    <- @string{blob_body}
-blob_body   <- [xX] "'" [0-9a-fA-F]* "'"
+blob_body   <- [xX] "'" [\da-fA-F]* "'"
 string_lit  <- @string{string_body}
 string_body <- "'" ("''" / !"'" .)* "'"
 
-number_body <- '0x' [0-9a-fA-F]+ !ident_char
+number_body <- '0x' [\da-fA-F]+ !ident_char
              / float_body
              / int_body
-float_body  <- [0-9]+ '.' [0-9]+ ([eE] [+\-]? [0-9]+)?
-             / [0-9]+ [eE] [+\-]? [0-9]+
-int_body    <- [0-9]+
+float_body  <- \d+ '.' \d+ ([eE] [+\-]? \d+)?
+             / \d+ [eE] [+\-]? \d+
+int_body    <- \d+
 
 # Bind parameters are placeholders bound at execute time — lexically
 # variables, not named constants.
 bind_param  <- @variable{bind_body}
-bind_body   <- '?' [0-9]*
+bind_body   <- '?' \d*
              / [:@$] ident_start ident_cont*
 
 # --- Identifiers ------------------------------------------------------
@@ -545,8 +545,8 @@ quoted_ident      <- double_quoted_id / backtick_id / bracket_id
 
 bare_raw          <- ident_start ident_cont*
 ident_start       <- [a-zA-Z_]
-ident_cont        <- [a-zA-Z0-9_]
-ident_char        <- [a-zA-Z0-9_]
+ident_cont        <- [a-zA-Z\d_]
+ident_char        <- [a-zA-Z\d_]
 
 double_quoted_id  <- '"' ('""' / !'"' !linebreak .)* '"'
 backtick_id       <- '`' ('``' / !'`' !linebreak .)* '`'
@@ -997,9 +997,9 @@ keyword_word <-
 
 trivia        <- ws
 
-ws            <- (comment / [ \t\n\r])*
+ws            <- (comment / \s)*
 comment       <- line_comment / block_comment
 line_comment  <- @comment{'--' .. linebreak}
 block_comment <- @comment{'/*' block_body '*/'}
 block_body    <- .. '*/'
-linebreak     <- '\r'? '\n'
+linebreak     <- \R

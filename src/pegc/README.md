@@ -60,6 +60,7 @@ the whole rule as intentionally lenient — see
 | `"abc"` / `'abc'` | Literal byte sequence. |
 | `[a-z]` / `[^"\\]` | Character class — a set of bytes; leading `^` negates. |
 | `.` | Any single byte (fails only at end of input). |
+| `\d \D \s \S \h \H \R \z` | Built-in character classes — see below. |
 | `ident` | Reference to another rule. |
 | `(...)` | Grouping — any pattern. |
 | `@name{...}` | Named capture — see below. |
@@ -67,6 +68,8 @@ the whole rule as intentionally lenient — see
 **String literals** use either `"..."` or `'...'`. Recognized escapes
 (inside strings and character classes): `\n`, `\r`, `\t`, `\0`, `\\`,
 `\'`, `\"`, `\]`, `\[`, `\-`, `\/`. Unknown escapes are a parse error.
+The backslash-letter atoms below (`\d`, `\R`, etc.) are *not* string
+escapes — `'\d'` keeps the `unknown escape` error.
 
 **Character classes** use the standard `[lo-hi]` range syntax. A `-`
 immediately before the closing `]` is a literal hyphen. Ranges with
@@ -75,6 +78,38 @@ immediately before the closing `]` is a literal hyphen. Ranges with
 The grammar is **byte-oriented** — no UTF-8 decoding happens at any
 stage. `[a-z]` is the ASCII byte range, `.` is one byte, not one code
 point.
+
+### Built-in character classes
+
+Eight regex-style one-letter escapes are atom-level shortcuts for the
+byte sets and idioms that recur across the corpus. ASCII semantics are
+fixed:
+
+| Escape | Equivalent | Notes |
+|---|---|---|
+| `\d` / `\D` | `[0-9]` / `[^0-9]` | Decimal digit and its complement. |
+| `\s` / `\S` | `[ \t\n\r]` / complement | ASCII whitespace and its complement. |
+| `\h` / `\H` | `[ \t]` / complement | Horizontal whitespace and its complement. |
+| `\R` | `'\r\n' / '\n' / '\r'` | Linebreak — CRLF matched atomically. |
+| `\z` | `!.` | End of input (zero-width). |
+
+The six byte-set escapes (`\d`, `\D`, `\s`, `\S`, `\h`, `\H`) are also
+recognized **inside `[...]`** and union into the surrounding class:
+`[\da-fA-F]` is the hex-digit set, `[\d_]` is digit-or-underscore. A
+class shortcut cannot be a range bound — `[\d-z]` is a parse error
+because the shortcut is a set, not a single byte. A leading `^` still
+negates the whole class: `[^\d]` ≡ `\D`.
+
+`\R` and `\z` are atom-only. `\R` matches a multi-byte sequence (CRLF
+atomic) and `\z` is a zero-width assertion — neither has a meaningful
+shape inside `[...]`, and both are rejected with a tailored error
+pointing back at the top-level form.
+
+Deliberately excluded: `\w` / `\W` (word character varies meaningfully
+per language — Rust raw idents, SQL `$`, CSS hyphens), `\v` / `\V`
+(PCRE vertical-whitespace splits `\r\n`; `\R` is the right primitive),
+and any hex-digit shortcut (would collide with `\h`; `[\da-fA-F]`
+covers the case in one extra range).
 
 ### Postfix operators
 

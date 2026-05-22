@@ -443,6 +443,7 @@ impl<'a> Parser<'a> {
                 Ok(Pattern::AnyChar)
             }
             Some(b'@') => self.parse_capture(),
+            Some(b'\\') => self.parse_backslash_atom(),
             Some(c) if is_ident_start(c) => {
                 // Disambiguation against `name <- ...` is handled by at_prefix_start.
                 let name = self.parse_ident()?;
@@ -450,6 +451,49 @@ impl<'a> Parser<'a> {
             }
             Some(c) => Err(self.err(format!("unexpected '{}'", c as char))),
             None => Err(self.err("unexpected end of input".into())),
+        }
+    }
+
+    /// Parse a backslash-letter atom. The eight one-letter escapes are
+    /// the regex-style character-class family:
+    ///
+    /// - `\d` / `\D`: `[0-9]` / its complement.
+    /// - `\s` / `\S`: `[ \t\n\r]` / its complement.
+    /// - `\h` / `\H`: `[ \t]` / its complement.
+    /// - `\R`: ordered choice `'\r\n' / '\n' / '\r'` (CRLF atomic).
+    /// - `\z`: end of input — `!.`.
+    ///
+    /// ASCII-only and byte-oriented, matching the rest of the engine.
+    /// These are *atom-level* escapes; they are not recognized inside
+    /// string literals (`'\d'` keeps today's `unknown escape` error).
+    /// The six byte-set escapes are *also* recognized inside `[...]`
+    /// by `parse_charclass`; `\R` and `\z` are rejected there with a
+    /// pointer back to this form.
+    fn parse_backslash_atom(&mut self) -> Result<Pattern, ParseError> {
+        debug_assert_eq!(self.peek(), Some(b'\\'));
+        self.pos += 1;
+        match self.peek() {
+            Some(c) if class_for_shortcut(c).is_some() => {
+                self.pos += 1;
+                Ok(Pattern::CharClass(class_for_shortcut(c).unwrap()))
+            }
+            Some(b'R') => {
+                self.pos += 1;
+                Ok(Pattern::OrderedChoice(vec![
+                    Pattern::literal("\r\n"),
+                    Pattern::literal("\n"),
+                    Pattern::literal("\r"),
+                ]))
+            }
+            Some(b'z') => {
+                self.pos += 1;
+                Ok(Pattern::NotPredicate(Box::new(Pattern::AnyChar)))
+            }
+            Some(c) => Err(self.err(format!(
+                "unknown atom '\\{}' (valid: \\d \\D \\s \\S \\h \\H \\R \\z)",
+                c as char
+            ))),
+            None => Err(self.err("unterminated escape at top level".into())),
         }
     }
 
@@ -497,6 +541,42 @@ impl<'a> Parser<'a> {
         };
         let mut set = CharSet::empty();
         while self.peek().is_some() && self.peek() != Some(b']') {
+            // Class-shortcut path: `\d`, `\D`, `\s`, `\S`, `\h`, `\H`
+            // expand into the surrounding set instead of contributing
+            // a single byte. `\R` and `\z` don't fit inside `[...]`
+            // (multi-byte / zero-width respectively) — reject with a
+            // pointer back to the top-level form. Other escapes fall
+            // through to the existing per-byte `parse_class_char`.
+            if self.peek() == Some(b'\\') {
+                if let Some(c) = self.peek_at(1) {
+                    if let Some(shortcut) = class_for_shortcut(c) {
+                        self.pos += 2;
+                        // Shortcuts can't form ranges: `[\d-z]` is
+                        // ambiguous (the shortcut is a set, not a
+                        // bound) and rejected explicitly. A trailing
+                        // `-]` is still a literal dash, same as the
+                        // single-byte path.
+                        if self.peek() == Some(b'-') && self.peek_at(1) != Some(b']') {
+                            return Err(self.err(format!(
+                                "character-class range can't start with a shortcut '\\{}' (shortcuts are sets, not bounds)",
+                                c as char
+                            )));
+                        }
+                        set = set.union(&shortcut);
+                        continue;
+                    }
+                    if c == b'R' {
+                        return Err(self.err(
+                            "'\\R' is a multi-byte sequence and can't appear in a character class — use \\R as a standalone atom".into(),
+                        ));
+                    }
+                    if c == b'z' {
+                        return Err(self.err(
+                            "'\\z' is a zero-width assertion and can't appear in a character class — use \\z as a standalone atom".into(),
+                        ));
+                    }
+                }
+            }
             let lo = self.parse_class_char()?;
             // Range form `lo-hi` (but `-` at end is literal; require non-`]` after `-`)
             if self.peek() == Some(b'-') && self.peek_at(1) != Some(b']') {
@@ -684,7 +764,26 @@ fn is_ident_cont(c: u8) -> bool {
 }
 
 fn is_atom_start(c: u8) -> bool {
-    matches!(c, b'(' | b'"' | b'\'' | b'[' | b'.' | b'@' | b'!' | b'&') || is_ident_start(c)
+    matches!(
+        c,
+        b'(' | b'"' | b'\'' | b'[' | b'.' | b'@' | b'!' | b'&' | b'\\'
+    ) || is_ident_start(c)
+}
+
+/// Map a backslash-letter shortcut to its byte set. Returns `None` for
+/// any byte that isn't one of the byte-set shortcuts (`d`, `D`, `s`,
+/// `S`, `h`, `H`). The multi-byte (`R`) and zero-width (`z`) shortcuts
+/// are handled separately by their respective parse arms.
+fn class_for_shortcut(c: u8) -> Option<CharSet> {
+    match c {
+        b'd' => Some(CharSet::from_ranges(&[(b'0', b'9')])),
+        b'D' => Some(CharSet::from_ranges(&[(b'0', b'9')]).negate()),
+        b's' => Some(CharSet::from_bytes(b" \t\n\r")),
+        b'S' => Some(CharSet::from_bytes(b" \t\n\r").negate()),
+        b'h' => Some(CharSet::from_bytes(b" \t")),
+        b'H' => Some(CharSet::from_bytes(b" \t").negate()),
+        _ => None,
+    }
 }
 
 /// Lower `.. S` (skip-until exclusive) to `(!S .)*`. The stop pattern

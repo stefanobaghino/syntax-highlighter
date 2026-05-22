@@ -280,18 +280,18 @@ char_body     <- ('L' / 'u' / 'U')? "'" (char_escape / !"'" .)* "'"
 char_escape   <- '\\' .
 
 number_lit    <- @number{num_body}
-num_body      <- '0x' hex_digits ('.' hex_digits?)? ([pP] [+\-]? [0-9]+)? int_suffix?
-               / '0X' hex_digits ('.' hex_digits?)? ([pP] [+\-]? [0-9]+)? int_suffix?
+num_body      <- '0x' hex_digits ('.' hex_digits?)? ([pP] [+\-]? \d+)? int_suffix?
+               / '0X' hex_digits ('.' hex_digits?)? ([pP] [+\-]? \d+)? int_suffix?
                / '0b' bin_digits int_suffix?
                / '0' [0-7]* int_suffix?
                / digit_seq '.' digit_seq? exp_part? float_suffix?
                / '.' digit_seq exp_part? float_suffix?
                / digit_seq exp_part float_suffix?
                / digit_seq int_suffix?
-digit_seq     <- [0-9] [0-9']*
-hex_digits    <- [0-9a-fA-F] [0-9a-fA-F']*
+digit_seq     <- \d [\d']*
+hex_digits    <- [\da-fA-F] [\da-fA-F']*
 bin_digits    <- [01] [01']*
-exp_part      <- [eE] [+\-]? [0-9]+
+exp_part      <- [eE] [+\-]? \d+
 int_suffix    <- ('ULL' / 'ull' / 'LL' / 'll' / 'UL' / 'ul' / 'LU' / 'lu' / 'U' / 'u' / 'L' / 'l')
 float_suffix  <- [fFlL]
 
@@ -299,7 +299,7 @@ float_suffix  <- [fFlL]
 
 ident         <- !reserved ident_start ident_body*
 ident_start   <- [A-Za-z_]
-ident_body    <- [A-Za-z0-9_]
+ident_body    <- [A-Za-z\d_]
 
 # Reserved keywords that must not be matched as identifiers.
 reserved      <- reserved_word !ident_body
@@ -320,4 +320,4 @@ block_comment <- '/*' ..= '*/'
 
 trivia        <- ws
 
-ws            <- (comment / [ \t\r\n])*
+ws            <- (comment / \s)*

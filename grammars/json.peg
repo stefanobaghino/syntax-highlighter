@@ -1,7 +1,7 @@
 # JSON grammar with highlight annotations.
 # The first rule is the start rule.
 
-json        <- spacing value spacing !.
+json        <- spacing value spacing \z
 
 value       <- @string{string}
              / @number{number}
@@ -27,15 +27,15 @@ string_char <- '\\' ["\\/bfnrt]
              / [^"\\]
 
 number      <- '-'? int frac? exp?
-int         <- '0' / [1-9] [0-9]*
-frac        <- '.' [0-9]+
-exp         <- [eE] [+\-]? [0-9]+
+int         <- '0' / [1-9] \d*
+frac        <- '.' \d+
+exp         <- [eE] [+\-]? \d+
 
 true_lit    <- 'true'
 false_lit   <- 'false'
 null_lit    <- 'null'
 
-hex         <- [0-9a-fA-F]
+hex         <- [\da-fA-F]
 trivia      <- spacing
 
-spacing     <- [ \t\n\r]*
+spacing     <- \s*

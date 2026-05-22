@@ -807,6 +807,171 @@ fn dash_in_class_at_end_is_literal() {
 }
 
 #[test]
+fn backslash_d_atom() {
+    let g = parse("r <- \\d");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::CharClass(CharSet::from_ranges(&[(b'0', b'9')]))
+    );
+}
+
+#[test]
+fn backslash_d_negated_atom() {
+    let g = parse("r <- \\D");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::CharClass(CharSet::from_ranges(&[(b'0', b'9')]).negate())
+    );
+}
+
+#[test]
+fn backslash_s_atom() {
+    let g = parse("r <- \\s");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::CharClass(CharSet::from_bytes(b" \t\n\r"))
+    );
+}
+
+#[test]
+fn backslash_s_negated_atom() {
+    let g = parse("r <- \\S");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::CharClass(CharSet::from_bytes(b" \t\n\r").negate())
+    );
+}
+
+#[test]
+fn backslash_h_atom() {
+    let g = parse("r <- \\h");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::CharClass(CharSet::from_bytes(b" \t"))
+    );
+}
+
+#[test]
+fn backslash_h_negated_atom() {
+    let g = parse("r <- \\H");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::CharClass(CharSet::from_bytes(b" \t").negate())
+    );
+}
+
+#[test]
+fn backslash_cap_r_linebreak_atom() {
+    let g = parse("r <- \\R");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::OrderedChoice(vec![
+            Pattern::literal("\r\n"),
+            Pattern::literal("\n"),
+            Pattern::literal("\r"),
+        ])
+    );
+}
+
+#[test]
+fn backslash_z_atom() {
+    let g = parse("r <- \\z");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::NotPredicate(Box::new(Pattern::AnyChar))
+    );
+}
+
+#[test]
+fn backslash_d_in_class_unions_digits() {
+    let g = parse("r <- [\\d_]");
+    let mut s = CharSet::from_ranges(&[(b'0', b'9')]);
+    s.add(b'_');
+    assert_eq!(g.rules["r"], Pattern::CharClass(s));
+}
+
+#[test]
+fn backslash_d_in_class_with_range_neighbor() {
+    // Mixed class: `[\da-fA-F]` is the hex-digit set.
+    let g = parse("r <- [\\da-fA-F]");
+    let mut s = CharSet::from_ranges(&[(b'0', b'9')]);
+    s.add_range(b'a', b'f');
+    s.add_range(b'A', b'F');
+    assert_eq!(g.rules["r"], Pattern::CharClass(s));
+}
+
+#[test]
+fn backslash_s_in_class_unions_whitespace() {
+    let g = parse("r <- [\\sX]");
+    let mut s = CharSet::from_bytes(b" \t\n\r");
+    s.add(b'X');
+    assert_eq!(g.rules["r"], Pattern::CharClass(s));
+}
+
+#[test]
+fn backslash_d_in_negated_class() {
+    // `[^\d]` is the complement of `\d`, i.e. `\D`.
+    let g = parse("r <- [^\\d]");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::CharClass(CharSet::from_ranges(&[(b'0', b'9')]).negate())
+    );
+}
+
+#[test]
+fn backslash_d_in_string_still_errors() {
+    // String literals keep their byte-only escape contract; `\d` is
+    // not a single byte, so it's still an unknown string escape.
+    let err = parse_src("r <- '\\d'").unwrap_err();
+    assert!(
+        err.message.contains("unknown escape"),
+        "expected unknown-escape error in string, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn backslash_cap_r_in_class_rejected() {
+    let err = parse_src("r <- [\\R]").unwrap_err();
+    assert!(
+        err.message.contains("multi-byte") && err.message.contains("\\R"),
+        "expected tailored multi-byte error for \\R in class, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn backslash_z_in_class_rejected() {
+    let err = parse_src("r <- [\\z]").unwrap_err();
+    assert!(
+        err.message.contains("zero-width") && err.message.contains("\\z"),
+        "expected tailored zero-width error for \\z in class, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn backslash_d_range_start_rejected() {
+    // Shortcuts are sets, not bounds — `[\d-z]` is meaningless.
+    let err = parse_src("r <- [\\d-z]").unwrap_err();
+    assert!(
+        err.message.contains("range can't start with a shortcut"),
+        "expected shortcut-in-range error, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn unknown_backslash_atom_errors() {
+    let err = parse_src("r <- \\q").unwrap_err();
+    assert!(
+        err.message.contains("unknown atom") && err.message.contains("\\q"),
+        "expected unknown-atom error, got: {}",
+        err.message
+    );
+}
+
+#[test]
 fn end_to_end_grammar_compile_run() {
     use syntax_highlighter::pegvm::VM;
     let g = parse("number <- [0-9]+");

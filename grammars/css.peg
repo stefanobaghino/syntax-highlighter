@@ -126,16 +126,16 @@ url_body      <- .. ')'
 
 hex_color     <- @constant{hex_body}
 hex_body      <- '#' hex_digit+
-hex_digit     <- [0-9a-fA-F]
+hex_digit     <- [\da-fA-F]
 
 number_with_unit <- @number{num_body}
 
 # Trailing `num_unit?` leniency: unitless numbers stop at the next non-unit byte; outer recovery handles malformed values.
 ~num_body     <- sign? (num_float / num_int) num_unit?
 sign          <- [+\-]
-num_int       <- [0-9]+
-num_float     <- [0-9]* '.' [0-9]+
-                / [0-9]+ '.' [0-9]*
+num_int       <- \d+
+num_float     <- \d* '.' \d+
+                / \d+ '.' \d*
 num_unit      <- '%'
                 / ident
 
@@ -150,7 +150,7 @@ important_flag <- '!important'
 
 ident         <- ident_start ident_body*
 ident_start   <- [A-Za-z_\-]
-ident_body    <- [A-Za-z0-9_\-]
+ident_body    <- [A-Za-z\d_\-]
 
 # --- Whitespace / comments -----------------------------------------
 #
@@ -161,4 +161,4 @@ block_comment <- '/*' ..= '*/'
 
 trivia        <- ws
 
-ws            <- (comment / [ \t\r\n])*
+ws            <- (comment / \s)*
