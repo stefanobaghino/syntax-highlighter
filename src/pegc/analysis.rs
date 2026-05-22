@@ -9,7 +9,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use super::compiler::CompileError;
 use super::parser::Grammar;
-use super::pattern::Pattern;
+use super::pattern::{Pattern, Span};
 use crate::pegvm::CharSet;
 
 /// Returns the set of rule names that are left-recursive — both direct
@@ -75,19 +75,19 @@ pub(crate) fn compute_nullable(rules: &HashMap<String, Pattern>) -> HashSet<Stri
 
 pub(crate) fn pattern_nullable(pat: &Pattern, nullable: &HashSet<String>) -> bool {
     match pat {
-        Pattern::Literal(bytes) => bytes.is_empty(),
-        Pattern::CharClass(_) | Pattern::AnyChar => false,
-        Pattern::Sequence(items) => items.iter().all(|p| pattern_nullable(p, nullable)),
-        Pattern::OrderedChoice(items) => items.iter().any(|p| pattern_nullable(p, nullable)),
-        Pattern::Repeat(_) | Pattern::Optional(_) => true,
-        Pattern::RepeatOne(inner) => pattern_nullable(inner, nullable),
+        Pattern::Literal { bytes, .. } => bytes.is_empty(),
+        Pattern::CharClass { .. } | Pattern::AnyChar { .. } => false,
+        Pattern::Sequence { items, .. } => items.iter().all(|p| pattern_nullable(p, nullable)),
+        Pattern::OrderedChoice { alts, .. } => alts.iter().any(|p| pattern_nullable(p, nullable)),
+        Pattern::Repeat { .. } | Pattern::Optional { .. } => true,
+        Pattern::RepeatOne { inner, .. } => pattern_nullable(inner, nullable),
         // Predicates consume no input, so they always succeed-or-fail
         // without advancing — treated as nullable for sequence
         // propagation. They can still left-recurse: !A α matches only
         // if A would fail at sp, and A's evaluation can left-recurse
         // through itself just like a direct call.
-        Pattern::NotPredicate(_) | Pattern::AndPredicate(_) => true,
-        Pattern::Capture(_, inner) => pattern_nullable(inner, nullable),
+        Pattern::NotPredicate { .. } | Pattern::AndPredicate { .. } => true,
+        Pattern::Capture { inner, .. } => pattern_nullable(inner, nullable),
         // Catch succeeds-as-inner when inner succeeds, or
         // succeeds-as-recovery when inner fails. The recovery branch
         // only runs on inner's failure, so it never contributes a
@@ -95,13 +95,13 @@ pub(crate) fn pattern_nullable(pat: &Pattern, nullable: &HashSet<String>) -> boo
         // inner.
         Pattern::Catch { inner, .. } => pattern_nullable(inner, nullable),
         // `~` is runtime-transparent.
-        Pattern::Lenient(inner) => pattern_nullable(inner, nullable),
+        Pattern::Lenient { inner, .. } => pattern_nullable(inner, nullable),
         // Pre-resolution placeholder for `^^lbl`. Nullability follows
         // inner just like `Catch` — the eventual recovery body
         // `(!B .)*` is always nullable but only contributes on
         // failure, same shape as `Catch`'s analysis.
         Pattern::InferBoundaryCatch { inner, .. } => pattern_nullable(inner, nullable),
-        Pattern::NonTerminal(name) => nullable.contains(name),
+        Pattern::NonTerminal { name, .. } => nullable.contains(name),
     }
 }
 
@@ -122,8 +122,8 @@ fn compute_first_calls(
 
 fn collect_first_calls(pat: &Pattern, nullable: &HashSet<String>, out: &mut HashSet<String>) {
     match pat {
-        Pattern::Literal(_) | Pattern::CharClass(_) | Pattern::AnyChar => {}
-        Pattern::Sequence(items) => {
+        Pattern::Literal { .. } | Pattern::CharClass { .. } | Pattern::AnyChar { .. } => {}
+        Pattern::Sequence { items, .. } => {
             for it in items {
                 collect_first_calls(it, nullable, out);
                 if !pattern_nullable(it, nullable) {
@@ -131,17 +131,17 @@ fn collect_first_calls(pat: &Pattern, nullable: &HashSet<String>, out: &mut Hash
                 }
             }
         }
-        Pattern::OrderedChoice(items) => {
-            for it in items {
+        Pattern::OrderedChoice { alts, .. } => {
+            for it in alts {
                 collect_first_calls(it, nullable, out);
             }
         }
-        Pattern::Repeat(inner)
-        | Pattern::RepeatOne(inner)
-        | Pattern::Optional(inner)
-        | Pattern::NotPredicate(inner)
-        | Pattern::AndPredicate(inner)
-        | Pattern::Capture(_, inner) => collect_first_calls(inner, nullable, out),
+        Pattern::Repeat { inner, .. }
+        | Pattern::RepeatOne { inner, .. }
+        | Pattern::Optional { inner, .. }
+        | Pattern::NotPredicate { inner, .. }
+        | Pattern::AndPredicate { inner, .. }
+        | Pattern::Capture { inner, .. } => collect_first_calls(inner, nullable, out),
         Pattern::Catch {
             inner, recovery, ..
         } => {
@@ -154,13 +154,13 @@ fn collect_first_calls(pat: &Pattern, nullable: &HashSet<String>, out: &mut Hash
             collect_first_calls(inner, nullable, out);
             collect_first_calls(recovery, nullable, out);
         }
-        Pattern::Lenient(inner) => collect_first_calls(inner, nullable, out),
+        Pattern::Lenient { inner, .. } => collect_first_calls(inner, nullable, out),
         // Pre-resolution placeholder for `^^lbl`. Only the inner can
         // route a first-call edge — the synthesized recovery
         // `(!B .)*` has no non-terminals other than B, and the
         // resolver hasn't picked B yet.
         Pattern::InferBoundaryCatch { inner, .. } => collect_first_calls(inner, nullable, out),
-        Pattern::NonTerminal(name) => {
+        Pattern::NonTerminal { name, .. } => {
             out.insert(name.clone());
         }
     }
@@ -304,19 +304,19 @@ pub fn compute_first(grammar: &Grammar) -> HashMap<String, FollowSet> {
 fn pattern_first(pat: &Pattern, nullable: &HashSet<String>) -> FollowSet {
     let mut out = FollowSet::new();
     match pat {
-        Pattern::Literal(bytes) => {
+        Pattern::Literal { bytes, .. } => {
             out.insert(FollowElement::Literal(bytes.clone()));
         }
-        Pattern::CharClass(cs) => {
-            out.insert(FollowElement::CharClass(*cs));
+        Pattern::CharClass { set, .. } => {
+            out.insert(FollowElement::CharClass(*set));
         }
-        Pattern::AnyChar => {
+        Pattern::AnyChar { .. } => {
             out.insert(FollowElement::CharClass(CharSet::full()));
         }
-        Pattern::NonTerminal(name) => {
+        Pattern::NonTerminal { name, .. } => {
             out.insert(FollowElement::Rule(name.clone()));
         }
-        Pattern::Sequence(items) => {
+        Pattern::Sequence { items, .. } => {
             for it in items {
                 out.extend(pattern_first(it, nullable));
                 if !pattern_nullable(it, nullable) {
@@ -324,19 +324,21 @@ fn pattern_first(pat: &Pattern, nullable: &HashSet<String>) -> FollowSet {
                 }
             }
         }
-        Pattern::OrderedChoice(alts) => {
+        Pattern::OrderedChoice { alts, .. } => {
             for alt in alts {
                 out.extend(pattern_first(alt, nullable));
             }
         }
-        Pattern::Repeat(inner) | Pattern::RepeatOne(inner) | Pattern::Optional(inner) => {
+        Pattern::Repeat { inner, .. }
+        | Pattern::RepeatOne { inner, .. }
+        | Pattern::Optional { inner, .. } => {
             out.extend(pattern_first(inner, nullable));
         }
-        Pattern::NotPredicate(_) => {}
-        Pattern::AndPredicate(inner) => {
+        Pattern::NotPredicate { .. } => {}
+        Pattern::AndPredicate { inner, .. } => {
             out.extend(pattern_first(inner, nullable));
         }
-        Pattern::Capture(kind, inner) => {
+        Pattern::Capture { kind, inner, .. } => {
             for elem in pattern_first(inner, nullable) {
                 out.insert(FollowElement::Capture {
                     kind: kind.clone(),
@@ -349,7 +351,7 @@ fn pattern_first(pat: &Pattern, nullable: &HashSet<String>) -> FollowSet {
             // in FIRST.
             out.extend(pattern_first(inner, nullable));
         }
-        Pattern::Lenient(inner) => {
+        Pattern::Lenient { inner, .. } => {
             out.extend(pattern_first(inner, nullable));
         }
         // Pre-resolution placeholder for `^^lbl`. The eventual recovery
@@ -409,11 +411,11 @@ fn collect_follow(
     changed: &mut bool,
 ) {
     match pat {
-        Pattern::Literal(_) | Pattern::CharClass(_) | Pattern::AnyChar => {}
-        Pattern::NonTerminal(name) => {
+        Pattern::Literal { .. } | Pattern::CharClass { .. } | Pattern::AnyChar { .. } => {}
+        Pattern::NonTerminal { name, .. } => {
             extend_follow(follow, name, trailing, changed);
         }
-        Pattern::Sequence(items) => {
+        Pattern::Sequence { items, .. } => {
             // For each item at index i, "trailing-for-item-i" is FIRST of
             // items[i+1..] (sequenced through nullable items) union the
             // outer trailing when all of items[i+1..] is nullable.
@@ -433,12 +435,12 @@ fn collect_follow(
                 collect_follow(&items[i], nullable, &sub_trailing, follow, changed);
             }
         }
-        Pattern::OrderedChoice(alts) => {
+        Pattern::OrderedChoice { alts, .. } => {
             for alt in alts {
                 collect_follow(alt, nullable, trailing, follow, changed);
             }
         }
-        Pattern::Repeat(inner) | Pattern::RepeatOne(inner) => {
+        Pattern::Repeat { inner, .. } | Pattern::RepeatOne { inner, .. } => {
             // The body can iterate, so its tail is followed by another
             // copy of FIRST(body). Plus whatever trails the repeat.
             let body_first = pattern_first(inner, nullable);
@@ -446,10 +448,10 @@ fn collect_follow(
             sub_trailing.extend(body_first);
             collect_follow(inner, nullable, &sub_trailing, follow, changed);
         }
-        Pattern::Optional(inner) => {
+        Pattern::Optional { inner, .. } => {
             collect_follow(inner, nullable, trailing, follow, changed);
         }
-        Pattern::NotPredicate(_) => {
+        Pattern::NotPredicate { .. } => {
             // Predicate consumes nothing; its body's FOLLOW relations
             // don't affect the outer sequence's flow. References inside
             // a `!p` predicate still need their FIRST recorded though,
@@ -457,7 +459,7 @@ fn collect_follow(
             // appear — but FOLLOW is "what's after when matched," and
             // a `!p` predicate doesn't match anything. Skip.
         }
-        Pattern::AndPredicate(inner) => {
+        Pattern::AndPredicate { inner, .. } => {
             // Similar zero-width logic. Inner FOLLOW relations are
             // structurally meaningful (a NonTerminal inside `&p` does
             // have its own callers expecting it to FIRST-match certain
@@ -465,7 +467,7 @@ fn collect_follow(
             // doesn't continue into a consumed tail.
             collect_follow(inner, nullable, &FollowSet::new(), follow, changed);
         }
-        Pattern::Capture(_, inner) => {
+        Pattern::Capture { inner, .. } => {
             collect_follow(inner, nullable, trailing, follow, changed);
         }
         Pattern::Catch {
@@ -483,7 +485,7 @@ fn collect_follow(
             collect_follow(inner, nullable, trailing, follow, changed);
             collect_follow(recovery, nullable, trailing, follow, changed);
         }
-        Pattern::Lenient(inner) => {
+        Pattern::Lenient { inner, .. } => {
             collect_follow(inner, nullable, trailing, follow, changed);
         }
         // Pre-resolution placeholder for `^^lbl`. Treat like `Catch`'s
@@ -536,6 +538,11 @@ pub struct LintFinding {
     pub rule: String,
     /// The rule whose body contains an unanchored call site to [`Self::rule`].
     pub caller: String,
+    /// Source position of the unanchored `NonTerminal` call within
+    /// `caller`'s body. Populated from [`Pattern::NonTerminal`]'s span;
+    /// rendered as `{line}:{col}:` in `CompileError::PartialMatchLeniency`'s
+    /// Display impl so each finding is directly navigable.
+    pub call_site: Span,
 }
 
 /// Static lint for the partial-match-leniency antipattern from PR #101.
@@ -609,10 +616,10 @@ struct LintCtx<'a> {
 fn trailing_first(pat: &Pattern, nullable: &HashSet<String>) -> FollowSet {
     let mut out = FollowSet::new();
     match pat {
-        Pattern::Optional(inner) => {
+        Pattern::Optional { inner, .. } => {
             out.extend(pattern_first(inner, nullable));
         }
-        Pattern::Sequence(items) => {
+        Pattern::Sequence { items, .. } => {
             for item in items.iter().rev() {
                 if pattern_nullable(item, nullable) {
                     if is_trailing_optional_like(item) {
@@ -623,7 +630,7 @@ fn trailing_first(pat: &Pattern, nullable: &HashSet<String>) -> FollowSet {
                 }
             }
         }
-        Pattern::Capture(_, inner) => {
+        Pattern::Capture { inner, .. } => {
             out.extend(trailing_first(inner, nullable));
         }
         Pattern::Catch { inner, .. } => {
@@ -631,7 +638,7 @@ fn trailing_first(pat: &Pattern, nullable: &HashSet<String>) -> FollowSet {
         }
         // Definition-level `~name <-` opts the rule out of being a flag
         // target: its `trailing_first` is empty regardless of body shape.
-        Pattern::Lenient(_) => {}
+        Pattern::Lenient { .. } => {}
         _ => {}
     }
     out
@@ -643,8 +650,8 @@ fn trailing_first(pat: &Pattern, nullable: &HashSet<String>) -> FollowSet {
 /// chains.
 fn is_trailing_optional_like(pat: &Pattern) -> bool {
     match pat {
-        Pattern::Optional(_) => true,
-        Pattern::Capture(_, inner) => is_trailing_optional_like(inner),
+        Pattern::Optional { .. } => true,
+        Pattern::Capture { inner, .. } => is_trailing_optional_like(inner),
         Pattern::Catch { inner, .. } => is_trailing_optional_like(inner),
         _ => false,
     }
@@ -666,8 +673,8 @@ fn walk_for_call_sites<'a>(
     findings: &mut Vec<LintFinding>,
 ) {
     match pat {
-        Pattern::Literal(_) | Pattern::CharClass(_) | Pattern::AnyChar => {}
-        Pattern::NonTerminal(name) => {
+        Pattern::Literal { .. } | Pattern::CharClass { .. } | Pattern::AnyChar { .. } => {}
+        Pattern::NonTerminal { name, span } => {
             let Some(t) = ctx.trailing.get(name) else {
                 return;
             };
@@ -688,9 +695,10 @@ fn walk_for_call_sites<'a>(
                 kind: LintKind::PartialMatchLeniency,
                 rule: name.clone(),
                 caller: caller.to_string(),
+                call_site: *span,
             });
         }
-        Pattern::Sequence(items) => {
+        Pattern::Sequence { items, .. } => {
             for i in 0..items.len() {
                 continuations.push(&items[i + 1..]);
                 walk_for_call_sites(
@@ -704,18 +712,18 @@ fn walk_for_call_sites<'a>(
                 continuations.pop();
             }
         }
-        Pattern::OrderedChoice(alts) => {
+        Pattern::OrderedChoice { alts, .. } => {
             for alt in alts {
                 walk_for_call_sites(alt, caller, continuations, inside_catch, ctx, findings);
             }
         }
-        Pattern::Optional(inner)
-        | Pattern::Capture(_, inner)
-        | Pattern::Repeat(inner)
-        | Pattern::RepeatOne(inner) => {
+        Pattern::Optional { inner, .. }
+        | Pattern::Capture { inner, .. }
+        | Pattern::Repeat { inner, .. }
+        | Pattern::RepeatOne { inner, .. } => {
             walk_for_call_sites(inner, caller, continuations, inside_catch, ctx, findings);
         }
-        Pattern::NotPredicate(inner) | Pattern::AndPredicate(inner) => {
+        Pattern::NotPredicate { inner, .. } | Pattern::AndPredicate { inner, .. } => {
             let mut isolated: Vec<&[Pattern]> = Vec::new();
             walk_for_call_sites(inner, caller, &mut isolated, inside_catch, ctx, findings);
         }
@@ -733,7 +741,7 @@ fn walk_for_call_sites<'a>(
         // empty — so the rule never appears as a flag target. The walker
         // still descends transparently to find unrelated unguarded calls
         // the lenient rule's body may itself contain.
-        Pattern::Lenient(inner) => {
+        Pattern::Lenient { inner, .. } => {
             walk_for_call_sites(inner, caller, continuations, inside_catch, ctx, findings);
         }
         // The resolver runs before the lint, so the lint should
@@ -851,8 +859,8 @@ fn find_callsite_unguarded<'a>(
     found_callsite: &mut bool,
 ) -> bool {
     match pat {
-        Pattern::Literal(_) | Pattern::CharClass(_) | Pattern::AnyChar => false,
-        Pattern::NonTerminal(name) => {
+        Pattern::Literal { .. } | Pattern::CharClass { .. } | Pattern::AnyChar { .. } => false,
+        Pattern::NonTerminal { name, .. } => {
             if name != probe.target_caller {
                 return false;
             }
@@ -866,7 +874,7 @@ fn find_callsite_unguarded<'a>(
                 visited_callers,
             )
         }
-        Pattern::Sequence(items) => {
+        Pattern::Sequence { items, .. } => {
             for i in 0..items.len() {
                 continuations.push(&items[i + 1..]);
                 let leaked = find_callsite_unguarded(
@@ -885,7 +893,7 @@ fn find_callsite_unguarded<'a>(
             }
             false
         }
-        Pattern::OrderedChoice(alts) => {
+        Pattern::OrderedChoice { alts, .. } => {
             for alt in alts {
                 if find_callsite_unguarded(
                     alt,
@@ -901,10 +909,10 @@ fn find_callsite_unguarded<'a>(
             }
             false
         }
-        Pattern::Optional(inner)
-        | Pattern::Capture(_, inner)
-        | Pattern::Repeat(inner)
-        | Pattern::RepeatOne(inner) => find_callsite_unguarded(
+        Pattern::Optional { inner, .. }
+        | Pattern::Capture { inner, .. }
+        | Pattern::Repeat { inner, .. }
+        | Pattern::RepeatOne { inner, .. } => find_callsite_unguarded(
             inner,
             probe,
             continuations,
@@ -913,7 +921,7 @@ fn find_callsite_unguarded<'a>(
             visited_callers,
             found_callsite,
         ),
-        Pattern::NotPredicate(inner) | Pattern::AndPredicate(inner) => {
+        Pattern::NotPredicate { inner, .. } | Pattern::AndPredicate { inner, .. } => {
             let mut isolated: Vec<&[Pattern]> = Vec::new();
             find_callsite_unguarded(
                 inner,
@@ -954,7 +962,7 @@ fn find_callsite_unguarded<'a>(
         // the marker only suppresses the IMMEDIATE call's flag (handled
         // in `walk_for_call_sites`), not deeper detection or outward
         // propagation from nested rules' leniency.
-        Pattern::Lenient(inner) => find_callsite_unguarded(
+        Pattern::Lenient { inner, .. } => find_callsite_unguarded(
             inner,
             probe,
             continuations,
@@ -990,10 +998,10 @@ fn scan_frame_for_validator(
     nullable: &HashSet<String>,
 ) -> FrameOutcome {
     for item in frame {
-        if matches!(item, Pattern::AndPredicate(_)) {
+        if matches!(item, Pattern::AndPredicate { .. }) {
             return FrameOutcome::Anchored;
         }
-        if let Pattern::NotPredicate(inner) = item {
+        if let Pattern::NotPredicate { inner, .. } = item {
             // `!P` succeeds iff P fails. It rejects bytes that match P.
             // If FIRST(P) contains every element of target_trailing
             // (target's possible leftover all matches P), then `!P`
@@ -1070,44 +1078,47 @@ pub fn follow_set_to_boundary_pattern(fs: &FollowSet) -> Pattern {
                 has_char_class = true;
             }
             FollowElement::Literal(bytes) => {
-                alts.push(Pattern::Literal(bytes.clone()));
+                alts.push(Pattern::literal_bytes(bytes.clone()));
             }
             FollowElement::Rule(name) => {
-                alts.push(Pattern::NonTerminal(name.clone()));
+                alts.push(Pattern::nt(name.clone()));
             }
             FollowElement::Capture { kind, inner } => {
-                alts.push(Pattern::Capture(
+                alts.push(Pattern::capture(
                     kind.clone(),
-                    Box::new(follow_element_inner_to_pattern(inner)),
+                    follow_element_inner_to_pattern(inner),
                 ));
             }
             FollowElement::Eof => {
-                alts.push(Pattern::NotPredicate(Box::new(Pattern::AnyChar)));
+                alts.push(Pattern::not_predicate(Pattern::any_char()));
             }
         }
     }
     if has_char_class {
-        alts.insert(0, Pattern::CharClass(char_union));
+        alts.insert(0, Pattern::char_class(char_union));
     }
     if alts.len() == 1 {
         alts.into_iter().next().unwrap()
     } else {
-        Pattern::OrderedChoice(alts)
+        // Synthesized from FOLLOW set — no source position to inherit.
+        Pattern::OrderedChoice {
+            alts,
+            span: Span::SYNTHETIC,
+        }
     }
 }
 
 fn follow_element_inner_to_pattern(elem: &FollowElement) -> Pattern {
     match elem {
-        FollowElement::Literal(bytes) => Pattern::Literal(bytes.clone()),
-        FollowElement::CharClass(cs) => Pattern::CharClass(*cs),
-        FollowElement::Rule(name) => Pattern::NonTerminal(name.clone()),
-        FollowElement::Capture { kind, inner } => Pattern::Capture(
-            kind.clone(),
-            Box::new(follow_element_inner_to_pattern(inner)),
-        ),
+        FollowElement::Literal(bytes) => Pattern::literal_bytes(bytes.clone()),
+        FollowElement::CharClass(cs) => Pattern::char_class(*cs),
+        FollowElement::Rule(name) => Pattern::nt(name.clone()),
+        FollowElement::Capture { kind, inner } => {
+            Pattern::capture(kind.clone(), follow_element_inner_to_pattern(inner))
+        }
         // EOF nested inside a capture would be malformed in practice;
         // synthesize the same `!.` shape as the top-level case.
-        FollowElement::Eof => Pattern::NotPredicate(Box::new(Pattern::AnyChar)),
+        FollowElement::Eof => Pattern::not_predicate(Pattern::any_char()),
     }
 }
 
@@ -1138,11 +1149,11 @@ fn resolve_in_pattern(
     rule_name: &str,
 ) -> Result<Pattern, CompileError> {
     match pat {
-        Pattern::Literal(_)
-        | Pattern::CharClass(_)
-        | Pattern::AnyChar
-        | Pattern::NonTerminal(_) => Ok(pat.clone()),
-        Pattern::Sequence(items) => {
+        Pattern::Literal { .. }
+        | Pattern::CharClass { .. }
+        | Pattern::AnyChar { .. }
+        | Pattern::NonTerminal { .. } => Ok(pat.clone()),
+        Pattern::Sequence { items, span } => {
             let mut out = Vec::with_capacity(items.len());
             for i in 0..items.len() {
                 let sub_trailing = sequence_suffix_trailing(&items[i + 1..], trailing, nullable);
@@ -1153,62 +1164,85 @@ fn resolve_in_pattern(
                     rule_name,
                 )?);
             }
-            Ok(Pattern::Sequence(out))
+            Ok(Pattern::Sequence {
+                items: out,
+                span: *span,
+            })
         }
-        Pattern::OrderedChoice(alts) => {
+        Pattern::OrderedChoice { alts, span } => {
             let mut out = Vec::with_capacity(alts.len());
             for alt in alts {
                 out.push(resolve_in_pattern(alt, trailing, nullable, rule_name)?);
             }
-            Ok(Pattern::OrderedChoice(out))
+            Ok(Pattern::OrderedChoice {
+                alts: out,
+                span: *span,
+            })
         }
-        Pattern::Repeat(inner) | Pattern::RepeatOne(inner) => {
+        Pattern::Repeat { inner, span } => {
             // The inner can iterate; its successor includes FIRST(inner)
             // plus the outer trailing.
             let mut sub_trailing = trailing.clone();
             sub_trailing.extend(pattern_first(inner, nullable));
-            Ok(match pat {
-                Pattern::Repeat(_) => Pattern::Repeat(Box::new(resolve_in_pattern(
+            Ok(Pattern::Repeat {
+                inner: Box::new(resolve_in_pattern(
                     inner,
                     &sub_trailing,
                     nullable,
                     rule_name,
-                )?)),
-                Pattern::RepeatOne(_) => Pattern::RepeatOne(Box::new(resolve_in_pattern(
-                    inner,
-                    &sub_trailing,
-                    nullable,
-                    rule_name,
-                )?)),
-                _ => unreachable!(),
+                )?),
+                span: *span,
             })
         }
-        Pattern::Optional(inner) => Ok(Pattern::Optional(Box::new(resolve_in_pattern(
-            inner, trailing, nullable, rule_name,
-        )?))),
-        Pattern::NotPredicate(inner) => Ok(Pattern::NotPredicate(Box::new(resolve_in_pattern(
-            inner,
-            &FollowSet::new(),
-            nullable,
-            rule_name,
-        )?))),
-        Pattern::AndPredicate(inner) => Ok(Pattern::AndPredicate(Box::new(resolve_in_pattern(
-            inner,
-            &FollowSet::new(),
-            nullable,
-            rule_name,
-        )?))),
-        Pattern::Capture(kind, inner) => Ok(Pattern::Capture(
-            kind.clone(),
-            Box::new(resolve_in_pattern(inner, trailing, nullable, rule_name)?),
-        )),
-        Pattern::Lenient(inner) => Ok(Pattern::Lenient(Box::new(resolve_in_pattern(
-            inner, trailing, nullable, rule_name,
-        )?))),
+        Pattern::RepeatOne { inner, span } => {
+            let mut sub_trailing = trailing.clone();
+            sub_trailing.extend(pattern_first(inner, nullable));
+            Ok(Pattern::RepeatOne {
+                inner: Box::new(resolve_in_pattern(
+                    inner,
+                    &sub_trailing,
+                    nullable,
+                    rule_name,
+                )?),
+                span: *span,
+            })
+        }
+        Pattern::Optional { inner, span } => Ok(Pattern::Optional {
+            inner: Box::new(resolve_in_pattern(inner, trailing, nullable, rule_name)?),
+            span: *span,
+        }),
+        Pattern::NotPredicate { inner, span } => Ok(Pattern::NotPredicate {
+            inner: Box::new(resolve_in_pattern(
+                inner,
+                &FollowSet::new(),
+                nullable,
+                rule_name,
+            )?),
+            span: *span,
+        }),
+        Pattern::AndPredicate { inner, span } => Ok(Pattern::AndPredicate {
+            inner: Box::new(resolve_in_pattern(
+                inner,
+                &FollowSet::new(),
+                nullable,
+                rule_name,
+            )?),
+            span: *span,
+        }),
+        Pattern::Capture { kind, inner, span } => Ok(Pattern::Capture {
+            kind: kind.clone(),
+            inner: Box::new(resolve_in_pattern(inner, trailing, nullable, rule_name)?),
+            span: *span,
+        }),
+        Pattern::Lenient { inner, span } => Ok(Pattern::Lenient {
+            inner: Box::new(resolve_in_pattern(inner, trailing, nullable, rule_name)?),
+            span: *span,
+        }),
         Pattern::Catch {
             inner,
             label,
             recovery,
+            span,
         } => {
             // Success branch: inner inherits the catch's trailing.
             // Recovery branch: trailing is also the catch's trailing.
@@ -1216,13 +1250,15 @@ fn resolve_in_pattern(
                 inner: Box::new(resolve_in_pattern(inner, trailing, nullable, rule_name)?),
                 label: label.clone(),
                 recovery: Box::new(resolve_in_pattern(recovery, trailing, nullable, rule_name)?),
+                span: *span,
             })
         }
-        Pattern::InferBoundaryCatch { inner, label } => {
+        Pattern::InferBoundaryCatch { inner, label, span } => {
             if trailing.is_empty() {
                 return Err(CompileError::CannotInferBoundary {
                     rule: rule_name.into(),
                     label: label.clone(),
+                    span: *span,
                 });
             }
             let boundary = follow_set_to_boundary_pattern(trailing);
@@ -1232,6 +1268,7 @@ fn resolve_in_pattern(
                 resolved_inner,
                 label.clone(),
                 boundary,
+                *span,
             ))
         }
     }
@@ -1263,18 +1300,45 @@ fn sequence_suffix_trailing(
 
 /// Mirror of `parser::lower_boundary_catch` for the resolver path.
 /// Builds the same `Catch { Sequence([inner, &B]), label, @recovery{(!B .)*} }`
-/// shape from a synthesized boundary.
-fn lower_inferred_boundary_catch(inner: Pattern, label: String, boundary: Pattern) -> Pattern {
-    let lookahead = Pattern::AndPredicate(Box::new(boundary.clone()));
-    let stop_loop = Pattern::Repeat(Box::new(Pattern::Sequence(vec![
-        Pattern::NotPredicate(Box::new(boundary)),
-        Pattern::AnyChar,
-    ])));
-    let recovery = Pattern::Capture("recovery".into(), Box::new(stop_loop));
+/// shape from a synthesized boundary. The produced tree inherits the
+/// original `^^lbl` placeholder's span; synthesized boundary subnodes
+/// already carry [`Span::SYNTHETIC`] from `follow_set_to_boundary_pattern`.
+fn lower_inferred_boundary_catch(
+    inner: Pattern,
+    label: String,
+    boundary: Pattern,
+    span: Span,
+) -> Pattern {
+    let lookahead = Pattern::AndPredicate {
+        inner: Box::new(boundary.clone()),
+        span,
+    };
+    let stop_loop = Pattern::Repeat {
+        inner: Box::new(Pattern::Sequence {
+            items: vec![
+                Pattern::NotPredicate {
+                    inner: Box::new(boundary),
+                    span,
+                },
+                Pattern::AnyChar { span },
+            ],
+            span,
+        }),
+        span,
+    };
+    let recovery = Pattern::Capture {
+        kind: "recovery".into(),
+        inner: Box::new(stop_loop),
+        span,
+    };
     Pattern::Catch {
-        inner: Box::new(Pattern::Sequence(vec![inner, lookahead])),
+        inner: Box::new(Pattern::Sequence {
+            items: vec![inner, lookahead],
+            span,
+        }),
         label,
         recovery: Box::new(recovery),
+        span,
     }
 }
 
@@ -1329,19 +1393,24 @@ pub(crate) fn compute_trivia_rules(rules: &HashMap<String, Pattern>) -> HashMap<
 
 fn collect_non_terminal_refs(pat: &Pattern, out: &mut HashSet<String>) {
     match pat {
-        Pattern::Literal(_) | Pattern::CharClass(_) | Pattern::AnyChar => {}
-        Pattern::Sequence(items) | Pattern::OrderedChoice(items) => {
+        Pattern::Literal { .. } | Pattern::CharClass { .. } | Pattern::AnyChar { .. } => {}
+        Pattern::Sequence { items, .. } => {
             for it in items {
                 collect_non_terminal_refs(it, out);
             }
         }
-        Pattern::Repeat(inner)
-        | Pattern::RepeatOne(inner)
-        | Pattern::Optional(inner)
-        | Pattern::NotPredicate(inner)
-        | Pattern::AndPredicate(inner)
-        | Pattern::Capture(_, inner)
-        | Pattern::Lenient(inner) => collect_non_terminal_refs(inner, out),
+        Pattern::OrderedChoice { alts, .. } => {
+            for it in alts {
+                collect_non_terminal_refs(it, out);
+            }
+        }
+        Pattern::Repeat { inner, .. }
+        | Pattern::RepeatOne { inner, .. }
+        | Pattern::Optional { inner, .. }
+        | Pattern::NotPredicate { inner, .. }
+        | Pattern::AndPredicate { inner, .. }
+        | Pattern::Capture { inner, .. }
+        | Pattern::Lenient { inner, .. } => collect_non_terminal_refs(inner, out),
         Pattern::Catch {
             inner, recovery, ..
         } => {
@@ -1349,7 +1418,7 @@ fn collect_non_terminal_refs(pat: &Pattern, out: &mut HashSet<String>) {
             collect_non_terminal_refs(recovery, out);
         }
         Pattern::InferBoundaryCatch { inner, .. } => collect_non_terminal_refs(inner, out),
-        Pattern::NonTerminal(name) => {
+        Pattern::NonTerminal { name, .. } => {
             out.insert(name.clone());
         }
     }
@@ -1358,19 +1427,18 @@ fn collect_non_terminal_refs(pat: &Pattern, out: &mut HashSet<String>) {
 fn body_contains_catch(pat: &Pattern) -> bool {
     match pat {
         Pattern::Catch { .. } | Pattern::InferBoundaryCatch { .. } => true,
-        Pattern::Literal(_)
-        | Pattern::CharClass(_)
-        | Pattern::AnyChar
-        | Pattern::NonTerminal(_) => false,
-        Pattern::Sequence(items) | Pattern::OrderedChoice(items) => {
-            items.iter().any(body_contains_catch)
-        }
-        Pattern::Repeat(inner)
-        | Pattern::RepeatOne(inner)
-        | Pattern::Optional(inner)
-        | Pattern::NotPredicate(inner)
-        | Pattern::AndPredicate(inner)
-        | Pattern::Capture(_, inner)
-        | Pattern::Lenient(inner) => body_contains_catch(inner),
+        Pattern::Literal { .. }
+        | Pattern::CharClass { .. }
+        | Pattern::AnyChar { .. }
+        | Pattern::NonTerminal { .. } => false,
+        Pattern::Sequence { items, .. } => items.iter().any(body_contains_catch),
+        Pattern::OrderedChoice { alts, .. } => alts.iter().any(body_contains_catch),
+        Pattern::Repeat { inner, .. }
+        | Pattern::RepeatOne { inner, .. }
+        | Pattern::Optional { inner, .. }
+        | Pattern::NotPredicate { inner, .. }
+        | Pattern::AndPredicate { inner, .. }
+        | Pattern::Capture { inner, .. }
+        | Pattern::Lenient { inner, .. } => body_contains_catch(inner),
     }
 }

@@ -32,19 +32,13 @@ fn second_alternative_reuses_memoized_x() {
     rules.insert(
         "start".into(),
         Pattern::choice(vec![
-            Pattern::seq(vec![
-                Pattern::NonTerminal("X".into()),
-                Pattern::literal("aa"),
-            ]),
-            Pattern::seq(vec![
-                Pattern::NonTerminal("X".into()),
-                Pattern::literal("bb"),
-            ]),
+            Pattern::seq(vec![Pattern::nt("X"), Pattern::literal("aa")]),
+            Pattern::seq(vec![Pattern::nt("X"), Pattern::literal("bb")]),
         ]),
     );
     rules.insert(
         "X".into(),
-        Pattern::CharClass(CharSet::from_ranges(&[(b'a', b'z')])),
+        Pattern::char_class(CharSet::from_ranges(&[(b'a', b'z')])),
     );
     let prog = Grammar::new(rules, "start").compile().unwrap();
     let (result, stats) = VM::new(&prog.code, b"abb")
@@ -69,14 +63,11 @@ fn memo_table_populates_on_success() {
     let mut rules = HashMap::new();
     rules.insert(
         "start".into(),
-        Pattern::seq(vec![
-            Pattern::NonTerminal("X".into()),
-            Pattern::NonTerminal("X".into()),
-        ]),
+        Pattern::seq(vec![Pattern::nt("X"), Pattern::nt("X")]),
     );
     rules.insert(
         "X".into(),
-        Pattern::CharClass(CharSet::from_ranges(&[(b'a', b'z')])),
+        Pattern::char_class(CharSet::from_ranges(&[(b'a', b'z')])),
     );
     let prog = Grammar::new(rules, "start").compile().unwrap();
     let (_, stats) = VM::new(&prog.code, b"ab")
@@ -118,25 +109,19 @@ fn memo_hit_inside_outer_capture_preserves_nesting() {
     let mut rules = HashMap::new();
     rules.insert(
         "start".into(),
-        Pattern::Capture(
-            "outer".into(),
-            Box::new(Pattern::choice(vec![
-                Pattern::seq(vec![
-                    Pattern::NonTerminal("Inner".into()),
-                    Pattern::literal("x"),
-                ]),
-                Pattern::seq(vec![
-                    Pattern::NonTerminal("Inner".into()),
-                    Pattern::literal("y"),
-                ]),
-            ])),
+        Pattern::capture(
+            "outer",
+            Pattern::choice(vec![
+                Pattern::seq(vec![Pattern::nt("Inner"), Pattern::literal("x")]),
+                Pattern::seq(vec![Pattern::nt("Inner"), Pattern::literal("y")]),
+            ]),
         ),
     );
     rules.insert(
         "Inner".into(),
-        Pattern::Capture(
-            "inner".into(),
-            Box::new(Pattern::CharClass(CharSet::from_ranges(&[(b'a', b'z')]))),
+        Pattern::capture(
+            "inner",
+            Pattern::char_class(CharSet::from_ranges(&[(b'a', b'z')])),
         ),
     );
     let prog = Grammar::new(rules, "start").compile().unwrap();
@@ -188,11 +173,11 @@ fn cached_failure_short_circuits_not_predicate() {
         "start".into(),
         Pattern::choice(vec![
             Pattern::seq(vec![
-                Pattern::NotPredicate(Box::new(Pattern::NonTerminal("A".into()))),
+                Pattern::not_predicate(Pattern::nt("A")),
                 Pattern::literal("b"),
             ]),
             Pattern::seq(vec![
-                Pattern::NotPredicate(Box::new(Pattern::NonTerminal("A".into()))),
+                Pattern::not_predicate(Pattern::nt("A")),
                 Pattern::literal("c"),
             ]),
         ]),
@@ -220,22 +205,16 @@ fn nested_memoized_rule_failures_both_cached() {
     let mut rules = HashMap::new();
     rules.insert(
         "start".into(),
-        Pattern::choice(vec![
-            Pattern::NonTerminal("outer".into()),
-            Pattern::NonTerminal("fallback".into()),
-        ]),
+        Pattern::choice(vec![Pattern::nt("outer"), Pattern::nt("fallback")]),
     );
     rules.insert(
         "outer".into(),
-        Pattern::seq(vec![
-            Pattern::NonTerminal("inner".into()),
-            Pattern::literal("b"),
-        ]),
+        Pattern::seq(vec![Pattern::nt("inner"), Pattern::literal("b")]),
     );
     rules.insert("inner".into(), Pattern::literal("a"));
     rules.insert(
         "fallback".into(),
-        Pattern::CharClass(CharSet::from_ranges(&[(b'a', b'z')])),
+        Pattern::char_class(CharSet::from_ranges(&[(b'a', b'z')])),
     );
     let prog = Grammar::new(rules, "start").compile().unwrap();
     let (result, stats) = VM::new(&prog.code, b"x")
@@ -263,18 +242,18 @@ fn and_predicate_with_memoized_rule() {
         "start".into(),
         Pattern::choice(vec![
             Pattern::seq(vec![
-                Pattern::AndPredicate(Box::new(Pattern::NonTerminal("A".into()))),
+                Pattern::and_predicate(Pattern::nt("A")),
                 Pattern::literal("z"),
             ]),
             Pattern::seq(vec![
-                Pattern::AndPredicate(Box::new(Pattern::NonTerminal("A".into()))),
+                Pattern::and_predicate(Pattern::nt("A")),
                 Pattern::literal("y"),
             ]),
         ]),
     );
     rules.insert(
         "A".into(),
-        Pattern::CharClass(CharSet::from_ranges(&[(b'a', b'z')])),
+        Pattern::char_class(CharSet::from_ranges(&[(b'a', b'z')])),
     );
     let prog = Grammar::new(rules, "start").compile().unwrap();
     let (result, stats) = VM::new(&prog.code, b"y")
@@ -336,13 +315,10 @@ fn lr_converged_seed_persists_across_parses() {
 #[test]
 fn memoization_does_not_change_results_on_linear_parse() {
     let mut rules = HashMap::new();
-    rules.insert(
-        "start".into(),
-        Pattern::RepeatOne(Box::new(Pattern::NonTerminal("digit".into()))),
-    );
+    rules.insert("start".into(), Pattern::repeat_one(Pattern::nt("digit")));
     rules.insert(
         "digit".into(),
-        Pattern::CharClass(CharSet::from_ranges(&[(b'0', b'9')])),
+        Pattern::char_class(CharSet::from_ranges(&[(b'0', b'9')])),
     );
     let prog = Grammar::new(rules, "start").compile().unwrap();
     let result = VM::new(&prog.code, b"12345").run();
