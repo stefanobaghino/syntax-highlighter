@@ -62,6 +62,143 @@ fn postfix_operators() {
     );
 }
 
+#[test]
+fn postfix_repeat_count_single() {
+    // `p{1}` is the bare atom — `Pattern::seq()` unwraps singletons.
+    let g = parse("r <- 'x'{1}");
+    assert_eq!(g.rules["r"], Pattern::literal("x"));
+}
+
+#[test]
+fn postfix_repeat_count_multiple() {
+    let g = parse("r <- 'x'{4}");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Sequence(vec![
+            Pattern::literal("x"),
+            Pattern::literal("x"),
+            Pattern::literal("x"),
+            Pattern::literal("x"),
+        ])
+    );
+}
+
+#[test]
+fn postfix_repeat_count_on_backslash_atom() {
+    let g = parse("r <- \\d{4}");
+    let digit = Pattern::CharClass(CharSet::from_ranges(&[(b'0', b'9')]));
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Sequence(vec![digit.clone(), digit.clone(), digit.clone(), digit])
+    );
+}
+
+#[test]
+fn postfix_repeat_count_on_group() {
+    let g = parse("r <- ('a' / 'b'){3}");
+    let choice = Pattern::OrderedChoice(vec![Pattern::literal("a"), Pattern::literal("b")]);
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Sequence(vec![choice.clone(), choice.clone(), choice])
+    );
+}
+
+#[test]
+fn postfix_repeat_count_chains_with_star() {
+    // `p{n}*` parses as `(p{n})*` — the postfix loop applies the `*`
+    // to the already-desugared sequence.
+    let g = parse("r <- 'x'{2}*");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::Repeat(Box::new(Pattern::Sequence(vec![
+            Pattern::literal("x"),
+            Pattern::literal("x"),
+        ])))
+    );
+}
+
+#[test]
+fn postfix_repeat_count_at_maximum_accepted() {
+    // Boundary case: 1024 is the cap, must be accepted.
+    let g = parse("r <- 'x'{1024}");
+    match &g.rules["r"] {
+        Pattern::Sequence(items) => assert_eq!(items.len(), 1024),
+        other => panic!("expected Sequence of 1024 items, got: {other:?}"),
+    }
+}
+
+#[test]
+fn postfix_repeat_count_zero_rejected() {
+    let err = parse_src("r <- 'x'{0}").unwrap_err();
+    assert!(
+        err.message.contains("positive"),
+        "expected positive-required message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn postfix_repeat_count_empty_rejected() {
+    let err = parse_src("r <- 'x'{}").unwrap_err();
+    assert!(
+        err.message.contains("expected positive integer"),
+        "expected integer-required message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn postfix_repeat_count_unterminated_rejected() {
+    let err = parse_src("r <- 'x'{4").unwrap_err();
+    assert!(
+        err.message.contains("'}'"),
+        "expected closing-brace message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn postfix_repeat_count_non_decimal_rejected() {
+    // The digit scan stops at `a`, leaving zero digits read — same error
+    // path as `{}`.
+    let err = parse_src("r <- 'x'{a}").unwrap_err();
+    assert!(
+        err.message.contains("expected positive integer"),
+        "expected integer-required message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn postfix_repeat_count_exceeds_maximum_rejected() {
+    let err = parse_src("r <- 'x'{1025}").unwrap_err();
+    assert!(
+        err.message.contains("exceeds maximum 1024"),
+        "expected exceeds-maximum message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn postfix_repeat_count_whitespace_inside_braces_rejected() {
+    // `{n}` is tight, matching the rest of the postfix tier — interior
+    // whitespace makes the digit scan see zero digits.
+    let err = parse_src("r <- 'x'{ 4 }").unwrap_err();
+    assert!(
+        err.message.contains("expected positive integer"),
+        "expected integer-required message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn repeat_count_in_string_literal_is_literal() {
+    // `'p{4}'` is the literal byte sequence `p{4}`, not a quantified
+    // literal — string-literal escapes are not affected by this PR.
+    let g = parse("r <- 'p{4}'");
+    assert_eq!(g.rules["r"], Pattern::literal("p{4}"));
+}
+
 /// Builds the desugared AST that `p*^` lowers to: a `Repeat` over a
 /// `Catch` whose recovery body is the supplied pattern wrapped in a
 /// capture named `recovery`. The label defaults to `"recovery"` to

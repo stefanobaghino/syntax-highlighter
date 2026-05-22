@@ -42,7 +42,7 @@ the following precedence, tightest-binding first:
 
 ```
 atom       "abc"   [a-z]   .   ident   (...)   @name{...}
-postfix    p*      p+      p?  p*^     p+^     p*^[cs]   p+^[cs]
+postfix    p*      p+      p?      p{n}    p*^     p+^     p*^[cs]   p+^[cs]
 prefix     !p      &p
 sequence   p1 p2 p3          (juxtaposition)
 catch      p1 ^label p2      p1 ^^label B      p1 ^^label
@@ -118,11 +118,29 @@ covers the case in one extra range).
 | `p*` | Greedy, possibly-empty repetition. |
 | `p+` | Greedy, at-least-once repetition. |
 | `p?` | Optional. |
+| `p{n}` | Exactly `n` repetitions, `1 ≤ n ≤ 1024`. Parse-time sugar for `p p … p` (`n` copies). |
 | `p*^` | Repetition with skip-byte error recovery (see below). |
 | `p+^` | At-least-once recovery form — desugars to `p (p*^)`. |
 | `p*^[charset]` | Repetition with delimiter-scoped recovery: on inner failure, skip to and consume the next byte in `charset`. |
 | `p+^[charset]` | At-least-once delimiter-scoped recovery — desugars to `p (p*^[charset])`. |
 | `p*^:lbl` / `p*^[charset]:lbl` / `p+^:lbl` / `p+^[charset]:lbl` | Optional `:label` suffix on any of the above, naming the catch scope for `pegdb recoveries explain` clustering. Default label is `"recovery"`. |
+
+**Exact-count `p{n}`.** `p{4}` desugars at parse time to four
+copies of `p` concatenated — identical bytecode to writing `p p p p`
+by hand. `n` is a positive decimal integer with `1 ≤ n ≤ 1024`. The
+upper bound is a typo guard; the largest plausible site in the shipped
+corpus is `hex{8}`. The braces are tight — no whitespace inside `{n}`
+or between the atom and `{` — matching the rest of the postfix tier.
+`p{1}` is equivalent to bare `p`; `{0}` is a parse error (write `''`
+if you want the always-succeeding empty pattern). Inside string
+literals, `'p{4}'` is the literal byte sequence `p{4}` — `{n}` is a
+postfix atom-quantifier, not a string escape.
+
+The bounded form `p{n,m}` and lower-bound form `p{n,}` are
+deliberately **not** included: `p{n,}` is strictly redundant with `+`
+(and `{0,}` with `*`), and no shipped grammar has a bounded-range
+need. The `{n,m}` syntax remains an unambiguous future extension slot
+should a real use case appear — see issue #87.
 
 ### Prefix operators
 
