@@ -23,7 +23,7 @@ array       <- @punctuation{'['} spacing
 
 string      <- '"' string_char* '"'
 string_char <- '\\' ["\\/bfnrt]
-             / '\\' 'u' hex hex hex hex
+             / '\\' 'u' hex{4}
              / [^"\\]
 
 number      <- '-'? int frac? exp?

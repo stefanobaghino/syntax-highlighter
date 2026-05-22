@@ -60,7 +60,7 @@ string_body   <- basic_multiline / literal_multiline / basic_string / literal_st
 
 basic_string  <- '"' (basic_char / escape)* '"'
 basic_char    <- !["\\\n\r] .
-escape        <- '\\' (["\\bfnrt] / 'u' hex hex hex hex / 'U' hex hex hex hex hex hex hex hex)
+escape        <- '\\' (["\\bfnrt] / 'u' hex{4} / 'U' hex{8})
 
 basic_multiline <- '"""' multiline_basic_body '"""'
 multiline_basic_body <- .. '"""'
@@ -96,10 +96,10 @@ local_datetime <- date date_time_sep time
 local_date    <- date
 local_time    <- time
 date_time_sep <- 'T' / 't' / ' '
-date          <- \d \d \d \d '-' \d \d '-' \d \d
-time          <- \d \d ':' \d \d ':' \d \d time_frac?
+date          <- \d{4} '-' \d{2} '-' \d{2}
+time          <- \d{2} ':' \d{2} ':' \d{2} time_frac?
 time_frac     <- '.' \d+
-time_offset   <- 'Z' / 'z' / [+\-] \d \d ':' \d \d
+time_offset   <- 'Z' / 'z' / [+\-] \d{2} ':' \d{2}
 
 # --- Arrays (multiline, trailing comma, interior comments allowed) -----
 array         <- @punctuation{'['} array_ws array_body? array_ws @punctuation{']'}
