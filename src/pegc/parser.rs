@@ -177,7 +177,21 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 let label = self.parse_catch_label("^^")?;
                 self.skip_ws();
-                let catch_pat = if self.at_prefix_start() {
+                let catch_pat = if self.at_until_inclusive_marker() {
+                    // `INNER ^^lbl ..= B` — bracketed-close catch sugar.
+                    self.pos += 3;
+                    self.skip_ws();
+                    let boundary = self.parse_prefix()?;
+                    lower_bracketed_close_catch(lhs, label, boundary)
+                } else if self.peek() == Some(b'.') && self.peek_at(1) == Some(b'.') {
+                    // `INNER ^^lbl .. B` — rejected. The catch necessarily
+                    // consumes B; the non-consuming form has no use here.
+                    return Err(self.err(
+                        "`^^lbl .. B` is not a valid form; the catch consumes its boundary. \
+                         Use `^^lbl ..= B` to skip-and-consume, or `^^lbl B` to leave B for the outer rule"
+                            .into(),
+                    ));
+                } else if self.at_prefix_start() {
                     let boundary = self.parse_prefix()?;
                     lower_boundary_catch(lhs, label, boundary)
                 } else {
@@ -612,6 +626,14 @@ impl<'a> Parser<'a> {
         self.src.get(self.pos + offset).copied()
     }
 
+    /// True iff the next three bytes are `..=` — the bracketed-close
+    /// catch-sugar marker after `^^lbl`. Adjacent-only; whitespace
+    /// between the dots or before the `=` makes them parse as separate
+    /// tokens.
+    fn at_until_inclusive_marker(&self) -> bool {
+        self.peek() == Some(b'.') && self.peek_at(1) == Some(b'.') && self.peek_at(2) == Some(b'=')
+    }
+
     fn expect(&mut self, c: u8) -> Result<(), ParseError> {
         if self.peek() == Some(c) {
             self.pos += 1;
@@ -695,6 +717,33 @@ fn lower_boundary_catch(inner: Pattern, label: String, boundary: Pattern) -> Pat
     let recovery = Pattern::Capture("recovery".into(), Box::new(stop_loop));
     Pattern::Catch {
         inner: Box::new(Pattern::Sequence(vec![inner, lookahead])),
+        label,
+        recovery: Box::new(recovery),
+    }
+}
+
+/// Lower `INNER ^^lbl ..= B` (bracketed-close catch sugar) to:
+/// `Catch { INNER, lbl, Sequence([@recovery{(!B .)*}, B]) }`.
+///
+/// Distinct from `lower_boundary_catch` in two ways: (1) the inner is
+/// *not* anchored with `&B` — every corpus site has `INNER` already
+/// ending in `B`, so the anchor would require another `B` to follow;
+/// (2) the recovery body consumes `B` after the skip, with `B`
+/// captured per its own kind (outside the `@recovery` wrap). This is
+/// the shape the `^block_close` sites across the shipped grammars
+/// need: the closing `}` keeps its `@punctuation` kind in both happy
+/// and recovery paths.
+fn lower_bracketed_close_catch(inner: Pattern, label: String, boundary: Pattern) -> Pattern {
+    let stop_loop = Pattern::Repeat(Box::new(Pattern::Sequence(vec![
+        Pattern::NotPredicate(Box::new(boundary.clone())),
+        Pattern::AnyChar,
+    ])));
+    let recovery = Pattern::Sequence(vec![
+        Pattern::Capture("recovery".into(), Box::new(stop_loop)),
+        boundary,
+    ]);
+    Pattern::Catch {
+        inner: Box::new(inner),
         label,
         recovery: Box::new(recovery),
     }

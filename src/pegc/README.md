@@ -367,6 +367,51 @@ uses a placeholder `Pattern::InferBoundaryCatch { inner, label }`
 resolved by `analysis::resolve_inferred_boundaries` before bytecode
 emission. No new VM machinery.
 
+### `INNER ^^lbl ..= B` — bracketed-close catch sugar
+
+A variant of the boundary-anchored catch for the case where the
+boundary is consumed *by the catch itself* (and re-captured with its
+own kind), not left for the outer rule. The five `^block_close`
+sites across the C / CSS / Go / JavaScript / Rust grammars are the
+motivating shape: a `block` rule whose happy path ends in
+`@punctuation{'}'}` and whose recovery skips bytes until the next
+`}` and then matches it, with the closing brace tagged as
+`@punctuation` in both paths.
+
+```peg
+INNER ^^lbl ..= B
+# lowers to
+INNER ^lbl @recovery{(!B .)*} B
+```
+
+Two ways it differs from `^^lbl B`:
+
+- **No `&B` lookahead anchor on INNER.** Every corpus site has INNER
+  already ending in `B` (the structural delimiter); adding `&B`
+  would require a second `B` to follow. Authors who need a leniency
+  anchor on a non-self-terminating INNER write it explicitly.
+- **B is consumed inside the recovery, not by the outer rule.** The
+  recovery body is a `Sequence` of `@recovery{(!B .)*}` then `B` —
+  the skip is captured as `recovery`; `B` keeps whatever capture
+  kind its pattern carries, *outside* the `@recovery` wrap.
+
+Worked example (the `block` rule from `grammars/rust.peg`):
+
+```peg
+block <- @punctuation{'{'} ws (block_body ws @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
+```
+
+The catch fires when `block_body ws @punctuation{'}'}` fails (a
+malformed block). The recovery skips up to the next `}` and consumes
+it as `@punctuation` — so themes that style recoveries differently
+still render the closing brace as a brace, not as a recovery span.
+
+The `..=` spelling matches the standalone consuming semantics from
+the `.. S` / `..= S` operators above. The catch position accepts
+only `..=`, not `..` — the catch necessarily consumes its boundary,
+and `^^lbl .. B` would diverge from the standalone `..` non-consuming
+meaning. The parser rejects it with a hint pointing at `..=`.
+
 ### `~name <-` — intentional-leniency marker
 
 The static `lint_partial_match` check flags trailing-nullable rules

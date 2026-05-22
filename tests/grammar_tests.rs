@@ -1097,3 +1097,115 @@ fn skip_until_with_capture_stop_exclusive() {
     let stop = Pattern::Capture("comment".into(), Box::new(Pattern::literal("#")));
     assert_eq!(g.rules["r"], desugared_until_exclusive(stop));
 }
+
+/// Builds the desugared AST that `INNER ^^lbl ..= B` lowers to:
+/// `Catch { INNER, lbl, Seq(@recovery{(!B .)*}, B) }`. No `&B`
+/// anchor on the inner. Mirrors `lower_bracketed_close_catch` in
+/// `src/pegc/parser.rs`.
+fn desugared_bracketed_close_catch(inner: Pattern, label: &str, boundary: Pattern) -> Pattern {
+    let stop_loop = Pattern::Repeat(Box::new(Pattern::Sequence(vec![
+        Pattern::NotPredicate(Box::new(boundary.clone())),
+        Pattern::AnyChar,
+    ])));
+    let recovery = Pattern::Sequence(vec![
+        Pattern::Capture("recovery".into(), Box::new(stop_loop)),
+        boundary,
+    ]);
+    Pattern::Catch {
+        inner: Box::new(inner),
+        label: label.into(),
+        recovery: Box::new(recovery),
+    }
+}
+
+#[test]
+fn bracketed_close_catch_lowers_without_inner_anchor() {
+    let g = parse("r <- 'a' ^^lbl ..= '}'");
+    assert_eq!(
+        g.rules["r"],
+        desugared_bracketed_close_catch(Pattern::literal("a"), "lbl", Pattern::literal("}"))
+    );
+}
+
+#[test]
+fn bracketed_close_catch_with_capture_boundary() {
+    // The boundary's capture kind is preserved on the trailing
+    // consume — `}` is captured as `@punctuation` in both happy and
+    // recovery paths.
+    let g = parse("r <- 'a' ^^lbl ..= @punctuation{'}'}");
+    let boundary = Pattern::Capture("punctuation".into(), Box::new(Pattern::literal("}")));
+    assert_eq!(
+        g.rules["r"],
+        desugared_bracketed_close_catch(Pattern::literal("a"), "lbl", boundary)
+    );
+}
+
+#[test]
+fn bracketed_close_catch_vs_boundary_catch_distinction() {
+    // `^^lbl B`   — anchors INNER with `&B`; recovery is just `@recovery{(!B .)*}` (B left for outer).
+    // `^^lbl ..= B` — no inner anchor; recovery is `Seq(@recovery{(!B .)*}, B)` (B consumed by recovery).
+    let anchored = parse("r <- 'a' ^^lbl '}'").rules["r"].clone();
+    let bracketed = parse("r <- 'a' ^^lbl ..= '}'").rules["r"].clone();
+    match (&anchored, &bracketed) {
+        (
+            Pattern::Catch {
+                inner: i_anch,
+                recovery: r_anch,
+                ..
+            },
+            Pattern::Catch {
+                inner: i_brkt,
+                recovery: r_brkt,
+                ..
+            },
+        ) => {
+            // Anchored inner is a Sequence ending in AndPredicate; bracketed inner is the bare INNER.
+            assert!(
+                matches!(i_anch.as_ref(), Pattern::Sequence(items) if matches!(items.last(), Some(Pattern::AndPredicate(_)))),
+                "anchored form should have &B on inner: {i_anch:?}"
+            );
+            assert_eq!(
+                i_brkt.as_ref(),
+                &Pattern::literal("a"),
+                "bracketed form should NOT anchor inner: {i_brkt:?}"
+            );
+            // Anchored recovery is just the capture; bracketed recovery is Seq(capture, B).
+            assert!(
+                matches!(r_anch.as_ref(), Pattern::Capture(_, _)),
+                "anchored recovery should be a capture, got: {r_anch:?}"
+            );
+            assert!(
+                matches!(r_brkt.as_ref(), Pattern::Sequence(_)),
+                "bracketed recovery should be a Sequence, got: {r_brkt:?}"
+            );
+        }
+        other => panic!("expected two Catch nodes, got: {other:?}"),
+    }
+}
+
+#[test]
+fn bracketed_close_catch_rejects_non_consuming_form() {
+    // `^^lbl .. B` is inconsistent (catch necessarily consumes B); the
+    // parser rejects it with a hint at `..=`.
+    let err = parse_src("r <- 'a' ^^lbl .. '}'").unwrap_err();
+    assert!(
+        err.message.contains("..=") || err.message.contains("consume"),
+        "expected hint about `..=`, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn bracketed_close_catch_does_not_swallow_trailing_atoms() {
+    // The catch sugar consumes its boundary in the recovery; any atoms
+    // after the boundary belong to the enclosing sequence.
+    let g = parse("r <- 'a' ^^lbl ..= '}' 'c'");
+    match &g.rules["r"] {
+        Pattern::Sequence(items) => {
+            assert_eq!(items.len(), 2, "expected Seq(catch, 'c'), got: {items:?}");
+            assert!(matches!(&items[0], Pattern::Catch { .. }));
+            assert_eq!(items[1], Pattern::literal("c"));
+        }
+        other => panic!("expected Sequence, got: {other:?}"),
+    }
+}

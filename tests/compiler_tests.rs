@@ -1820,6 +1820,45 @@ fn compile_succeeds_with_boundary_catch_anchor() {
 }
 
 #[test]
+fn compile_succeeds_with_bracketed_close_catch_sugar() {
+    // `^^bad ..= '}'` lowers to a `Catch` whose inner is unanchored
+    // and whose recovery is `Seq(@recovery{(!'}' .)*}, '}')`. The
+    // inner ends in `'}'` (a hard terminator), so `lint_partial_match`
+    // sees no trailing-nullable shape and compilation succeeds.
+    let g = parse("start <- ('{' a '}' ^^bad ..= '}')*\na <- 'x'+").expect("parse");
+    g.compile()
+        .expect("compile should succeed with `^^bad ..= '}'` sugar");
+}
+
+#[test]
+fn bracketed_close_catch_runs_recovery_path() {
+    use syntax_highlighter::pegvm::VM;
+    // Tiny grammar shaped like the corpus' `block` rule: opening `{`,
+    // body that requires `'x'`, closing `}` with `^^bad ..= '}'` to
+    // skip to the brace on body failure. Malformed input `{garbage}`
+    // exercises the recovery: skip captures `garbage` and `}` is
+    // captured as `@punctuation`.
+    let g = parse(
+        "start <- @punctuation{'{'} (body @punctuation{'}'} ^^bad ..= @punctuation{'}'})\nbody <- 'x'",
+    )
+    .expect("parse");
+    let prog = g.compile().expect("compile");
+    let r = VM::new(&prog.code, b"{garbage}").run();
+    assert!(r.complete, "recovery should let the parse complete");
+    assert_eq!(r.matched, 9);
+    let kinds: Vec<&str> = r
+        .captures
+        .iter()
+        .map(|c| prog.capture_kinds[c.kind.0 as usize].as_str())
+        .collect();
+    assert_eq!(
+        kinds,
+        vec!["punctuation", "recovery", "punctuation"],
+        "expected open-punct, recovery span, close-punct (NOT recovery)"
+    );
+}
+
+#[test]
 fn compile_error_display_lists_findings() {
     let g = parse("start <- (r)*^[;]\nr <- 'x' 'y'?").expect("parse");
     let err = g.compile().expect_err("compile should fail");
