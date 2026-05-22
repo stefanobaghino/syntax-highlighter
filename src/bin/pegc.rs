@@ -7,12 +7,14 @@
 //! `pegdb`, which is the parse-time / debug-time toolchain. See
 //! `TOOLS.md` at the repo root for the full contract.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::io::Write;
 use std::process::ExitCode;
 
 use syntax_highlighter::pegc;
 use syntax_highlighter::pegc::analysis::{compute_follow, FollowElement};
+use syntax_highlighter::pegc::tally_non_terminal_refs;
 
 const TOP_HELP: &str = "\
 pegc — PEG compiler-side toolchain for syntax-highlighter
@@ -21,7 +23,7 @@ Usage:
     pegc <subcommand> [options] [args]
 
 Subcommands:
-    stats <grammar.peg>              Print bytecode counts as one JSON object on stdout.
+    stats <grammar.peg>              Print bytecode counts as JSON header + per-rule NDJSON on stdout.
     follow-set <grammar.peg> [rule]  Print FOLLOW sets as NDJSON; one rule per line.
 
 Options:
@@ -33,9 +35,12 @@ See TOOLS.md for the full contract.
 const STATS_HELP: &str = "\
 Usage: pegc stats <grammar.peg>
 
-Compile a PEG grammar file and print its bytecode size as one JSON
-object on stdout (keys: path, instructions, rules, capture_kinds_count,
-capture_kinds).
+Compile a PEG grammar file and print stats on stdout. The first line is
+a JSON header (keys: path, instructions, rules, capture_kinds_count,
+capture_kinds). Subsequent lines are NDJSON, one record per rule sorted
+alphabetically (keys: rule, references, body_chars). Every rule appears,
+including unreferenced ones (`references` is 0) — drives the inlining
+and dead-code audits.
 
 Exit 0 on success, 2 on usage error, 3 on grammar-compile error.
 See TOOLS.md for the full contract.
@@ -127,7 +132,14 @@ fn run_stats(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let prog = match pegc::compile(&source) {
+    let grammar = match pegc::parse(&source) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("pegc stats: grammar error: {}", e);
+            return ExitCode::from(3);
+        }
+    };
+    let prog = match grammar.compile() {
         Ok(p) => p,
         Err(e) => {
             eprintln!("pegc stats: grammar error: {}", e);
@@ -153,7 +165,47 @@ fn run_stats(args: &[String]) -> ExitCode {
         prog.capture_kinds.len(),
         kinds_json,
     );
+    // Per-rule NDJSON: one record per rule, sorted alphabetically.
+    // Every rule appears, including zero-reference ones — the "dead
+    // code" query is one of the target audits.
+    let mut refs: HashMap<String, usize> = HashMap::with_capacity(grammar.rule_headers.len());
+    for h in &grammar.rule_headers {
+        refs.insert(h.name.clone(), 0);
+    }
+    for body in grammar.rules.values() {
+        tally_non_terminal_refs(body, &mut refs);
+    }
+    let mut records: Vec<(&str, usize, usize)> = grammar
+        .rule_headers
+        .iter()
+        .map(|h| {
+            let body_chars = source[h.body_byte_start..h.body_byte_end]
+                .trim()
+                .chars()
+                .count();
+            let references = refs.get(&h.name).copied().unwrap_or(0);
+            (h.name.as_str(), references, body_chars)
+        })
+        .collect();
+    records.sort_by(|a, b| a.0.cmp(b.0));
+    for (name, references, body_chars) in records {
+        let _ = writeln!(out, "{}", json_rule_record(name, references, body_chars));
+    }
     ExitCode::SUCCESS
+}
+
+/// Format one rule's stats record as a single-line JSON object.
+fn json_rule_record(name: &str, references: usize, body_chars: usize) -> String {
+    let mut s = String::new();
+    s.push('{');
+    s.push_str("\"rule\":");
+    s.push_str(&json_string(name));
+    let _ = write!(
+        s,
+        ",\"references\":{},\"body_chars\":{}}}",
+        references, body_chars
+    );
+    s
 }
 
 fn run_follow_set(args: &[String]) -> ExitCode {

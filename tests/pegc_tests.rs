@@ -81,7 +81,40 @@ fn stats_json_grammar_emits_expected_record() {
             "kind name not JSON-string-quoted: {p:?}"
         );
     }
-    assert!(lines.next().is_none(), "stats should emit one record");
+    // One NDJSON per-rule record after the header; the count matches
+    // the header's `rules` field, lines are sorted alphabetically, and
+    // each carries the documented `rule` / `references` / `body_chars`
+    // fields.
+    let per_rule: Vec<&str> = lines.collect();
+    assert_eq!(
+        per_rule.len(),
+        rules,
+        "per-rule record count mismatch: {per_rule:?}"
+    );
+    let mut prev: Option<&str> = None;
+    for r in &per_rule {
+        assert!(
+            r.starts_with('{') && r.ends_with('}'),
+            "per-rule line not a JSON object: {r:?}"
+        );
+        let name = json_field_str(r, "rule").expect("rule present");
+        assert!(
+            name.starts_with('"') && name.ends_with('"'),
+            "rule name not JSON-string-quoted: {r:?}"
+        );
+        json_field_str(r, "references")
+            .expect("references present")
+            .parse::<usize>()
+            .expect("references parses as integer");
+        json_field_str(r, "body_chars")
+            .expect("body_chars present")
+            .parse::<usize>()
+            .expect("body_chars parses as integer");
+        if let Some(p) = prev {
+            assert!(p < name, "per-rule lines not sorted: {p:?} then {name:?}");
+        }
+        prev = Some(name);
+    }
 }
 
 // `tests/fixtures/stats_canary.peg` is a deliberately tiny grammar
@@ -95,11 +128,48 @@ fn stats_emits_correct_counts_for_canary_grammar() {
     assert!(Path::new(path).exists(), "fixture missing: {path}");
     let (code, stdout, stderr) = run(&["stats", path]);
     assert_eq!(code, 0, "stderr was: {stderr}");
-    let line = stdout.lines().next().expect("at least one line");
-    assert_eq!(json_field_str(line, "instructions"), Some("11"));
-    assert_eq!(json_field_str(line, "rules"), Some("1"));
-    assert_eq!(json_field_str(line, "capture_kinds_count"), Some("1"));
-    assert_eq!(json_field_str(line, "capture_kinds"), Some("[\"keyword\"]"));
+    let mut lines = stdout.lines();
+    let header = lines.next().expect("at least one line");
+    assert_eq!(json_field_str(header, "instructions"), Some("11"));
+    assert_eq!(json_field_str(header, "rules"), Some("1"));
+    assert_eq!(json_field_str(header, "capture_kinds_count"), Some("1"));
+    assert_eq!(
+        json_field_str(header, "capture_kinds"),
+        Some("[\"keyword\"]")
+    );
+    // The lone rule has no NonTerminal references; body_chars pins the
+    // trimmed source length of `'a' / @keyword{'b'}` (19 characters).
+    let rule_line = lines.next().expect("per-rule record present");
+    assert_eq!(json_field_str(rule_line, "rule"), Some("\"r\""));
+    assert_eq!(json_field_str(rule_line, "references"), Some("0"));
+    assert_eq!(json_field_str(rule_line, "body_chars"), Some("19"));
+    assert!(lines.next().is_none(), "canary should emit one rule record");
+}
+
+// Multi-rule fixture pinning per-rule reference counting: `a` is
+// referenced three times (twice from `start`, once from `b`), `b` once
+// (from `start`), and `start` zero times.
+#[test]
+fn stats_per_rule_records_count_references() {
+    let path = "tests/fixtures/stats_refs_canary.peg";
+    assert!(Path::new(path).exists(), "fixture missing: {path}");
+    let (code, stdout, stderr) = run(&["stats", path]);
+    assert_eq!(code, 0, "stderr was: {stderr}");
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 4, "expected 1 header + 3 per-rule: {lines:?}");
+    let header = lines[0];
+    assert_eq!(json_field_str(header, "rules"), Some("3"));
+    let mut by_rule: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    for line in &lines[1..] {
+        let rule = json_field_str(line, "rule").expect("rule present");
+        by_rule.insert(rule, line);
+    }
+    let a = by_rule["\"a\""];
+    assert_eq!(json_field_str(a, "references"), Some("3"));
+    let b = by_rule["\"b\""];
+    assert_eq!(json_field_str(b, "references"), Some("1"));
+    let start = by_rule["\"start\""];
+    assert_eq!(json_field_str(start, "references"), Some("0"));
 }
 
 #[test]
