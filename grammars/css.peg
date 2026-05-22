@@ -83,7 +83,7 @@ attr_body      <- .. ']'
 
 # --- Blocks & declarations ------------------------------------------
 
-block         <- @punctuation{'{'} ws (block_body ws @punctuation{'}'} ^block_close @recovery{(!'}' .)*} @punctuation{'}'})
+block         <- @punctuation{'{'} ws (block_body ws @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
 block_body    <- (block_item ws)*
 block_item    <- at_rule
                 / declaration

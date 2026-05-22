@@ -127,7 +127,7 @@ type_arg_list <- type_expr (ws @punctuation{','} ws type_expr)* (ws @punctuation
 
 # --- Statements ------------------------------------------------------
 
-block         <- @punctuation{'{'} ws ((stmt ws)* @punctuation{'}'} ^block_close @recovery{(!'}' .)*} @punctuation{'}'})
+block         <- @punctuation{'{'} ws ((stmt ws)* @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
 
 stmt          <- decl ws opt_semi
                / block

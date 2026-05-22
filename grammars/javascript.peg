@@ -158,7 +158,7 @@ throw_stmt     <- @keyword{'throw'} ws expr ws opt_semi
 debugger_stmt  <- @keyword{'debugger'} ws opt_semi
 labeled_stmt   <- @variable{ident} ws @punctuation{':'} ws stmt
 block_stmt     <- block
-block          <- @punctuation{'{'} ws ((stmt ws)* @punctuation{'}'} ^block_close @recovery{(!'}' .)*} @punctuation{'}'})
+block          <- @punctuation{'{'} ws ((stmt ws)* @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
 
 # --- Function params and patterns -------------------------------------
 

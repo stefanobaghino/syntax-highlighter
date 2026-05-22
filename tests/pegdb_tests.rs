@@ -414,6 +414,25 @@ fn explain_recoveries_skips_trivia_when_picking_leaf() {
 }
 
 #[test]
+fn explain_recoveries_after_block_close_migration_rust() {
+    // Rust's `block` rule uses the new `^^block_close ..= '}'` sugar.
+    // Malformed block body should still surface a `block_close` cluster
+    // through pegdb explain-recoveries, with the recovery span covering
+    // the garbage and the closing `}` consumed as `@punctuation`.
+    let (code, stdout, _) = run_stdin(
+        &["explain-recoveries", "-g", "grammars/rust.peg"],
+        b"fn ok() { @@@ garbage @@@ }\n",
+    );
+    assert_eq!(code, 0);
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.contains("label: block_close")),
+        "expected a cluster labeled block_close; got:\n{stdout}"
+    );
+}
+
+#[test]
 fn explain_recoveries_clusters_by_rule_stack() {
     // Multiple `@@@` runs should collapse into a single top-level
     // cluster; non-trivial dive sites (e.g. `g` looking like the start
