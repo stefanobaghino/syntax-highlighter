@@ -1,29 +1,29 @@
 # JSON grammar with highlight annotations.
 # The first rule is the start rule.
 
-json        <- spacing value spacing \z
+json        <- \s* value \s* \z
 
 value       <- @string{string}
              / @number{number}
              / object
              / array
-             / @constant{true_lit}
-             / @constant{false_lit}
-             / @constant{null_lit}
+             / @constant{'true'}
+             / @constant{'false'}
+             / @constant{'null'}
 
-object      <- @punctuation{'{'} spacing
-               (pair (spacing @punctuation{','} spacing pair)*)?
-               spacing @punctuation{'}'}
+object      <- @punctuation{'{'} \s*
+               (pair (\s* @punctuation{','} \s* pair)*)?
+               \s* @punctuation{'}'}
 
-pair        <- @property{string} spacing @punctuation{':'} spacing value
+pair        <- @property{string} \s* @punctuation{':'} \s* value
 
-array       <- @punctuation{'['} spacing
-               (value (spacing @punctuation{','} spacing value)*)?
-               spacing @punctuation{']'}
+array       <- @punctuation{'['} \s*
+               (value (\s* @punctuation{','} \s* value)*)?
+               \s* @punctuation{']'}
 
 string      <- '"' string_char* '"'
 string_char <- '\\' ["\\/bfnrt]
-             / '\\' 'u' hex{4}
+             / '\\' 'u' [\da-fA-F]{4}
              / [^"\\]
 
 number      <- '-'? int frac? exp?
@@ -31,11 +31,4 @@ int         <- '0' / [1-9] \d*
 frac        <- '.' \d+
 exp         <- [eE] [+\-]? \d+
 
-true_lit    <- 'true'
-false_lit   <- 'false'
-null_lit    <- 'null'
-
-hex         <- [\da-fA-F]
-trivia      <- spacing
-
-spacing     <- \s*
+trivia      <- \s*

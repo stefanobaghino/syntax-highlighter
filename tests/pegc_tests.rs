@@ -51,12 +51,12 @@ fn stats_json_grammar_emits_expected_record() {
     );
     assert_eq!(
         json_field_str(line, "instructions"),
-        Some("201"),
+        Some("205"),
         "JSON instruction count drifted"
     );
     assert_eq!(
         json_field_str(line, "rules"),
-        Some("17"),
+        Some("12"),
         "JSON rule count drifted"
     );
     let count: usize = json_field_str(line, "capture_kinds_count")

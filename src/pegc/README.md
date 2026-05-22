@@ -510,11 +510,8 @@ The compiler treats one rule name specially:
   rules outside the `trivia` subgraph; only ignorable bytes go in.
 
   ```peg
-  trivia        <- ws
-  ws            <- (comment / [ \t\r\n])*
-  comment       <- @comment{line_comment / block_comment}
-  line_comment  <- '//' (!'\n' .)*
-  block_comment <- '/*' (!'*/' .)* '*/'
+  trivia        <- (comment / \s)*
+  comment       <- @comment{'//' .. '\n' / '/*' ..= '*/'}
   ```
 
   Grammars without a `trivia` rule leave all trivia bits false;
