@@ -54,8 +54,8 @@
 
 # --- Top level --------------------------------------------------------
 
-sql_file   <- (ws statement stmt_sep?)*^[;] ws \z
-stmt_sep   <- ws @punctuation{';'} ws
+sql_file   <- (trivia statement stmt_sep?)*^[;] trivia \z
+stmt_sep   <- trivia @punctuation{';'} trivia
 statement       <- explain_stmt / statement_body
 statement_body  <- select_stmt
                  / insert_stmt
@@ -88,58 +88,58 @@ statement_body  <- select_stmt
 # Trailing `limit_clause?` absorbed by `sql_file`'s top-level `*^[;]`.
 ~select_stmt   <- with_clause? select_core compound_tail* order_clause? limit_clause?
 
-with_clause    <- kw_with (ws kw_recursive)? ws cte_defn (ws @punctuation{','} ws cte_defn)* ws
+with_clause    <- kw_with (trivia kw_recursive)? trivia cte_defn (trivia @punctuation{','} trivia cte_defn)* trivia
 cte_defn       <- @type{bare_ident}
-                  (ws @punctuation{'('} ws ident_list ws @punctuation{')'})?
-                  ws kw_as ws @punctuation{'('} ws select_stmt ws @punctuation{')'}
+                  (trivia @punctuation{'('} trivia ident_list trivia @punctuation{')'})?
+                  trivia kw_as trivia @punctuation{'('} trivia select_stmt trivia @punctuation{')'}
 
 # Trailing `(window_clause)?` absorbed by `*^[;]`.
-~select_core   <- kw_select (ws (kw_distinct / kw_all))? ws result_list
-                  (ws from_clause)? (ws where_clause)? (ws group_clause)? (ws having_clause)?
-                  (ws window_clause)?
+~select_core   <- kw_select (trivia (kw_distinct / kw_all))? trivia result_list
+                  (trivia from_clause)? (trivia where_clause)? (trivia group_clause)? (trivia having_clause)?
+                  (trivia window_clause)?
 
-result_list    <- result_column (ws @punctuation{','} ws result_column)*
+result_list    <- result_column (trivia @punctuation{','} trivia result_column)*
 # A column expression that didn't reach a known boundary is treated
-# as malformed. The `^^bad_column (ws result_column_boundary)`
+# as malformed. The `^^bad_column (trivia result_column_boundary)`
 # operator anchors the inner branch on the boundary (so e.g.
 # `blob.rid IN leaf` fails because `IN` isn't in the boundary set)
-# and synthesizes the recovery body `(!(ws result_column_boundary) .)*`
+# and synthesizes the recovery body `(!(trivia result_column_boundary) .)*`
 # from the same argument.
 result_column  <- (table_star / @operator{'*'} / aliased_expr)
-                  ^^bad_column (ws result_column_boundary)
+                  ^^bad_column (trivia result_column_boundary)
 result_column_boundary <- @punctuation{','} / @punctuation{')'} / @punctuation{';'}
                         / kw_from / kw_where / kw_group / kw_having
                         / kw_order / kw_limit / kw_offset / kw_window
                         / kw_union / kw_intersect / kw_except
                         / \z
 table_star     <- @type{bare_ident_nonkw} @punctuation{'.'} @operator{'*'}
-aliased_expr   <- expr (ws kw_as ws @variable{bare_ident_nonkw}
-                      / ws @variable{bare_ident_nonkw})?
+aliased_expr   <- expr (trivia kw_as trivia @variable{bare_ident_nonkw}
+                      / trivia @variable{bare_ident_nonkw})?
 
-compound_tail  <- ws (kw_union (ws kw_all)? / kw_intersect / kw_except) ws select_core
+compound_tail  <- trivia (kw_union (trivia kw_all)? / kw_intersect / kw_except) trivia select_core
 
-from_clause    <- kw_from ws table_or_subquery (ws join_clause)*
-table_or_subquery <- @punctuation{'('} ws select_stmt ws @punctuation{')'} (ws table_alias)?
-                   / qualified_table_name (ws table_alias)?
+from_clause    <- kw_from trivia table_or_subquery (trivia join_clause)*
+table_or_subquery <- @punctuation{'('} trivia select_stmt trivia @punctuation{')'} (trivia table_alias)?
+                   / qualified_table_name (trivia table_alias)?
 # Trailing `(.ident)?` leniency absorbed by `sql_file`'s `*^[;]`.
 ~qualified_table_name <- @type{bare_ident_nonkw} (@punctuation{'.'} @type{bare_ident_nonkw})?
-table_alias    <- kw_as ws @variable{bare_ident_nonkw}
+table_alias    <- kw_as trivia @variable{bare_ident_nonkw}
                 / @variable{bare_ident_nonkw}
 
 # Trailing `(join_constraint)?` absorbed by `*^[;]`.
-~join_clause   <- join_op ws table_or_subquery (ws join_constraint)?
+~join_clause   <- join_op trivia table_or_subquery (trivia join_constraint)?
 join_op        <- @punctuation{','}
-                / kw_natural (ws join_type)? ws kw_join
-                / join_type ws kw_join
+                / kw_natural (trivia join_type)? trivia kw_join
+                / join_type trivia kw_join
                 / kw_join
-join_type      <- kw_left (ws kw_outer)?
-                / kw_right (ws kw_outer)?
-                / kw_full (ws kw_outer)?
+join_type      <- kw_left (trivia kw_outer)?
+                / kw_right (trivia kw_outer)?
+                / kw_full (trivia kw_outer)?
                 / kw_inner
                 / kw_cross
-join_constraint<- kw_on ws expr
-                / kw_using ws @punctuation{'('} ws ident_list ws @punctuation{')'}
-ident_list     <- @variable{bare_ident_nonkw} (ws @punctuation{','} ws @variable{bare_ident_nonkw})*
+join_constraint<- kw_on trivia expr
+                / kw_using trivia @punctuation{'('} trivia ident_list trivia @punctuation{')'}
+ident_list     <- @variable{bare_ident_nonkw} (trivia @punctuation{','} trivia @variable{bare_ident_nonkw})*
 
 # Like `result_column`, `where_clause` uses `^^bad_where` to turn
 # partial-parse leftovers (e.g. `WHERE x NOT IN phantom ORDER BY …`
@@ -147,22 +147,22 @@ ident_list     <- @variable{bare_ident_nonkw} (ws @punctuation{','} ws @variable
 # The operator sits *inside* the `kw_where` match so a missing WHERE
 # keyword still fails the rule cleanly (no spurious empty recovery
 # captures on clean SELECTs).
-where_clause   <- kw_where ws (expr ^^bad_where (ws where_clause_boundary))
+where_clause   <- kw_where trivia (expr ^^bad_where (trivia where_clause_boundary))
 where_clause_boundary <- @punctuation{')'} / @punctuation{';'}
                        / kw_group / kw_having / kw_order / kw_limit
                        / kw_offset / kw_window / kw_returning
                        / kw_union / kw_intersect / kw_except
                        / \z
-group_clause   <- kw_group ws kw_by ws expr (ws @punctuation{','} ws expr)*
-having_clause  <- kw_having ws expr
+group_clause   <- kw_group trivia kw_by trivia expr (trivia @punctuation{','} trivia expr)*
+having_clause  <- kw_having trivia expr
 
-order_clause   <- ws kw_order ws kw_by ws order_item (ws @punctuation{','} ws order_item)*
+order_clause   <- trivia kw_order trivia kw_by trivia order_item (trivia @punctuation{','} trivia order_item)*
 # Trailing `(asc/desc)?` absorbed by `*^[;]`.
-~order_item    <- expr (ws (kw_asc / kw_desc))?
+~order_item    <- expr (trivia (kw_asc / kw_desc))?
 
 # Trailing `(offset)?` absorbed by `*^[;]`.
-~limit_clause  <- ws kw_limit ws expr (ws kw_offset ws expr
-                                      / ws @punctuation{','} ws expr)?
+~limit_clause  <- trivia kw_limit trivia expr (trivia kw_offset trivia expr
+                                      / trivia @punctuation{','} trivia expr)?
 
 # --- Window functions & WINDOW clause --------------------------------
 # Not counted as reserved keywords in SQLite aside from WINDOW and
@@ -171,33 +171,33 @@ order_clause   <- ws kw_order ws kw_by ws order_item (ws @punctuation{','} ws or
 # are matched positionally here, so existing SELECTs that use any of
 # those as identifiers keep working.
 
-window_clause  <- kw_window ws named_window (ws @punctuation{','} ws named_window)*
-named_window   <- @variable{bare_ident_nonkw} ws kw_as ws window_defn
+window_clause  <- kw_window trivia named_window (trivia @punctuation{','} trivia named_window)*
+named_window   <- @variable{bare_ident_nonkw} trivia kw_as trivia window_defn
 
-filter_clause  <- kw_filter ws @punctuation{'('} ws kw_where ws expr ws @punctuation{')'}
+filter_clause  <- kw_filter trivia @punctuation{'('} trivia kw_where trivia expr trivia @punctuation{')'}
 
-window_defn    <- @punctuation{'('} ws
-                      (!window_section_keyword @variable{bare_ident_nonkw} ws)?
-                      (kw_partition ws kw_by ws expr (ws @punctuation{','} ws expr)* ws)?
-                      (window_order_body ws)?
-                      (frame_spec ws)? @punctuation{')'}
+window_defn    <- @punctuation{'('} trivia
+                      (!window_section_keyword @variable{bare_ident_nonkw} trivia)?
+                      (kw_partition trivia kw_by trivia expr (trivia @punctuation{','} trivia expr)* trivia)?
+                      (window_order_body trivia)?
+                      (frame_spec trivia)? @punctuation{')'}
 # Guard the optional base-window-name slot against consuming a keyword
 # that actually starts the next positional section (PARTITION / ORDER /
 # RANGE / ROWS / GROUPS). Without the lookahead, PEG would eat
 # `PARTITION` as a bare identifier and then fail on the partition clause.
 window_section_keyword <- kw_partition / kw_order / kw_range / kw_rows / kw_groups
-window_order_body <- kw_order ws kw_by ws order_item (ws @punctuation{','} ws order_item)*
+window_order_body <- kw_order trivia kw_by trivia order_item (trivia @punctuation{','} trivia order_item)*
 window_ref     <- window_defn / @variable{bare_ident_nonkw}
 
-frame_spec     <- (kw_range / kw_rows / kw_groups) ws
-                  (kw_between ws frame_bound ws kw_and ws frame_bound
+frame_spec     <- (kw_range / kw_rows / kw_groups) trivia
+                  (kw_between trivia frame_bound trivia kw_and trivia frame_bound
                    / frame_bound)
-                  (ws kw_exclude ws frame_exclude)?
-frame_bound    <- kw_unbounded ws (kw_preceding / kw_following)
-                / kw_current ws kw_row
-                / expr ws (kw_preceding / kw_following)
-frame_exclude  <- kw_no ws kw_others
-                / kw_current ws kw_row
+                  (trivia kw_exclude trivia frame_exclude)?
+frame_bound    <- kw_unbounded trivia (kw_preceding / kw_following)
+                / kw_current trivia kw_row
+                / expr trivia (kw_preceding / kw_following)
+frame_exclude  <- kw_no trivia kw_others
+                / kw_current trivia kw_row
                 / kw_group
                 / kw_ties
 
@@ -206,42 +206,42 @@ frame_exclude  <- kw_no ws kw_others
 # `update_set_list`, which is defined here.
 
 # Trailing `(returning_clause)?` absorbed by `*^[;]`.
-~insert_stmt   <- with_clause? insert_prefix ws kw_into ws qualified_table_name
-                  (ws kw_as ws @variable{bare_ident_nonkw})?
-                  (ws @punctuation{'('} ws ident_list ws @punctuation{')'})?
-                  ws insert_source
-                  (ws upsert_clause)*
-                  (ws returning_clause)?
+~insert_stmt   <- with_clause? insert_prefix trivia kw_into trivia qualified_table_name
+                  (trivia kw_as trivia @variable{bare_ident_nonkw})?
+                  (trivia @punctuation{'('} trivia ident_list trivia @punctuation{')'})?
+                  trivia insert_source
+                  (trivia upsert_clause)*
+                  (trivia returning_clause)?
 
-insert_prefix  <- kw_insert (ws kw_or ws conflict_action)?
+insert_prefix  <- kw_insert (trivia kw_or trivia conflict_action)?
                 / kw_replace
 
-insert_source  <- kw_default ws kw_values
-                / kw_values ws values_row (ws @punctuation{','} ws values_row)*
+insert_source  <- kw_default trivia kw_values
+                / kw_values trivia values_row (trivia @punctuation{','} trivia values_row)*
                 / select_stmt
-values_row     <- @punctuation{'('} ws expr (ws @punctuation{','} ws expr)* ws @punctuation{')'}
+values_row     <- @punctuation{'('} trivia expr (trivia @punctuation{','} trivia expr)* trivia @punctuation{')'}
 
 conflict_action <- kw_rollback / kw_abort / kw_fail / kw_ignore / kw_replace
 
-upsert_clause  <- kw_on ws kw_conflict
-                  (ws @punctuation{'('} ws indexed_col_list ws @punctuation{')'} (ws where_clause)?)?
-                  ws kw_do ws (kw_nothing
-                             / kw_update ws kw_set ws update_set_list (ws where_clause)?)
+upsert_clause  <- kw_on trivia kw_conflict
+                  (trivia @punctuation{'('} trivia indexed_col_list trivia @punctuation{')'} (trivia where_clause)?)?
+                  trivia kw_do trivia (kw_nothing
+                             / kw_update trivia kw_set trivia update_set_list (trivia where_clause)?)
 
-indexed_col_list <- indexed_col (ws @punctuation{','} ws indexed_col)*
-indexed_col      <- expr (ws kw_collate ws @type{bare_ident})? (ws (kw_asc / kw_desc))?
+indexed_col_list <- indexed_col (trivia @punctuation{','} trivia indexed_col)*
+indexed_col      <- expr (trivia kw_collate trivia @type{bare_ident})? (trivia (kw_asc / kw_desc))?
 
-update_set_list <- update_set_item (ws @punctuation{','} ws update_set_item)*
-update_set_item <- @variable{bare_ident_nonkw} ws @operator{'='} ws expr
-                 / @punctuation{'('} ws ident_list ws @punctuation{')'} ws @operator{'='} ws row_value
+update_set_list <- update_set_item (trivia @punctuation{','} trivia update_set_item)*
+update_set_item <- @variable{bare_ident_nonkw} trivia @operator{'='} trivia expr
+                 / @punctuation{'('} trivia ident_list trivia @punctuation{')'} trivia @operator{'='} trivia row_value
 # RHS of a column-tuple assignment: parens-wrapped row-value (literal
 # list or sub-select) or a single expression that yields a row.
-row_value        <- @punctuation{'('} ws
-                    (select_stmt / expr (ws @punctuation{','} ws expr)*)
-                    ws @punctuation{')'}
+row_value        <- @punctuation{'('} trivia
+                    (select_stmt / expr (trivia @punctuation{','} trivia expr)*)
+                    trivia @punctuation{')'}
                   / expr
 
-returning_clause <- kw_returning ws result_list
+returning_clause <- kw_returning trivia result_list
 
 # --- DML: UPDATE, DELETE ---------------------------------------------
 # UPDATE FROM and DELETE reuse `from_clause` and `where_clause` from
@@ -250,20 +250,20 @@ returning_clause <- kw_returning ws result_list
 # should not pretend the syntax doesn't exist.
 
 # Trailing `(returning_clause)?` absorbed by `*^[;]`.
-~update_stmt <- with_clause? kw_update (ws kw_or ws conflict_action)? ws
-               qualified_table_name (ws table_alias)?
-               ws kw_set ws update_set_list
-               (ws from_clause)?
-               (ws where_clause)?
+~update_stmt <- with_clause? kw_update (trivia kw_or trivia conflict_action)? trivia
+               qualified_table_name (trivia table_alias)?
+               trivia kw_set trivia update_set_list
+               (trivia from_clause)?
+               (trivia where_clause)?
                order_clause?
                limit_clause?
-               (ws returning_clause)?
+               (trivia returning_clause)?
 
-~delete_stmt <- with_clause? kw_delete ws kw_from ws qualified_table_name (ws table_alias)?
-               (ws where_clause)?
+~delete_stmt <- with_clause? kw_delete trivia kw_from trivia qualified_table_name (trivia table_alias)?
+               (trivia where_clause)?
                order_clause?
                limit_clause?
-               (ws returning_clause)?
+               (trivia returning_clause)?
 
 # --- DDL: CREATE / DROP / ALTER TABLE --------------------------------
 # Interleaves column_def with table_constraint because SQLite does
@@ -272,133 +272,133 @@ returning_clause <- kw_returning ws result_list
 # requires a non-keyword leading identifier, while table_constraint
 # starts with CONSTRAINT, PRIMARY, UNIQUE, CHECK, or FOREIGN.
 
-create_table_stmt <- kw_create (ws (kw_temporary / kw_temp))? ws kw_table
-                     (ws kw_if ws kw_not ws kw_exists)?
-                     ws qualified_table_name
-                     ws (@punctuation{'('} ws
+create_table_stmt <- kw_create (trivia (kw_temporary / kw_temp))? trivia kw_table
+                     (trivia kw_if trivia kw_not trivia kw_exists)?
+                     trivia qualified_table_name
+                     trivia (@punctuation{'('} trivia
                              (column_def / table_constraint)
-                             (ws @punctuation{','} ws (column_def / table_constraint))*
-                         ws @punctuation{')'}
-                         (ws table_option (ws @punctuation{','} ws table_option)*)?
-                       / kw_as ws select_stmt)
+                             (trivia @punctuation{','} trivia (column_def / table_constraint))*
+                         trivia @punctuation{')'}
+                         (trivia table_option (trivia @punctuation{','} trivia table_option)*)?
+                       / kw_as trivia select_stmt)
 
 # Trailing `(column_constraint)*` leniency absorbed by `*^[;]`.
 ~column_def    <- @variable{bare_ident_nonkw}
-                  (ws type_name)?
-                  (ws column_constraint)*
+                  (trivia type_name)?
+                  (trivia column_constraint)*
 
 # SQLite accepts multi-word type names like `DOUBLE PRECISION` and
 # `UNSIGNED BIG INT`. Consume consecutive non-keyword identifiers.
 # Trailing `(...)?` leniency absorbed by `*^[;]`.
-~type_name     <- @type{bare_ident_nonkw} (ws @type{bare_ident_nonkw})*
-                  (ws @punctuation{'('} ws signed_number
-                       (ws @punctuation{','} ws signed_number)? ws @punctuation{')'})?
+~type_name     <- @type{bare_ident_nonkw} (trivia @type{bare_ident_nonkw})*
+                  (trivia @punctuation{'('} trivia signed_number
+                       (trivia @punctuation{','} trivia signed_number)? trivia @punctuation{')'})?
 
-signed_number  <- (@operator{'-'} / @operator{'+'})? ws @number{number_body}
+signed_number  <- (@operator{'-'} / @operator{'+'})? trivia @number{number_body}
 
-column_constraint      <- (kw_constraint ws @variable{bare_ident_nonkw} ws)? column_constraint_body
+column_constraint      <- (kw_constraint trivia @variable{bare_ident_nonkw} trivia)? column_constraint_body
 column_constraint_body <-
-      kw_primary ws kw_key (ws (kw_asc / kw_desc))? (ws conflict_clause)? (ws kw_autoincrement)?
-    / (kw_not ws)? kw_null (ws conflict_clause)?
-    / kw_unique (ws conflict_clause)?
-    / kw_check ws @punctuation{'('} ws expr ws @punctuation{')'}
-    / kw_default ws (signed_number / literal / @punctuation{'('} ws expr ws @punctuation{')'})
-    / kw_collate ws @type{bare_ident}
+      kw_primary trivia kw_key (trivia (kw_asc / kw_desc))? (trivia conflict_clause)? (trivia kw_autoincrement)?
+    / (kw_not trivia)? kw_null (trivia conflict_clause)?
+    / kw_unique (trivia conflict_clause)?
+    / kw_check trivia @punctuation{'('} trivia expr trivia @punctuation{')'}
+    / kw_default trivia (signed_number / literal / @punctuation{'('} trivia expr trivia @punctuation{')'})
+    / kw_collate trivia @type{bare_ident}
     / foreign_key_clause
-    / (kw_generated ws kw_always ws)? kw_as ws @punctuation{'('} ws expr ws @punctuation{')'}
-      (ws (kw_stored / kw_virtual))?
+    / (kw_generated trivia kw_always trivia)? kw_as trivia @punctuation{'('} trivia expr trivia @punctuation{')'}
+      (trivia (kw_stored / kw_virtual))?
 
-table_constraint      <- (kw_constraint ws @variable{bare_ident_nonkw} ws)? table_constraint_body
+table_constraint      <- (kw_constraint trivia @variable{bare_ident_nonkw} trivia)? table_constraint_body
 table_constraint_body <-
-      (kw_primary ws kw_key / kw_unique)
-          ws @punctuation{'('} ws indexed_col_list ws @punctuation{')'}
-          (ws conflict_clause)?
-    / kw_check ws @punctuation{'('} ws expr ws @punctuation{')'}
-    / kw_foreign ws kw_key ws @punctuation{'('} ws ident_list ws @punctuation{')'}
-          ws foreign_key_clause
+      (kw_primary trivia kw_key / kw_unique)
+          trivia @punctuation{'('} trivia indexed_col_list trivia @punctuation{')'}
+          (trivia conflict_clause)?
+    / kw_check trivia @punctuation{'('} trivia expr trivia @punctuation{')'}
+    / kw_foreign trivia kw_key trivia @punctuation{'('} trivia ident_list trivia @punctuation{')'}
+          trivia foreign_key_clause
 
 # Trailing `(fk_deferrable)?` absorbed by `*^[;]`.
-~foreign_key_clause <- kw_references ws @type{bare_ident_nonkw}
-                      (ws @punctuation{'('} ws ident_list ws @punctuation{')'})?
-                      (ws fk_action)*
-                      (ws fk_deferrable)?
-fk_action      <- kw_on ws (kw_delete / kw_update) ws fk_action_body
-                / kw_match ws @variable{bare_ident_nonkw}
-fk_action_body <- kw_set ws (kw_null / kw_default)
+~foreign_key_clause <- kw_references trivia @type{bare_ident_nonkw}
+                      (trivia @punctuation{'('} trivia ident_list trivia @punctuation{')'})?
+                      (trivia fk_action)*
+                      (trivia fk_deferrable)?
+fk_action      <- kw_on trivia (kw_delete / kw_update) trivia fk_action_body
+                / kw_match trivia @variable{bare_ident_nonkw}
+fk_action_body <- kw_set trivia (kw_null / kw_default)
                 / kw_cascade
                 / kw_restrict
-                / kw_no ws kw_action
+                / kw_no trivia kw_action
 # Trailing `(initially)?` absorbed by `*^[;]`.
-~fk_deferrable <- (kw_not ws)? kw_deferrable (ws kw_initially ws (kw_immediate / kw_deferred))?
+~fk_deferrable <- (kw_not trivia)? kw_deferrable (trivia kw_initially trivia (kw_immediate / kw_deferred))?
 
-conflict_clause <- kw_on ws kw_conflict ws conflict_action
+conflict_clause <- kw_on trivia kw_conflict trivia conflict_action
 
-table_option   <- kw_without ws kw_rowid / kw_strict
+table_option   <- kw_without trivia kw_rowid / kw_strict
 
-drop_table_stmt <- kw_drop ws kw_table (ws kw_if ws kw_exists)? ws qualified_table_name
+drop_table_stmt <- kw_drop trivia kw_table (trivia kw_if trivia kw_exists)? trivia qualified_table_name
 
-alter_table_stmt <- kw_alter ws kw_table ws qualified_table_name ws (
-      kw_rename ws kw_to ws @type{bare_ident_nonkw}
-    / kw_rename (ws kw_column)? ws @variable{bare_ident_nonkw}
-        ws kw_to ws @variable{bare_ident_nonkw}
-    / kw_add (ws kw_column)? ws column_def
-    / kw_drop (ws kw_column)? ws @variable{bare_ident_nonkw}
+alter_table_stmt <- kw_alter trivia kw_table trivia qualified_table_name trivia (
+      kw_rename trivia kw_to trivia @type{bare_ident_nonkw}
+    / kw_rename (trivia kw_column)? trivia @variable{bare_ident_nonkw}
+        trivia kw_to trivia @variable{bare_ident_nonkw}
+    / kw_add (trivia kw_column)? trivia column_def
+    / kw_drop (trivia kw_column)? trivia @variable{bare_ident_nonkw}
   )
 
 # --- DDL: CREATE / DROP INDEX and VIEW -------------------------------
 
 # Trailing `(where_clause)?` absorbed by `*^[;]`.
-~create_index_stmt <- kw_create (ws kw_unique)? ws kw_index
-                     (ws kw_if ws kw_not ws kw_exists)?
-                     ws qualified_table_name
-                     ws kw_on ws @type{bare_ident_nonkw}
-                     ws @punctuation{'('} ws indexed_col_list ws @punctuation{')'}
-                     (ws where_clause)?
+~create_index_stmt <- kw_create (trivia kw_unique)? trivia kw_index
+                     (trivia kw_if trivia kw_not trivia kw_exists)?
+                     trivia qualified_table_name
+                     trivia kw_on trivia @type{bare_ident_nonkw}
+                     trivia @punctuation{'('} trivia indexed_col_list trivia @punctuation{')'}
+                     (trivia where_clause)?
 
-drop_index_stmt   <- kw_drop ws kw_index (ws kw_if ws kw_exists)? ws qualified_table_name
+drop_index_stmt   <- kw_drop trivia kw_index (trivia kw_if trivia kw_exists)? trivia qualified_table_name
 
-create_view_stmt  <- kw_create (ws (kw_temporary / kw_temp))? ws kw_view
-                     (ws kw_if ws kw_not ws kw_exists)?
-                     ws qualified_table_name
-                     (ws @punctuation{'('} ws ident_list ws @punctuation{')'})?
-                     ws kw_as ws select_stmt
+create_view_stmt  <- kw_create (trivia (kw_temporary / kw_temp))? trivia kw_view
+                     (trivia kw_if trivia kw_not trivia kw_exists)?
+                     trivia qualified_table_name
+                     (trivia @punctuation{'('} trivia ident_list trivia @punctuation{')'})?
+                     trivia kw_as trivia select_stmt
 
-drop_view_stmt    <- kw_drop ws kw_view (ws kw_if ws kw_exists)? ws qualified_table_name
+drop_view_stmt    <- kw_drop trivia kw_view (trivia kw_if trivia kw_exists)? trivia qualified_table_name
 
 # --- DDL: CREATE / DROP TRIGGER --------------------------------------
 # Trigger bodies are `;`-separated sequences of DML/SELECT wrapped in
 # BEGIN...END. The inner `;` is mandatory after each body statement,
 # which keeps the nesting disjoint from sql_file's top-level stmt_sep.
 
-create_trigger_stmt <- kw_create (ws (kw_temporary / kw_temp))? ws kw_trigger
-                       (ws kw_if ws kw_not ws kw_exists)?
-                       ws qualified_table_name
-                       (ws (kw_before / kw_after / kw_instead ws kw_of))?
-                       ws trigger_event
-                       ws kw_on ws @type{bare_ident_nonkw}
-                       (ws kw_for ws kw_each ws kw_row)?
-                       (ws kw_when ws expr)?
-                       ws kw_begin
-                       ws (trigger_body_stmt ws @punctuation{';'} ws)+
+create_trigger_stmt <- kw_create (trivia (kw_temporary / kw_temp))? trivia kw_trigger
+                       (trivia kw_if trivia kw_not trivia kw_exists)?
+                       trivia qualified_table_name
+                       (trivia (kw_before / kw_after / kw_instead trivia kw_of))?
+                       trivia trigger_event
+                       trivia kw_on trivia @type{bare_ident_nonkw}
+                       (trivia kw_for trivia kw_each trivia kw_row)?
+                       (trivia kw_when trivia expr)?
+                       trivia kw_begin
+                       trivia (trigger_body_stmt trivia @punctuation{';'} trivia)+
                        kw_end
 trigger_event     <- kw_delete
                    / kw_insert
-                   / kw_update (ws kw_of ws ident_list)?
+                   / kw_update (trivia kw_of trivia ident_list)?
 trigger_body_stmt <- insert_stmt / update_stmt / delete_stmt / select_stmt
 
-drop_trigger_stmt <- kw_drop ws kw_trigger (ws kw_if ws kw_exists)? ws qualified_table_name
+drop_trigger_stmt <- kw_drop trivia kw_trigger (trivia kw_if trivia kw_exists)? trivia qualified_table_name
 
 # --- Transactions & savepoints ---------------------------------------
 
 # Trailing `(transaction-mode)?` absorbed by `*^[;]`.
-~begin_stmt    <- kw_begin (ws (kw_deferred / kw_immediate / kw_exclusive))?
-                  (ws kw_transaction)?
+~begin_stmt    <- kw_begin (trivia (kw_deferred / kw_immediate / kw_exclusive))?
+                  (trivia kw_transaction)?
 # Trailing `(transaction)?` absorbed by `*^[;]`.
-~commit_stmt   <- (kw_commit / kw_end) (ws kw_transaction)?
-~rollback_stmt <- kw_rollback (ws kw_transaction)?
-                  (ws kw_to (ws kw_savepoint)? ws @variable{bare_ident_nonkw})?
-savepoint_stmt <- kw_savepoint ws @variable{bare_ident_nonkw}
-release_stmt   <- kw_release (ws kw_savepoint)? ws @variable{bare_ident_nonkw}
+~commit_stmt   <- (kw_commit / kw_end) (trivia kw_transaction)?
+~rollback_stmt <- kw_rollback (trivia kw_transaction)?
+                  (trivia kw_to (trivia kw_savepoint)? trivia @variable{bare_ident_nonkw})?
+savepoint_stmt <- kw_savepoint trivia @variable{bare_ident_nonkw}
+release_stmt   <- kw_release (trivia kw_savepoint)? trivia @variable{bare_ident_nonkw}
 
 # --- PRAGMA, admin statements, EXPLAIN, CREATE VIRTUAL TABLE ---------
 # EXPLAIN wraps statement_body rather than statement, so
@@ -408,32 +408,32 @@ release_stmt   <- kw_release (ws kw_savepoint)? ws @variable{bare_ident_nonkw}
 # the module is invoked, not merely referenced.
 
 # Trailing `(value)?` absorbed by `*^[;]`.
-~pragma_stmt    <- kw_pragma ws qualified_table_name
-                   (ws @operator{'='} ws pragma_value
-                    / ws @punctuation{'('} ws pragma_value ws @punctuation{')'})?
+~pragma_stmt    <- kw_pragma trivia qualified_table_name
+                   (trivia @operator{'='} trivia pragma_value
+                    / trivia @punctuation{'('} trivia pragma_value trivia @punctuation{')'})?
 pragma_value    <- signed_number / string_lit / @variable{bare_ident}
 
 # Trailing `(into)?` absorbed by `*^[;]`.
-~vacuum_stmt    <- kw_vacuum (ws @type{bare_ident_nonkw})? (ws kw_into ws string_lit)?
+~vacuum_stmt    <- kw_vacuum (trivia @type{bare_ident_nonkw})? (trivia kw_into trivia string_lit)?
 
-attach_stmt     <- kw_attach (ws kw_database)? ws expr ws kw_as
-                   ws @type{bare_ident_nonkw}
-detach_stmt     <- kw_detach (ws kw_database)? ws @type{bare_ident_nonkw}
+attach_stmt     <- kw_attach (trivia kw_database)? trivia expr trivia kw_as
+                   trivia @type{bare_ident_nonkw}
+detach_stmt     <- kw_detach (trivia kw_database)? trivia @type{bare_ident_nonkw}
 
 # Trailing `(target)?` absorbed by `*^[;]`.
-~reindex_stmt   <- kw_reindex (ws qualified_table_name)?
-~analyze_stmt   <- kw_analyze (ws qualified_table_name)?
+~reindex_stmt   <- kw_reindex (trivia qualified_table_name)?
+~analyze_stmt   <- kw_analyze (trivia qualified_table_name)?
 
-explain_stmt    <- kw_explain (ws kw_query ws kw_plan)? ws statement_body
+explain_stmt    <- kw_explain (trivia kw_query trivia kw_plan)? trivia statement_body
 
 # Trailing `(args)?` absorbed by `*^[;]`.
 ~create_virtual_table_stmt <-
-    kw_create ws kw_virtual ws kw_table
-    (ws kw_if ws kw_not ws kw_exists)?
-    ws qualified_table_name
-    ws kw_using ws @function{bare_ident_nonkw}
-    (ws @punctuation{'('} ws vtab_args? ws @punctuation{')'})?
-vtab_args       <- vtab_arg (ws @punctuation{','} ws vtab_arg)*
+    kw_create trivia kw_virtual trivia kw_table
+    (trivia kw_if trivia kw_not trivia kw_exists)?
+    trivia qualified_table_name
+    trivia kw_using trivia @function{bare_ident_nonkw}
+    (trivia @punctuation{'('} trivia vtab_args? trivia @punctuation{')'})?
+vtab_args       <- vtab_arg (trivia @punctuation{','} trivia vtab_arg)*
 # Module args are deliberately permissive — fts5/rtree/etc have
 # module-specific mini-grammars that are not worth modelling.
 vtab_arg        <- (!@punctuation{','} !@punctuation{')'} .)+
@@ -444,30 +444,30 @@ vtab_arg        <- (!@punctuation{','} !@punctuation{')'} .)+
 # operator. No shared-prefix issues between levels.
 
 expr        <- or_expr
-or_expr     <- and_expr (ws kw_or ws and_expr)*
-and_expr    <- not_expr (ws kw_and ws not_expr)*
-not_expr    <- kw_not ws not_expr / cmp_expr
+or_expr     <- and_expr (trivia kw_or trivia and_expr)*
+and_expr    <- not_expr (trivia kw_and trivia not_expr)*
+not_expr    <- kw_not trivia not_expr / cmp_expr
 cmp_expr    <- bit_expr cmp_tail*
-cmp_tail    <- ws kw_is ws (kw_not ws)? bit_expr
-             / ws (kw_not ws)? kw_between ws bit_expr ws kw_and ws bit_expr
-             / ws (kw_not ws)? kw_in ws @punctuation{'('} ws in_args? ws @punctuation{')'}
-             / ws (kw_not ws)? kw_like ws bit_expr (ws kw_escape ws bit_expr)?
-             / ws (kw_not ws)? kw_glob ws bit_expr
-             / ws (kw_not ws)? kw_match ws bit_expr
-             / ws (kw_not ws)? kw_regexp ws bit_expr
-             / ws cmp_op ws bit_expr
-in_args     <- select_stmt / expr (ws @punctuation{','} ws expr)*
+cmp_tail    <- trivia kw_is trivia (kw_not trivia)? bit_expr
+             / trivia (kw_not trivia)? kw_between trivia bit_expr trivia kw_and trivia bit_expr
+             / trivia (kw_not trivia)? kw_in trivia @punctuation{'('} trivia in_args? trivia @punctuation{')'}
+             / trivia (kw_not trivia)? kw_like trivia bit_expr (trivia kw_escape trivia bit_expr)?
+             / trivia (kw_not trivia)? kw_glob trivia bit_expr
+             / trivia (kw_not trivia)? kw_match trivia bit_expr
+             / trivia (kw_not trivia)? kw_regexp trivia bit_expr
+             / trivia cmp_op trivia bit_expr
+in_args     <- select_stmt / expr (trivia @punctuation{','} trivia expr)*
 cmp_op      <- @operator{'=='} / @operator{'<='} / @operator{'>='}
              / @operator{'!='} / @operator{'<>'} / @operator{'='}
              / @operator{'<'} / @operator{'>'}
-bit_expr    <- add_expr (ws bit_op ws add_expr)*
+bit_expr    <- add_expr (trivia bit_op trivia add_expr)*
 bit_op      <- @operator{'<<'} / @operator{'>>'} / @operator{'&'} / @operator{'|'}
-add_expr    <- mul_expr (ws add_op ws mul_expr)*
+add_expr    <- mul_expr (trivia add_op trivia mul_expr)*
 add_op      <- @operator{'+'} / @operator{'-'}
-mul_expr    <- concat_expr (ws mul_op ws concat_expr)*
+mul_expr    <- concat_expr (trivia mul_op trivia concat_expr)*
 mul_op      <- @operator{'*'} / @operator{'/'} / @operator{'%'}
-concat_expr <- unary_expr (ws @operator{'||'} ws unary_expr)*
-unary_expr  <- (@operator{'-'} / @operator{'+'} / @operator{'~'}) ws unary_expr
+concat_expr <- unary_expr (trivia @operator{'||'} trivia unary_expr)*
+unary_expr  <- (@operator{'-'} / @operator{'+'} / @operator{'~'}) trivia unary_expr
              / primary
 
 # Shared-prefix hotspots: function_call / qualified_column_ref /
@@ -483,24 +483,24 @@ primary     <- literal
              / column_ref_bare
              / bind_param
 
-paren_primary <- @punctuation{'('} ws (select_stmt / expr) ws @punctuation{')'}
+paren_primary <- @punctuation{'('} trivia (select_stmt / expr) trivia @punctuation{')'}
 
 # Trailing `(filter)? (over window)?` absorbed by `*^[;]`.
-~function_call <- @function{bare_ident_nonkw} ws @punctuation{'('} ws func_args? ws @punctuation{')'}
-                 (ws filter_clause)?
-                 (ws kw_over ws window_ref)?
+~function_call <- @function{bare_ident_nonkw} trivia @punctuation{'('} trivia func_args? trivia @punctuation{')'}
+                 (trivia filter_clause)?
+                 (trivia kw_over trivia window_ref)?
 func_args   <- @operator{'*'}
-             / (kw_distinct ws)? expr (ws @punctuation{','} ws expr)*
+             / (kw_distinct trivia)? expr (trivia @punctuation{','} trivia expr)*
 
 qualified_column_ref <- @variable{bare_ident_nonkw} @punctuation{'.'} @variable{bare_ident_nonkw}
 column_ref_bare      <- @variable{bare_ident_nonkw}
 
-case_expr   <- kw_case (ws expr)? (ws when_clause)+ (ws kw_else ws expr)? ws kw_end
-when_clause <- kw_when ws expr ws kw_then ws expr
+case_expr   <- kw_case (trivia expr)? (trivia when_clause)+ (trivia kw_else trivia expr)? trivia kw_end
+when_clause <- kw_when trivia expr trivia kw_then trivia expr
 
-cast_expr   <- kw_cast ws @punctuation{'('} ws expr ws kw_as ws @type{bare_ident} ws @punctuation{')'}
+cast_expr   <- kw_cast trivia @punctuation{'('} trivia expr trivia kw_as trivia @type{bare_ident} trivia @punctuation{')'}
 
-exists_expr <- kw_exists ws @punctuation{'('} ws select_stmt ws @punctuation{')'}
+exists_expr <- kw_exists trivia @punctuation{'('} trivia select_stmt trivia @punctuation{')'}
 
 # --- Literals ---------------------------------------------------------
 # Order matters: blob before string (X' prefix consumed first); number
@@ -548,9 +548,9 @@ ident_start       <- [a-zA-Z_]
 ident_cont        <- [a-zA-Z\d_]
 ident_char        <- [a-zA-Z\d_]
 
-double_quoted_id  <- '"' ('""' / !'"' !linebreak .)* '"'
-backtick_id       <- '`' ('``' / !'`' !linebreak .)* '`'
-bracket_id        <- '[' .. (']' / linebreak) ']'
+double_quoted_id  <- '"' ('""' / !'"' !\R .)* '"'
+backtick_id       <- '`' ('``' / !'`' !\R .)* '`'
+bracket_id        <- '[' .. (']' / \R) ']'
 
 # --- Keywords (case-insensitive) --------------------------------------
 # Per-letter character classes give case-insensitive matching without
@@ -995,11 +995,6 @@ keyword_word <-
 
 # --- Whitespace & comments -------------------------------------------
 
-trivia        <- ws
+comment       <- @comment{'--' .. \R / '/*' ..= '*/'}
 
-ws            <- (comment / \s)*
-comment       <- line_comment / block_comment
-line_comment  <- @comment{'--' .. linebreak}
-block_comment <- @comment{'/*' block_body '*/'}
-block_body    <- .. '*/'
-linebreak     <- \R
+trivia        <- (comment / \s)*

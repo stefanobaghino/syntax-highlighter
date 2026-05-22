@@ -15,10 +15,10 @@
 #     kind; revisit when a theme-file is introduced.
 #   - inf / nan are @constant (like true/false), not @number.
 
-toml          <- ws (entry (entry_sep entry)*)? ws \z
+toml          <- trivia (entry (entry_sep entry)*)? trivia \z
 
 entry         <- array_of_tables_header / table_header / pair
-entry_sep     <- inline_space comment? linebreak ws
+entry_sep     <- inline_space comment? \R trivia
 
 # Key-value pair: LHS key as @property, RHS value.
 pair          <- key inline_space @punctuation{'='} inline_space value
@@ -43,67 +43,51 @@ bare_key      <- [A-Za-z\d_\-]+
 #   - inf_nan before number (share the optional sign)
 #   - float before integer (both start with digits; float distinguished
 #     by the frac/exp tail)
-value         <- string_val
-               / @constant{inf_nan}
-               / datetime
-               / float
-               / integer
-               / @constant{bool_lit}
+value         <- @string{basic_multiline / literal_multiline / basic_string / literal_string}
+               / @constant{[+\-]? ('inf' / 'nan')}
+               / @number{full_datetime / local_datetime / local_date / local_time}
+               / @number{[+\-]? unsigned_dec (frac exp? / exp)}
+               / @number{hex_int / oct_int / bin_int / dec_int}
+               / @constant{'true' / 'false'}
                / array
                / inline_table
 
 # --- Strings -----------------------------------------------------------
 # Multi-line forms come first because their opening/closing delimiters
 # are longer than the single-line forms.
-string_val    <- @string{string_body}
-string_body   <- basic_multiline / literal_multiline / basic_string / literal_string
 
-basic_string  <- '"' (basic_char / escape)* '"'
-basic_char    <- !["\\\n\r] .
-escape        <- '\\' (["\\bfnrt] / 'u' hex{4} / 'U' hex{8})
+basic_string  <- '"' ([^"\\\n\r] / escape)* '"'
+escape        <- '\\' (["\\bfnrt] / 'u' [\da-fA-F]{4} / 'U' [\da-fA-F]{8})
 
-basic_multiline <- '"""' multiline_basic_body '"""'
-multiline_basic_body <- .. '"""'
+basic_multiline <- '"""' ..= '"""'
 
-literal_string  <- "'" literal_char* "'"
-literal_char    <- !['\n\r] .
+literal_string  <- "'" [^'\n\r]* "'"
 
-literal_multiline <- "'''" multiline_literal_body "'''"
-multiline_literal_body <- .. "'''"
+literal_multiline <- "'''" ..= "'''"
 
 # --- Numbers -----------------------------------------------------------
-integer       <- @number{int_body}
-int_body      <- hex_int / oct_int / bin_int / dec_int
 dec_int       <- [+\-]? unsigned_dec
 unsigned_dec  <- '0' / [1-9] ('_'? \d)*
-hex_int       <- '0x' hex ('_'? hex)*
+hex_int       <- '0x' [\da-fA-F] ('_'? [\da-fA-F])*
 oct_int       <- '0o' [0-7] ('_'? [0-7])*
 bin_int       <- '0b' [01] ('_'? [01])*
 
-float         <- @number{float_body}
-float_body    <- [+\-]? unsigned_dec (frac exp? / exp)
 frac          <- '.' \d ('_'? \d)*
 exp           <- [eE] [+\-]? \d ('_'? \d)*
 
-inf_nan       <- [+\-]? ('inf' / 'nan')
-bool_lit      <- 'true' / 'false'
-
 # --- Datetime (RFC 3339 subset) ---------------------------------------
-datetime      <- @number{datetime_body}
-datetime_body <- full_datetime / local_datetime / local_date / local_time
 full_datetime <- date date_time_sep time time_offset
 local_datetime <- date date_time_sep time
 local_date    <- date
 local_time    <- time
 date_time_sep <- 'T' / 't' / ' '
 date          <- \d{4} '-' \d{2} '-' \d{2}
-time          <- \d{2} ':' \d{2} ':' \d{2} time_frac?
-time_frac     <- '.' \d+
+time          <- \d{2} ':' \d{2} ':' \d{2} ('.' \d+)?
 time_offset   <- 'Z' / 'z' / [+\-] \d{2} ':' \d{2}
 
 # --- Arrays (multiline, trailing comma, interior comments allowed) -----
-array         <- @punctuation{'['} array_ws array_body? array_ws @punctuation{']'}
-array_body    <- value (array_ws @punctuation{','} array_ws value)* (array_ws @punctuation{','})?
+array         <- @punctuation{'['} trivia array_body? trivia @punctuation{']'}
+array_body    <- value (trivia @punctuation{','} trivia value)* (trivia @punctuation{','})?
 
 # --- Inline tables (no newlines, no trailing comma per v1.0) ----------
 inline_table  <- @punctuation{'{'} inline_space inline_table_body? inline_space @punctuation{'}'}
@@ -112,14 +96,8 @@ inline_pair   <- key inline_space @punctuation{'='} inline_space value
 
 # --- Whitespace & comments --------------------------------------------
 inline_space  <- \h*
-linebreak     <- \R
-comment       <- @comment{'#' .. linebreak}
+comment       <- @comment{'#' .. \R}
 
 # Vertical whitespace: spaces/tabs/newlines plus comments. Each atom
 # consumes at least one byte, so the enclosing '*' cannot infinite-loop.
-trivia        <- ws
-
-ws            <- (comment / \s)*
-array_ws      <- ws
-
-hex           <- [\da-fA-F]
+trivia        <- (comment / \s)*
