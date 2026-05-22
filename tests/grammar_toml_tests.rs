@@ -1,16 +1,35 @@
 use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
 
 use syntax_highlighter::pegc;
 use syntax_highlighter::pegvm::{Capture, Program, VM};
 
 const TOML_GRAMMAR: &str = include_str!("../grammars/toml.peg");
 
-fn compile_toml() -> Program {
-    pegc::compile(TOML_GRAMMAR).expect("TOML grammar should compile")
+// Compile the grammar exactly once per test process. The init lock's
+// poisoning is what concentrates a broken-grammar failure into one
+// informative panic plus N-1 trivial "previously failed" panics across
+// the rest of the file's tests.
+static TOML_PROGRAM: OnceLock<Program> = OnceLock::new();
+static TOML_INIT: Mutex<()> = Mutex::new(());
+
+fn toml_program() -> &'static Program {
+    if let Some(p) = TOML_PROGRAM.get() {
+        return p;
+    }
+    let _guard = TOML_INIT
+        .lock()
+        .expect("TOML grammar compile previously failed; see the first failure");
+    TOML_PROGRAM.get_or_init(|| pegc::compile(TOML_GRAMMAR).expect("TOML grammar should compile"))
+}
+
+#[test]
+fn grammar_compiles() {
+    let _ = toml_program();
 }
 
 fn run(input: &str) -> (usize, Vec<Capture>, Vec<String>, bool) {
-    let prog = compile_toml();
+    let prog = toml_program();
     let r = VM::new(&prog.code, input.as_bytes()).run();
     (
         r.matched,
@@ -48,14 +67,14 @@ fn assert_complete_full(input: &str) -> (Vec<Capture>, Vec<String>) {
 
 #[test]
 fn grammar_parses_and_compiles() {
-    let prog = compile_toml();
+    let prog = toml_program();
     assert!(!prog.code.is_empty());
     assert!(!prog.capture_kinds.is_empty());
 }
 
 #[test]
 fn capture_kinds_are_only_theme_kinds() {
-    let prog = compile_toml();
+    let prog = toml_program();
     let expected: HashSet<&str> = [
         "comment",
         "property",

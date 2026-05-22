@@ -1,19 +1,36 @@
 use std::collections::HashSet;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use syntax_highlighter::pegc;
 use syntax_highlighter::pegvm::{Capture, Program, VM};
 
 const SQLITE_GRAMMAR: &str = include_str!("../grammars/sqlite.peg");
 
-fn compile_sql() -> &'static Program {
-    static SQLITE_PROGRAM: OnceLock<Program> = OnceLock::new();
+// Compile the grammar exactly once per test process. The init lock's
+// poisoning is what concentrates a broken-grammar failure into one
+// informative panic plus N-1 trivial "previously failed" panics across
+// the rest of the file's tests.
+static SQLITE_PROGRAM: OnceLock<Program> = OnceLock::new();
+static SQLITE_INIT: Mutex<()> = Mutex::new(());
+
+fn sqlite_program() -> &'static Program {
+    if let Some(p) = SQLITE_PROGRAM.get() {
+        return p;
+    }
+    let _guard = SQLITE_INIT
+        .lock()
+        .expect("SQLite grammar compile previously failed; see the first failure");
     SQLITE_PROGRAM
         .get_or_init(|| pegc::compile(SQLITE_GRAMMAR).expect("SQLite grammar should compile"))
 }
 
+#[test]
+fn grammar_compiles() {
+    let _ = sqlite_program();
+}
+
 fn run(input: &str) -> (usize, Vec<Capture>, Vec<String>, bool) {
-    let prog = compile_sql();
+    let prog = sqlite_program();
     let r = VM::new(&prog.code, input.as_bytes()).run();
     (
         r.matched,
@@ -81,7 +98,7 @@ fn assert_not_clean_parse(input: &str) {
 
 #[test]
 fn grammar_parses_and_compiles() {
-    let prog = compile_sql();
+    let prog = sqlite_program();
     assert!(!prog.code.is_empty());
     assert!(!prog.capture_kinds.is_empty());
     eprintln!(
@@ -99,7 +116,7 @@ fn bytecode_size_within_expected_range() {
     // something either shrank surprisingly (a regression) or grew
     // surprisingly (review warranted). Recompute if the change is
     // intentional.
-    let n_instr = compile_sql().code.len();
+    let n_instr = sqlite_program().code.len();
     assert!(
         (4500..=7500).contains(&n_instr),
         "bytecode size {n_instr} outside expected range [4500, 7500]; \
@@ -109,7 +126,7 @@ fn bytecode_size_within_expected_range() {
 
 #[test]
 fn capture_kinds_are_only_theme_kinds() {
-    let prog = compile_sql();
+    let prog = sqlite_program();
     let expected: HashSet<&str> = [
         "keyword",
         "string",
