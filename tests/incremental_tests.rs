@@ -34,16 +34,14 @@ fn two_rule_grammar() -> syntax_highlighter::pegvm::Program {
     rules.insert(
         "root".into(),
         Pattern::seq(vec![
-            Pattern::NonTerminal("word".into()),
+            Pattern::nt("word"),
             Pattern::literal(" "),
-            Pattern::NonTerminal("word".into()),
+            Pattern::nt("word"),
         ]),
     );
     rules.insert(
         "word".into(),
-        Pattern::RepeatOne(Box::new(Pattern::CharClass(CharSet::from_ranges(&[(
-            b'a', b'z',
-        )])))),
+        Pattern::repeat_one(Pattern::char_class(CharSet::from_ranges(&[(b'a', b'z')]))),
     );
     Grammar::new(rules).compile().unwrap()
 }

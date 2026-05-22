@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use syntax_highlighter::pegc::analysis::{
     compute_follow, lint_partial_match, FollowElement, LintFinding, LintKind,
 };
-use syntax_highlighter::pegc::{compile_pattern, parse, Grammar, Pattern};
+use syntax_highlighter::pegc::{compile_pattern, parse, Grammar, Pattern, Span};
 use syntax_highlighter::pegvm::{
     Capture, CaptureKind, CharSet, Instruction, Label, LabelId, MatchResult, MemoId, RuleKind, VM,
 };
@@ -39,7 +39,7 @@ fn literal_pattern() {
 
 #[test]
 fn char_class_pattern() {
-    let p = Pattern::CharClass(CharSet::from_ranges(&[(b'0', b'9')]));
+    let p = Pattern::char_class(CharSet::from_ranges(&[(b'0', b'9')]));
     assert_eq!(
         run_pattern(&p, b"5"),
         MatchResult {
@@ -54,7 +54,7 @@ fn char_class_pattern() {
 
 #[test]
 fn any_char_pattern() {
-    let p = Pattern::AnyChar;
+    let p = Pattern::any_char();
     assert_eq!(
         run_pattern(&p, b"q"),
         MatchResult {
@@ -145,7 +145,7 @@ fn ordered_choice_three() {
 
 #[test]
 fn repeat_zero_or_more() {
-    let p = Pattern::Repeat(Box::new(Pattern::literal("a")));
+    let p = Pattern::repeat(Pattern::literal("a"));
     assert_eq!(
         run_pattern(&p, b""),
         MatchResult {
@@ -177,7 +177,7 @@ fn repeat_zero_or_more() {
 
 #[test]
 fn repeat_one_or_more() {
-    let p = Pattern::RepeatOne(Box::new(Pattern::literal("a")));
+    let p = Pattern::repeat_one(Pattern::literal("a"));
     assert!(!run_pattern(&p, b"").complete);
     assert_eq!(
         run_pattern(&p, b"a"),
@@ -206,11 +206,12 @@ fn repeat_one_or_more() {
 /// always picked `"recovery"`, and tests parameterize to exercise the
 /// label/capture-interning pipeline.
 fn recover(inner: Pattern, kind: &str) -> Pattern {
-    Pattern::Repeat(Box::new(Pattern::Catch {
+    Pattern::repeat(Pattern::Catch {
         inner: Box::new(inner),
         label: kind.into(),
-        recovery: Box::new(Pattern::Capture(kind.into(), Box::new(Pattern::AnyChar))),
-    }))
+        recovery: Box::new(Pattern::capture(kind, Pattern::any_char())),
+        span: Span::SYNTHETIC,
+    })
 }
 
 #[test]
@@ -281,7 +282,7 @@ fn recover_repeat_preserves_failed_inner_attempt_deepest_captures() {
     // before the recovery body, so @open interns first (id 0) and
     // @recovery second (id 1).
     let inner = Pattern::seq(vec![
-        Pattern::Capture("open".into(), Box::new(Pattern::literal("a"))),
+        Pattern::capture("open", Pattern::literal("a")),
         Pattern::literal("b"),
     ]);
     let p = recover(inner, "recovery");
@@ -313,7 +314,7 @@ fn recover_repeat_failed_attempt_reaching_eof_does_not_leak_clean_match() {
     // assert_not_clean_parse cases (e.g. "SELECT SELECT") for the
     // grammar-level analogue.
     let inner = Pattern::seq(vec![
-        Pattern::Capture("open".into(), Box::new(Pattern::literal("a"))),
+        Pattern::capture("open", Pattern::literal("a")),
         Pattern::literal("b"),
     ]);
     let p = recover(inner, "recovery");
@@ -347,7 +348,7 @@ fn recover_repeat_nested_loops_do_not_panic() {
     // parse runs to completion.
     let inner = recover(
         Pattern::seq(vec![
-            Pattern::Capture("a".into(), Box::new(Pattern::literal("a"))),
+            Pattern::capture("a", Pattern::literal("a")),
             Pattern::literal("X"),
         ]),
         "inner_rec",
@@ -388,10 +389,7 @@ fn recover_repeat_empty_capture_in_failed_inner_attempt_is_dropped() {
     // that tries to "improve" the empty-capture case is forced to
     // re-baseline this test deliberately.
     let inner = Pattern::seq(vec![
-        Pattern::Capture(
-            "x".into(),
-            Box::new(Pattern::NotPredicate(Box::new(Pattern::literal("x")))),
-        ),
+        Pattern::capture("x", Pattern::not_predicate(Pattern::literal("x"))),
         Pattern::literal("z"),
     ]);
     let p = recover(inner, "recovery");
@@ -426,12 +424,9 @@ fn recover_repeat_drops_unclosed_capture_from_failed_inner_attempt() {
     // every entry whose `end.is_none()` during the splice: a still-
     // open capture at the watermark belongs to a production that
     // didn't complete and must not become a token.
-    let inner = Pattern::Capture(
-        "kw".into(),
-        Box::new(Pattern::choice(vec![
-            Pattern::literal("abc"),
-            Pattern::literal("abd"),
-        ])),
+    let inner = Pattern::capture(
+        "kw",
+        Pattern::choice(vec![Pattern::literal("abc"), Pattern::literal("abd")]),
     );
     let p = recover(inner, "recovery");
     let r = run_pattern(&p, b"abx");
@@ -461,10 +456,7 @@ fn recover_repeat_inside_called_rule_returns_cleanly() {
     let mut rules = HashMap::new();
     rules.insert(
         "root".into(),
-        Pattern::seq(vec![
-            Pattern::literal("PRE"),
-            Pattern::NonTerminal("loop".into()),
-        ]),
+        Pattern::seq(vec![Pattern::literal("PRE"), Pattern::nt("loop")]),
     );
     rules.insert("loop".into(), recover(Pattern::literal("a"), "recovery"));
     let prog = Grammar::new(rules).compile().unwrap();
@@ -487,14 +479,14 @@ fn catch_inner_success_does_not_run_recovery() {
     // inner = @open{"ab"}, recovery = @err{(!';' .)*}
     // Input matches inner cleanly; recovery branch must not fire.
     let p = catch(
-        Pattern::Capture("open".into(), Box::new(Pattern::literal("ab"))),
+        Pattern::capture("open", Pattern::literal("ab")),
         "lbl",
-        Pattern::Capture(
-            "err".into(),
-            Box::new(Pattern::Repeat(Box::new(Pattern::seq(vec![
-                Pattern::NotPredicate(Box::new(Pattern::literal(";"))),
-                Pattern::AnyChar,
-            ])))),
+        Pattern::capture(
+            "err",
+            Pattern::repeat(Pattern::seq(vec![
+                Pattern::not_predicate(Pattern::literal(";")),
+                Pattern::any_char(),
+            ])),
         ),
     );
     let r = run_pattern(&p, b"ab");
@@ -512,9 +504,9 @@ fn catch_inner_success_does_not_run_recovery() {
 fn catch_inner_failure_runs_recovery() {
     // inner = @open{"ab"} fails at sp=0; recovery = @err{.} consumes one byte.
     let p = catch(
-        Pattern::Capture("open".into(), Box::new(Pattern::literal("ab"))),
+        Pattern::capture("open", Pattern::literal("ab")),
         "lbl",
-        Pattern::Capture("err".into(), Box::new(Pattern::AnyChar)),
+        Pattern::capture("err", Pattern::any_char()),
     );
     let r = run_pattern(&p, b"xy");
     assert!(r.complete);
@@ -539,11 +531,11 @@ fn catch_preserves_failed_inner_attempt_deepest_captures() {
     // (sp=1, after the 'a'), not at baseline (sp=0).
     let p = catch(
         Pattern::seq(vec![
-            Pattern::Capture("open".into(), Box::new(Pattern::literal("a"))),
+            Pattern::capture("open", Pattern::literal("a")),
             Pattern::literal("b"),
         ]),
         "lbl",
-        Pattern::Capture("err".into(), Box::new(Pattern::AnyChar)),
+        Pattern::capture("err", Pattern::any_char()),
     );
     let r = run_pattern(&p, b"ax");
     assert!(r.complete);
@@ -622,11 +614,11 @@ fn catch_nested_inside_recover_repeat() {
     // rather than exact capture spans.
     let inner_catch = catch(
         Pattern::seq(vec![
-            Pattern::Capture("open".into(), Box::new(Pattern::literal("a"))),
+            Pattern::capture("open", Pattern::literal("a")),
             Pattern::literal("b"),
         ]),
         "lbl",
-        Pattern::Capture("err".into(), Box::new(Pattern::AnyChar)),
+        Pattern::capture("err", Pattern::any_char()),
     );
     let p = recover(inner_catch, "recovery");
     let r = run_pattern(&p, b"abaxabZ");
@@ -681,7 +673,7 @@ fn label_intern_shared_with_recover_repeat_recovery_kind() {
 #[test]
 fn optional_pattern() {
     let p = Pattern::seq(vec![
-        Pattern::Optional(Box::new(Pattern::literal("-"))),
+        Pattern::optional(Pattern::literal("-")),
         Pattern::literal("x"),
     ]);
     assert_eq!(
@@ -708,8 +700,8 @@ fn optional_pattern() {
 #[test]
 fn not_predicate_pattern() {
     let p = Pattern::seq(vec![
-        Pattern::NotPredicate(Box::new(Pattern::literal("a"))),
-        Pattern::AnyChar,
+        Pattern::not_predicate(Pattern::literal("a")),
+        Pattern::any_char(),
     ]);
     assert_eq!(
         run_pattern(&p, b"b"),
@@ -728,7 +720,7 @@ fn and_predicate_pattern() {
     // &"a" "ab"  -> matches "ab" only when first char is 'a' (always true here, but the
     // &-predicate consumes nothing)
     let p = Pattern::seq(vec![
-        Pattern::AndPredicate(Box::new(Pattern::literal("a"))),
+        Pattern::and_predicate(Pattern::literal("a")),
         Pattern::literal("ab"),
     ]);
     assert_eq!(
@@ -745,7 +737,7 @@ fn and_predicate_pattern() {
 
 #[test]
 fn capture_records_kind_and_span() {
-    let p = Pattern::Capture("number".into(), Box::new(Pattern::literal("42")));
+    let p = Pattern::capture("number", Pattern::literal("42"));
     let prog = compile_pattern(&p);
     assert_eq!(prog.capture_kinds, vec!["number".to_string()]);
     assert_eq!(
@@ -762,12 +754,12 @@ fn capture_records_kind_and_span() {
 #[test]
 fn nested_captures_flow_through_compile() {
     // @outer{ @inner{"a"} @inner{"b"} }
-    let p = Pattern::Capture(
-        "outer".into(),
-        Box::new(Pattern::seq(vec![
-            Pattern::Capture("inner".into(), Box::new(Pattern::literal("a"))),
-            Pattern::Capture("inner".into(), Box::new(Pattern::literal("b"))),
-        ])),
+    let p = Pattern::capture(
+        "outer",
+        Pattern::seq(vec![
+            Pattern::capture("inner", Pattern::literal("a")),
+            Pattern::capture("inner", Pattern::literal("b")),
+        ]),
     );
     let prog = compile_pattern(&p);
     // Kinds interned in the order they're first encountered during compile.
@@ -799,13 +791,10 @@ fn grammar_with_nonterminals() {
     // reports the deepest position reached: `!.`'s lookahead reads one
     // byte past the consumed digits, so the watermark sits at 4.
     let mut rules = HashMap::new();
-    rules.insert(
-        "root".into(),
-        Pattern::RepeatOne(Box::new(Pattern::NonTerminal("digit".into()))),
-    );
+    rules.insert("root".into(), Pattern::repeat_one(Pattern::nt("digit")));
     rules.insert(
         "digit".into(),
-        Pattern::CharClass(CharSet::from_ranges(&[(b'0', b'9')])),
+        Pattern::char_class(CharSet::from_ranges(&[(b'0', b'9')])),
     );
     let prog = Grammar::new(rules).compile().unwrap();
     assert_eq!(
@@ -823,7 +812,7 @@ fn grammar_with_nonterminals() {
 #[test]
 fn grammar_undefined_rule_errors() {
     let mut rules = HashMap::new();
-    rules.insert("root".into(), Pattern::NonTerminal("missing".into()));
+    rules.insert("root".into(), Pattern::nt("missing"));
     let err = Grammar::new(rules).compile().unwrap_err();
     let msg = format!("{}", err);
     assert!(msg.contains("missing"), "got: {}", msg);
@@ -853,7 +842,7 @@ fn ordered_choice_emits_expected_skeleton() {
 
 #[test]
 fn repeat_emits_partial_commit() {
-    let p = Pattern::Repeat(Box::new(Pattern::literal("a")));
+    let p = Pattern::repeat(Pattern::literal("a"));
     let prog = compile_pattern(&p);
     // Choice jumps over the loop on first failure; PartialCommit jumps to the
     // body (index 1), NOT back to Choice — the existing backtrack entry is reused.
@@ -931,16 +920,17 @@ fn recover_repeat_labeled_interns_author_label() {
 /// `Catch(inner, "recovery", @recovery{(!cs .)* cs})`. Mirrors
 /// `build_recover_repeat` in `src/pegc/parser.rs`.
 fn sync_set_recover(inner: Pattern, charset: CharSet) -> Pattern {
-    let skip_loop = Pattern::Repeat(Box::new(Pattern::Sequence(vec![
-        Pattern::NotPredicate(Box::new(Pattern::CharClass(charset))),
-        Pattern::AnyChar,
-    ])));
-    let recovery_body = Pattern::Sequence(vec![skip_loop, Pattern::CharClass(charset)]);
-    Pattern::Repeat(Box::new(Pattern::Catch {
+    let skip_loop = Pattern::repeat(Pattern::seq(vec![
+        Pattern::not_predicate(Pattern::char_class(charset)),
+        Pattern::any_char(),
+    ]));
+    let recovery_body = Pattern::seq(vec![skip_loop, Pattern::char_class(charset)]);
+    Pattern::repeat(Pattern::Catch {
         inner: Box::new(inner),
         label: "recovery".into(),
-        recovery: Box::new(Pattern::Capture("recovery".into(), Box::new(recovery_body))),
-    }))
+        recovery: Box::new(Pattern::capture("recovery", recovery_body)),
+        span: Span::SYNTHETIC,
+    })
 }
 
 #[test]
@@ -1070,7 +1060,7 @@ fn direct_lr_rule_emits_lrbody_lrtail_skeleton() {
         "root".into(),
         Pattern::choice(vec![
             Pattern::seq(vec![
-                Pattern::NonTerminal("root".into()),
+                Pattern::nt("root"),
                 Pattern::literal("+"),
                 Pattern::literal("n"),
             ]),
@@ -1128,7 +1118,7 @@ fn right_recursive_rule_is_not_marked_lr() {
             Pattern::seq(vec![
                 Pattern::literal("n"),
                 Pattern::literal("+"),
-                Pattern::NonTerminal("root".into()),
+                Pattern::nt("root"),
             ]),
             Pattern::literal("n"),
         ]),
@@ -1160,24 +1150,18 @@ fn indirect_lr_cycle_of_2_emits_lrbody_lrtail() {
     rules.insert(
         "a".into(),
         Pattern::choice(vec![
-            Pattern::seq(vec![
-                Pattern::NonTerminal("b".into()),
-                Pattern::literal("x"),
-            ]),
+            Pattern::seq(vec![Pattern::nt("b"), Pattern::literal("x")]),
             Pattern::literal("y"),
         ]),
     );
     rules.insert(
         "b".into(),
         Pattern::choice(vec![
-            Pattern::seq(vec![
-                Pattern::NonTerminal("a".into()),
-                Pattern::literal("z"),
-            ]),
+            Pattern::seq(vec![Pattern::nt("a"), Pattern::literal("z")]),
             Pattern::literal("w"),
         ]),
     );
-    rules.insert("root".into(), Pattern::NonTerminal("a".into()));
+    rules.insert("root".into(), Pattern::nt("a"));
     let prog = Grammar::new(rules).compile().unwrap();
     let lr_bodies = prog
         .code
@@ -1224,34 +1208,25 @@ fn indirect_lr_cycle_of_3_emits_lrbody_lrtail() {
     rules.insert(
         "a".into(),
         Pattern::choice(vec![
-            Pattern::seq(vec![
-                Pattern::NonTerminal("b".into()),
-                Pattern::literal("x"),
-            ]),
+            Pattern::seq(vec![Pattern::nt("b"), Pattern::literal("x")]),
             Pattern::literal("p"),
         ]),
     );
     rules.insert(
         "b".into(),
         Pattern::choice(vec![
-            Pattern::seq(vec![
-                Pattern::NonTerminal("c".into()),
-                Pattern::literal("y"),
-            ]),
+            Pattern::seq(vec![Pattern::nt("c"), Pattern::literal("y")]),
             Pattern::literal("q"),
         ]),
     );
     rules.insert(
         "c".into(),
         Pattern::choice(vec![
-            Pattern::seq(vec![
-                Pattern::NonTerminal("a".into()),
-                Pattern::literal("z"),
-            ]),
+            Pattern::seq(vec![Pattern::nt("a"), Pattern::literal("z")]),
             Pattern::literal("r"),
         ]),
     );
-    rules.insert("root".into(), Pattern::NonTerminal("a".into()));
+    rules.insert("root".into(), Pattern::nt("a"));
     let prog = Grammar::new(rules).compile().unwrap();
     let lr_bodies = prog
         .code
@@ -1303,24 +1278,18 @@ fn right_recursive_two_rule_grammar_is_not_marked_lr() {
     rules.insert(
         "a".into(),
         Pattern::choice(vec![
-            Pattern::seq(vec![
-                Pattern::literal("x"),
-                Pattern::NonTerminal("b".into()),
-            ]),
+            Pattern::seq(vec![Pattern::literal("x"), Pattern::nt("b")]),
             Pattern::literal("y"),
         ]),
     );
     rules.insert(
         "b".into(),
         Pattern::choice(vec![
-            Pattern::seq(vec![
-                Pattern::literal("z"),
-                Pattern::NonTerminal("a".into()),
-            ]),
+            Pattern::seq(vec![Pattern::literal("z"), Pattern::nt("a")]),
             Pattern::literal("w"),
         ]),
     );
-    rules.insert("root".into(), Pattern::NonTerminal("a".into()));
+    rules.insert("root".into(), Pattern::nt("a"));
     let prog = Grammar::new(rules).compile().unwrap();
     let has_lr = prog.code.iter().any(|i| {
         matches!(
@@ -1347,18 +1316,15 @@ fn lr_through_nullable_prefix_is_detected() {
         "root".into(),
         Pattern::choice(vec![
             Pattern::seq(vec![
-                Pattern::NonTerminal("opt".into()),
-                Pattern::NonTerminal("root".into()),
+                Pattern::nt("opt"),
+                Pattern::nt("root"),
                 Pattern::literal("+"),
                 Pattern::literal("n"),
             ]),
             Pattern::literal("n"),
         ]),
     );
-    rules.insert(
-        "opt".into(),
-        Pattern::Optional(Box::new(Pattern::literal("x"))),
-    );
+    rules.insert("opt".into(), Pattern::optional(Pattern::literal("x")));
     let prog = Grammar::new(rules).compile().unwrap();
     assert!(prog
         .code
@@ -1387,7 +1353,7 @@ fn cap_lit(kind: &str, s: &str) -> FollowElement {
 fn follow_set_single_rule_tail() {
     // root <- a; a <- 'x'
     let mut rules = HashMap::new();
-    rules.insert("root".into(), Pattern::NonTerminal("a".into()));
+    rules.insert("root".into(), Pattern::nt("a"));
     rules.insert("a".into(), Pattern::literal("x"));
     let g = Grammar::new(rules);
     let follow = compute_follow(&g);
@@ -1401,10 +1367,7 @@ fn follow_set_sequence_after() {
     let mut rules = HashMap::new();
     rules.insert(
         "root".into(),
-        Pattern::seq(vec![
-            Pattern::NonTerminal("a".into()),
-            Pattern::literal("y"),
-        ]),
+        Pattern::seq(vec![Pattern::nt("a"), Pattern::literal("y")]),
     );
     rules.insert("a".into(), Pattern::literal("x"));
     let g = Grammar::new(rules);
@@ -1418,10 +1381,7 @@ fn follow_set_choice_tail() {
     let mut rules = HashMap::new();
     rules.insert(
         "root".into(),
-        Pattern::choice(vec![
-            Pattern::NonTerminal("a".into()),
-            Pattern::NonTerminal("b".into()),
-        ]),
+        Pattern::choice(vec![Pattern::nt("a"), Pattern::nt("b")]),
     );
     rules.insert("a".into(), Pattern::literal("x"));
     rules.insert("b".into(), Pattern::literal("y"));
@@ -1436,10 +1396,7 @@ fn follow_set_choice_tail() {
 fn follow_set_repeat_self() {
     // root <- a*; a <- 'x'
     let mut rules = HashMap::new();
-    rules.insert(
-        "root".into(),
-        Pattern::Repeat(Box::new(Pattern::NonTerminal("a".into()))),
-    );
+    rules.insert("root".into(), Pattern::repeat(Pattern::nt("a")));
     rules.insert("a".into(), Pattern::literal("x"));
     let g = Grammar::new(rules);
     let follow = compute_follow(&g);
@@ -1463,16 +1420,13 @@ fn follow_set_nullable_skip() {
     rules.insert(
         "root".into(),
         Pattern::seq(vec![
-            Pattern::NonTerminal("a".into()),
-            Pattern::NonTerminal("b".into()),
+            Pattern::nt("a"),
+            Pattern::nt("b"),
             Pattern::literal("z"),
         ]),
     );
     rules.insert("a".into(), Pattern::literal("x"));
-    rules.insert(
-        "b".into(),
-        Pattern::Optional(Box::new(Pattern::literal("y"))),
-    );
+    rules.insert("b".into(), Pattern::optional(Pattern::literal("y")));
     let g = Grammar::new(rules);
     let follow = compute_follow(&g);
     let f_a = &follow["a"];
@@ -1496,10 +1450,10 @@ fn follow_set_recursive() {
         "root".into(),
         Pattern::seq(vec![
             Pattern::literal("x"),
-            Pattern::Optional(Box::new(Pattern::seq(vec![
+            Pattern::optional(Pattern::seq(vec![
                 Pattern::literal(","),
-                Pattern::NonTerminal("root".into()),
-            ]))),
+                Pattern::nt("list"),
+            ])),
         ]),
     );
     let g = Grammar::new(rules);
@@ -1517,8 +1471,8 @@ fn follow_set_capture_preserved() {
     rules.insert(
         "root".into(),
         Pattern::seq(vec![
-            Pattern::NonTerminal("a".into()),
-            Pattern::Capture("punctuation".into(), Box::new(Pattern::literal(","))),
+            Pattern::nt("a"),
+            Pattern::capture("punctuation", Pattern::literal(",")),
         ]),
     );
     rules.insert("a".into(), Pattern::literal("x"));
@@ -1538,8 +1492,8 @@ fn follow_set_predicate_lookahead() {
     rules.insert(
         "root".into(),
         Pattern::seq(vec![
-            Pattern::NonTerminal("a".into()),
-            Pattern::AndPredicate(Box::new(Pattern::literal("y"))),
+            Pattern::nt("a"),
+            Pattern::and_predicate(Pattern::literal("y")),
             Pattern::literal("z"),
         ]),
     );
@@ -1598,11 +1552,16 @@ type BTreeSetOf<T> = std::collections::BTreeSet<T>;
 
 // -- partial-match leniency lint ----------------------------------------
 
+/// Helper for ergonomic `LintFinding` construction in tests that don't
+/// pin a specific call-site position. Existing tests just want to
+/// assert on `(rule, caller)` pairs; spans are tested separately by
+/// the per-position assertions added for #114.
 fn finding(rule: &str, caller: &str) -> LintFinding {
     LintFinding {
         kind: LintKind::PartialMatchLeniency,
         rule: rule.into(),
         caller: caller.into(),
+        call_site: Span::SYNTHETIC,
     }
 }
 
@@ -1612,12 +1571,12 @@ fn lint_partial_match_trailing_optional_with_eof_validator() {
     // a is called from the start rule, whose only continuation is Eof.
     // Eof rejects any non-empty leftover bytes — a validator. No flag.
     let mut rules = HashMap::new();
-    rules.insert("root".into(), Pattern::NonTerminal("a".into()));
+    rules.insert("root".into(), Pattern::nt("a"));
     rules.insert(
         "a".into(),
         Pattern::seq(vec![
             Pattern::literal("x"),
-            Pattern::Optional(Box::new(Pattern::literal("y"))),
+            Pattern::optional(Pattern::literal("y")),
         ]),
     );
     let g = Grammar::new(rules);
@@ -1628,7 +1587,7 @@ fn lint_partial_match_trailing_optional_with_eof_validator() {
 fn lint_partial_match_no_trailing_nullable_skipped() {
     // root <- a; a <- 'x' 'y' — no trailing optional/nullable.
     let mut rules = HashMap::new();
-    rules.insert("root".into(), Pattern::NonTerminal("a".into()));
+    rules.insert("root".into(), Pattern::nt("a"));
     rules.insert(
         "a".into(),
         Pattern::seq(vec![Pattern::literal("x"), Pattern::literal("y")]),
@@ -1646,8 +1605,8 @@ fn lint_partial_match_anchored_via_andpredicate() {
     rules.insert(
         "root".into(),
         Pattern::seq(vec![
-            Pattern::NonTerminal("a".into()),
-            Pattern::AndPredicate(Box::new(Pattern::literal("y"))),
+            Pattern::nt("a"),
+            Pattern::and_predicate(Pattern::literal("y")),
             Pattern::literal("y"),
         ]),
     );
@@ -1655,7 +1614,7 @@ fn lint_partial_match_anchored_via_andpredicate() {
         "a".into(),
         Pattern::seq(vec![
             Pattern::literal("x"),
-            Pattern::Optional(Box::new(Pattern::literal("y"))),
+            Pattern::optional(Pattern::literal("y")),
         ]),
     );
     let g = Grammar::new(rules);
@@ -1673,16 +1632,13 @@ fn lint_partial_match_validated_by_disjoint_consumer() {
     let mut rules = HashMap::new();
     rules.insert(
         "root".into(),
-        Pattern::seq(vec![
-            Pattern::NonTerminal("a".into()),
-            Pattern::literal("z"),
-        ]),
+        Pattern::seq(vec![Pattern::nt("a"), Pattern::literal("z")]),
     );
     rules.insert(
         "a".into(),
         Pattern::seq(vec![
             Pattern::literal("x"),
-            Pattern::Optional(Box::new(Pattern::literal("y"))),
+            Pattern::optional(Pattern::literal("y")),
         ]),
     );
     let g = Grammar::new(rules);
@@ -1696,21 +1652,22 @@ fn lint_partial_match_absorbed_by_outer_catch_flagged() {
     // a's leniency at the call site is absorbed by the *^ recovery
     // wrapper — exactly the PR #101 shape.
     let mut rules = HashMap::new();
-    let recovery_body = Pattern::Repeat(Box::new(Pattern::seq(vec![
-        Pattern::NotPredicate(Box::new(Pattern::literal(";"))),
-        Pattern::AnyChar,
-    ])));
-    let call_inside_catch = Pattern::Repeat(Box::new(Pattern::Catch {
-        inner: Box::new(Pattern::NonTerminal("a".into())),
+    let recovery_body = Pattern::repeat(Pattern::seq(vec![
+        Pattern::not_predicate(Pattern::literal(";")),
+        Pattern::any_char(),
+    ]));
+    let call_inside_catch = Pattern::repeat(Pattern::Catch {
+        inner: Box::new(Pattern::nt("a")),
         label: "recovery".into(),
         recovery: Box::new(recovery_body),
-    }));
+        span: Span::SYNTHETIC,
+    });
     rules.insert("root".into(), call_inside_catch);
     rules.insert(
         "a".into(),
         Pattern::seq(vec![
             Pattern::literal("x"),
-            Pattern::Optional(Box::new(Pattern::literal("y"))),
+            Pattern::optional(Pattern::literal("y")),
         ]),
     );
     let g = Grammar::new(rules);
@@ -1747,10 +1704,10 @@ fn lint_partial_match_real_sqlite_grammar_unanchored_aliased_expr_flagged() {
     // Replace result_column's body with an unanchored version.
     g.rules.insert(
         "result_column".into(),
-        Pattern::OrderedChoice(vec![
-            Pattern::NonTerminal("table_star".into()),
-            Pattern::Capture("operator".into(), Box::new(Pattern::literal("*"))),
-            Pattern::NonTerminal("aliased_expr".into()),
+        Pattern::choice(vec![
+            Pattern::nt("table_star"),
+            Pattern::capture("operator", Pattern::literal("*")),
+            Pattern::nt("aliased_expr"),
         ]),
     );
     let findings = lint_partial_match(&g);
@@ -1772,8 +1729,8 @@ fn definition_lenient_marker_wraps_rule_body() {
     // call-site `~p` form produces.
     let g = parse("~r <- 'a'?").expect("parse");
     assert_eq!(
-        g.rules["r"],
-        Pattern::Lenient(Box::new(Pattern::Optional(Box::new(Pattern::literal("a"))))),
+        g.rules["r"].strip_spans(),
+        Pattern::lenient(Pattern::optional(Pattern::literal("a"))),
     );
 }
 
@@ -2101,4 +2058,125 @@ fn all_shipped_grammars_compile_clean() {
         g.compile()
             .unwrap_or_else(|e| panic!("compile {path:?}: {e}"));
     }
+}
+
+// ---- #114: Pattern AST spans surfaced through diagnostics ------------
+//
+// These tests pin the positional contract added by issue #114: every
+// `Pattern` node carries a source `Span`; the two fatal `CompileError`
+// variants that authors hit during grammar work — `PartialMatchLeniency`
+// and `CannotInferBoundary` — render `{line}:{col}:` so call sites are
+// directly navigable instead of requiring `grep -n` from the rule name.
+
+#[test]
+fn partial_match_leniency_carries_call_site_span_in_display() {
+    // `(r)*^[;]` is the catch-absorbed shape that reliably flags — the
+    // `r` reference at line 1, col 11 is the call site the lint
+    // surfaces. The rendered Display must include `{line}:{col}` so
+    // grammar authors can jump to the unanchored call directly.
+    let src = "root <- (r)*^[;]\nr <- 'x' 'y'?";
+    let g = parse(src).expect("parses");
+    let err = g.compile().expect_err("partial-match leniency expected");
+    let rendered = format!("{err}");
+    assert!(
+        rendered.contains("1:10:"),
+        "expected call-site `1:10:` (the `r` reference on line 1, col 10), got:\n{rendered}",
+    );
+}
+
+#[test]
+fn partial_match_leniency_finding_carries_call_site_span() {
+    // The structured `LintFinding.call_site` is the navigable position;
+    // the Display impl is a thin formatting layer over it. Pin the
+    // structured field directly so callers (e.g. editor diagnostics)
+    // get the same position the rendered text reports.
+    let src = "root <- (r)*^[;]\nr <- 'x' 'y'?";
+    let g = parse(src).expect("parses");
+    let findings = lint_partial_match(&g);
+    let f = findings
+        .iter()
+        .find(|f| f.rule == "r" && f.caller == "root")
+        .expect("r/root finding present");
+    assert_eq!(f.call_site, Span { line: 1, col: 10 });
+}
+
+#[test]
+fn cannot_infer_boundary_carries_placeholder_span_in_display() {
+    // The start rule's FOLLOW seeds with EOF, so a top-level `^^lbl`
+    // there resolves successfully. An unreachable rule has empty FOLLOW
+    // and triggers `CannotInferBoundary` — the placeholder's span at
+    // line 2, col 15 (start of `^^bad`) surfaces through both the
+    // structured error and its Display rendering.
+    let src = "root <- 'x'\norphan <- 'a' ^^bad";
+    let g = parse(src).expect("parses");
+    let err = g.compile().expect_err("CannotInferBoundary expected");
+    match &err {
+        syntax_highlighter::pegc::CompileError::CannotInferBoundary { span, .. } => {
+            assert_eq!(*span, Span { line: 2, col: 15 });
+        }
+        other => panic!("expected CannotInferBoundary, got: {other:?}"),
+    }
+    let rendered = format!("{err}");
+    assert!(
+        rendered.starts_with("2:15:"),
+        "expected `2:15:` prefix, got: {rendered}",
+    );
+}
+
+#[test]
+fn pattern_nodes_carry_parser_set_spans_for_each_variant_family() {
+    // One assertion per per-variant convention (atom, sequence-child,
+    // operator-position) — locks in `Span` production for parsing.
+    // Atom: `NonTerminal` span = first byte of the identifier.
+    // Operator: `Optional` span inherits its operand's span.
+    // Operator: `Capture` span = position of the `@`.
+    // Operator: `Catch` span = position of the leading `^`.
+    let src = "r <- @kind{'a'?} ^lbl 'b'";
+    let g = parse(src).expect("parses");
+    let body = &g.rules["r"];
+
+    // Top-level is a `Catch`: span at the `^` (column 18 — `^lbl` follows
+    // `@kind{'a'?} `).
+    let Pattern::Catch { inner, span, .. } = body else {
+        panic!("expected Catch at root, got: {body:?}");
+    };
+    assert_eq!(
+        *span,
+        Span { line: 1, col: 18 },
+        "Catch span should anchor at `^`"
+    );
+
+    // Inner is a `Capture`: span at the `@` (column 6).
+    let Pattern::Capture {
+        inner: cap_inner,
+        span: cap_span,
+        ..
+    } = inner.as_ref()
+    else {
+        panic!("expected Capture, got: {inner:?}");
+    };
+    assert_eq!(
+        *cap_span,
+        Span { line: 1, col: 6 },
+        "Capture span should anchor at `@`"
+    );
+
+    // Inside the capture: `Optional` whose span inherits the operand's
+    // start position — the operand is `'a'` literal at column 12.
+    let Pattern::Optional {
+        inner: opt_inner,
+        span: opt_span,
+    } = cap_inner.as_ref()
+    else {
+        panic!("expected Optional inside Capture, got: {cap_inner:?}");
+    };
+    assert_eq!(
+        *opt_span,
+        Span { line: 1, col: 12 },
+        "Optional span should inherit operand's start (the `'`)"
+    );
+    let Pattern::Literal { span: lit_span, .. } = opt_inner.as_ref() else {
+        panic!("expected Literal inside Optional, got: {opt_inner:?}");
+    };
+    assert_eq!(*lit_span, Span { line: 1, col: 12 });
 }

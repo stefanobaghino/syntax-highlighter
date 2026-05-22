@@ -1,16 +1,35 @@
 use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
 
 use syntax_highlighter::pegc;
 use syntax_highlighter::pegvm::{Capture, Program, VM};
 
 const RUST_GRAMMAR: &str = include_str!("../grammars/rust.peg");
 
-fn compile_rust() -> Program {
-    pegc::compile(RUST_GRAMMAR).expect("Rust grammar should compile")
+// Compile the grammar exactly once per test process. The init lock's
+// poisoning is what concentrates a broken-grammar failure into one
+// informative panic plus N-1 trivial "previously failed" panics across
+// the rest of the file's tests.
+static RUST_PROGRAM: OnceLock<Program> = OnceLock::new();
+static RUST_INIT: Mutex<()> = Mutex::new(());
+
+fn rust_program() -> &'static Program {
+    if let Some(p) = RUST_PROGRAM.get() {
+        return p;
+    }
+    let _guard = RUST_INIT
+        .lock()
+        .expect("Rust grammar compile previously failed; see the first failure");
+    RUST_PROGRAM.get_or_init(|| pegc::compile(RUST_GRAMMAR).expect("Rust grammar should compile"))
+}
+
+#[test]
+fn grammar_compiles() {
+    let _ = rust_program();
 }
 
 fn run(input: &str) -> (usize, Vec<Capture>, Vec<String>, bool) {
-    let prog = compile_rust();
+    let prog = rust_program();
     let r = VM::new(&prog.code, input.as_bytes()).run();
     (
         r.matched,
@@ -57,7 +76,7 @@ fn recovery_literals<'a>(captures: &[Capture], kinds: &[String], input: &'a str)
 
 #[test]
 fn grammar_parses_and_compiles() {
-    let prog = compile_rust();
+    let prog = rust_program();
     assert!(!prog.code.is_empty());
     assert!(!prog.capture_kinds.is_empty());
 }
@@ -66,7 +85,7 @@ fn grammar_parses_and_compiles() {
 fn capture_kinds_stay_in_theme_vocabulary() {
     // The grammar must not invent capture names outside the hardcoded
     // theme vocabulary in src/highlight/theme.rs.
-    let prog = compile_rust();
+    let prog = rust_program();
     let allowed: HashSet<&str> = [
         "keyword",
         "string",

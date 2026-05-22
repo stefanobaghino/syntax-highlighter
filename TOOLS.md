@@ -75,11 +75,14 @@ need a CLI surface.
 
 ## `stats <grammar.peg>`
 
-Compile a PEG grammar file and print its bytecode size.
+Compile a PEG grammar file and print its bytecode size plus a per-rule
+call-graph summary.
 
 **Synopsis:** `pegc stats <grammar.peg>`
 
-**Output:** one JSON object on a single line.
+**Output:** a JSON header line followed by one NDJSON record per rule.
+
+Header fields:
 
 | Field                 | Meaning                                                  |
 |-----------------------|----------------------------------------------------------|
@@ -89,6 +92,15 @@ Compile a PEG grammar file and print its bytecode size.
 | `capture_kinds_count` | Number of distinct capture kinds the grammar declares.   |
 | `capture_kinds`       | Array of capture-kind names, in declaration order.       |
 
+Per-rule record fields (one object per rule, sorted alphabetically by `rule`;
+every rule appears, including unreferenced ones):
+
+| Field        | Meaning                                                                      |
+|--------------|------------------------------------------------------------------------------|
+| `rule`       | Rule name.                                                                   |
+| `references` | Total occurrences of `<rule>` as a `NonTerminal` across every rule's body.   |
+| `body_chars` | Source character count of the rule's body (after `<-`), trimmed.             |
+
 **Stdin:** not accepted — `stats` always takes a `<grammar.peg>` path.
 
 **Exit codes:** 0 success, 2 usage error, 3 grammar-compile error.
@@ -97,12 +109,26 @@ Compile a PEG grammar file and print its bytecode size.
 
 ```
 $ pegc stats grammars/json.peg
-{"path":"grammars/json.peg","instructions":197,"rules":16,"capture_kinds_count":5,"capture_kinds":["punctuation","property","string","number","constant"]}
+{"path":"grammars/json.peg","instructions":205,"rules":12,"capture_kinds_count":5,"capture_kinds":["punctuation","property","string","number","constant"]}
+{"rule":"array","references":1,"body_chars":117}
+{"rule":"exp","references":1,"body_chars":15}
+...
 
-# Compare across all shipped grammars (each file emits one line; jq tabulates):
-$ for g in grammars/*.peg; do pegc stats "$g"; done \
+# Compare bytecode size across all shipped grammars (use jq to drop the
+# per-rule lines; the header is always the first line):
+$ for g in grammars/*.peg; do pegc stats "$g" | head -1; done \
     | jq -r '[.path, .instructions, .rules, .capture_kinds_count] | @tsv' \
     | column -t
+
+# Inlining-audit recipe: list rules referenced exactly once (the per-rule
+# stream lives after the header line, so skip line 1):
+$ pegc stats grammars/sqlite.peg | tail -n +2 \
+    | jq -r 'select(.references==1) | .rule'
+
+# Dead-code recipe: rules that nothing calls (excluding the start rule,
+# which is invoked by the runtime entry point rather than a NonTerminal):
+$ pegc stats grammars/sqlite.peg | tail -n +2 \
+    | jq -r 'select(.references==0) | .rule'
 ```
 
 ---
