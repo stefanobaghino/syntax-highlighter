@@ -178,7 +178,7 @@ Captures returned in a `MatchResult` have two non-obvious guarantees:
 
 A `MatchResult` is always returned. The `complete` flag distinguishes the two cases:
 
-- `complete == true`: the VM reached `End`. `matched` is the `sp` at that point (potentially less than `input.len()` if the grammar is designed to stop early — no trailing `!.`).
+- `complete == true`: the VM reached `End`. `matched` is the `sp` at that point. Grammars compiled by `pegc::compile` always assert end-of-input (the `root`-rule wrap appends an implicit `!.`), so `complete == true` implies `matched == input.len()`. Raw `compile_pattern` programs without a `root` rule can succeed on a prefix, in which case `matched` is wherever the pattern stopped.
 - `complete == false`: the VM exhausted its backtrack stack without reaching `End`. `matched` is the farthest input position the VM ever reached before retreating — the "farthest failure position" heuristic of Ford 2004, used for error reporting by LPegLabel and the `lpeg-ffp` fork — and `captures` are the captures valid at that point, with any still-open captures closed at `matched`.
 
 This partial result is what lets the highlighter render a styled prefix and a plain tail for malformed input, without the VM knowing anything about highlighting.

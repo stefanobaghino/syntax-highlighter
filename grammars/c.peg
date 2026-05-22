@@ -1,5 +1,4 @@
 # C (pragmatic subset) grammar with highlight annotations.
-# The first rule is the start rule.
 #
 # Scope: highlighting, not compilation. The classic C grammar
 # ambiguity between `typedef-name IDENT` and `IDENT * IDENT` (is `a *
@@ -30,30 +29,32 @@
 # `^block_close` catch so malformed function bodies resync at the
 # closing `}` instead of failing the enclosing `fn_def`.
 
-c_file        <- trivia (external_decl)*^ trivia \z
+root          <- (external_decl)*^
+
+trivia        <- (comment / \s)*
 
 # --- Preprocessor directives (absorbed as @comment) ------------------
 
 pp_line       <- @keyword{pp_body}
-pp_body       <- '#' (pp_cont / [^\n])*
-pp_cont       <- '\\' '\n'
+*pp_body      <- '#' (pp_cont / [^\n])*
+*pp_cont      <- '\\' '\n'
                 / '\\' '\r' '\n'
 
 # --- External declarations -------------------------------------------
 
-external_decl <- pp_line trivia
+external_decl <- pp_line
                / fn_def
                / decl
 
 # Type-specifier + declarator + block.
-fn_def        <- decl_spec_list trivia declarator trivia (decl trivia)* compound_stmt trivia
+fn_def        <- decl_spec_list declarator decl* compound_stmt
 
 # Declarations end in `;`. Must start with at least one specifier
 # (storage/qualifier/type keyword, `typedef`, `struct`, `union`,
 # `enum`) so we don't accidentally parse `a * b;` as a declaration.
-decl          <- decl_spec_list trivia init_declarator_list? trivia @punctuation{';'} trivia
+decl          <- decl_spec_list init_declarator_list? @punctuation{';'}
 
-decl_spec_list <- decl_spec (trivia decl_spec)*
+decl_spec_list <- decl_spec+
 decl_spec     <- storage_spec
                / type_qualifier
                / type_spec
@@ -78,7 +79,7 @@ type_spec     <- struct_or_union_spec
                / @type{typedef_name}
 
 predef_type   <- @type{predef_type_name}
-predef_type_name <- ('void' / 'char' / 'short' / 'long long' / 'long'
+*predef_type_name <- ('void' / 'char' / 'short' / 'long long' / 'long'
                    / 'int' / 'float' / 'double' / 'signed' / 'unsigned'
                    / '_Bool' / '_Complex' / '_Imaginary') !ident_body
 
@@ -87,63 +88,63 @@ predef_type_name <- ('void' / 'char' / 'short' / 'long long' / 'long'
 # expression statement. The `_t` arm uses the standard PEG non-greedy
 # idiom `(!end_t ident_body)*` because PEG `*` is possessive — a
 # greedy `ident_body*` would swallow the trailing `_t`.
-typedef_name  <- [A-Z] ident_body*
+*typedef_name <- [A-Z] ident_body*
                / [a-z_] (!typedef_t_end ident_body)* typedef_t_end
-typedef_t_end <- '_t' !ident_body
+*typedef_t_end <- '_t' !ident_body
 
-struct_or_union_spec <- (@keyword{'struct'} / @keyword{'union'}) trivia
-                       (@type{ident})? (trivia @punctuation{'{'} trivia struct_decl* trivia @punctuation{'}'})?
-struct_decl   <- decl_spec_list trivia struct_declarator_list? trivia @punctuation{';'} trivia
-               / pp_line trivia
-struct_declarator_list <- struct_declarator (trivia @punctuation{','} trivia struct_declarator)*
-struct_declarator <- struct_field_declarator (trivia @punctuation{':'} trivia expr_cond)?
-                   / @punctuation{':'} trivia expr_cond
-struct_field_declarator <- pointer? trivia struct_field_direct
+struct_or_union_spec <- (@keyword{'struct'} / @keyword{'union'})
+                       (@type{ident})? (@punctuation{'{'} struct_decl* @punctuation{'}'})?
+struct_decl   <- decl_spec_list struct_declarator_list? @punctuation{';'}
+               / pp_line
+struct_declarator_list <- struct_declarator (@punctuation{','} struct_declarator)*
+struct_declarator <- struct_field_declarator (@punctuation{':'} expr_cond)?
+                   / @punctuation{':'} expr_cond
+struct_field_declarator <- pointer? struct_field_direct
 struct_field_direct <- @property{ident} struct_field_tail*
-                     / @punctuation{'('} trivia struct_field_declarator trivia @punctuation{')'} struct_field_tail*
-struct_field_tail <- trivia @punctuation{'['} trivia (expr / '')? trivia @punctuation{']'}
-                   / trivia @punctuation{'('} trivia param_list? trivia @punctuation{')'}
+                     / @punctuation{'('} struct_field_declarator @punctuation{')'} struct_field_tail*
+struct_field_tail <- @punctuation{'['} (expr / '')? @punctuation{']'}
+                   / @punctuation{'('} param_list? @punctuation{')'}
 
-enum_spec     <- @keyword{'enum'} trivia (@type{ident})?
-                 (trivia @punctuation{'{'} trivia enum_list? trivia @punctuation{'}'})?
-enum_list     <- enum_item (trivia @punctuation{','} trivia enum_item)* (trivia @punctuation{','})?
-enum_item     <- @constant{ident} (trivia @operator{'='} trivia expr_cond)?
+enum_spec     <- @keyword{'enum'} (@type{ident})?
+                 (@punctuation{'{'} enum_list? @punctuation{'}'})?
+enum_list     <- enum_item (@punctuation{','} enum_item)* (@punctuation{','})?
+enum_item     <- @constant{ident} (@operator{'='} expr_cond)?
 
 # --- Declarators -----------------------------------------------------
 
-init_declarator_list <- init_declarator (trivia @punctuation{','} trivia init_declarator)*
-init_declarator <- declarator (trivia @operator{'='} trivia initializer)?
+init_declarator_list <- init_declarator (@punctuation{','} init_declarator)*
+init_declarator <- declarator (@operator{'='} initializer)?
 
-declarator    <- pointer? trivia direct_declarator
-pointer       <- (@operator{'*'} (trivia type_qualifier)*)+
+declarator    <- pointer? direct_declarator
+pointer       <- (@operator{'*'} type_qualifier*)+
 direct_declarator <- simple_declarator direct_declarator_tail*
-simple_declarator <- @function{ident} &(trivia @punctuation{'('})
+simple_declarator <- @function{ident} &(@punctuation{'('})
                    / @variable{ident}
-                   / @punctuation{'('} trivia declarator trivia @punctuation{')'}
-direct_declarator_tail <- trivia @punctuation{'['} trivia (expr / '')? trivia @punctuation{']'}
-                        / trivia @punctuation{'('} trivia param_list? trivia @punctuation{')'}
-                        / trivia @punctuation{'('} trivia ident_list? trivia @punctuation{')'}
+                   / @punctuation{'('} declarator @punctuation{')'}
+direct_declarator_tail <- @punctuation{'['} (expr / '')? @punctuation{']'}
+                        / @punctuation{'('} param_list? @punctuation{')'}
+                        / @punctuation{'('} ident_list? @punctuation{')'}
 
-param_list    <- param (trivia @punctuation{','} trivia param)* (trivia @punctuation{','} trivia @operator{'...'})?
+param_list    <- param (@punctuation{','} param)* (@punctuation{','} @operator{'...'})?
                / @operator{'...'}
-param         <- decl_spec_list (trivia (declarator / abstract_declarator))?
-abstract_declarator <- pointer (trivia direct_abstract_declarator)?
+param         <- decl_spec_list (declarator / abstract_declarator)?
+abstract_declarator <- pointer direct_abstract_declarator?
                      / direct_abstract_declarator
-direct_abstract_declarator <- (@punctuation{'('} trivia abstract_declarator trivia @punctuation{')'} / @punctuation{'['} trivia (expr / '')? trivia @punctuation{']'})
-                              (trivia @punctuation{'['} trivia (expr / '')? trivia @punctuation{']'} / trivia @punctuation{'('} trivia param_list? trivia @punctuation{')'})*
+direct_abstract_declarator <- (@punctuation{'('} abstract_declarator @punctuation{')'} / @punctuation{'['} (expr / '')? @punctuation{']'})
+                              (@punctuation{'['} (expr / '')? @punctuation{']'} / @punctuation{'('} param_list? @punctuation{')'})*
 
-ident_list    <- @variable{ident} (trivia @punctuation{','} trivia @variable{ident})*
+ident_list    <- @variable{ident} (@punctuation{','} @variable{ident})*
 
-initializer   <- @punctuation{'{'} trivia initializer_list? trivia @punctuation{','}? trivia @punctuation{'}'}
+initializer   <- @punctuation{'{'} initializer_list? @punctuation{','}? @punctuation{'}'}
                / expr_assign
-initializer_list <- designation? initializer (trivia @punctuation{','} trivia designation? initializer)*
-designation   <- designator+ trivia @operator{'='}
-designator    <- trivia @punctuation{'['} trivia expr_cond trivia @punctuation{']'}
-               / trivia @punctuation{'.'} @property{ident}
+initializer_list <- designation? initializer (@punctuation{','} designation? initializer)*
+designation   <- designator+ @operator{'='}
+designator    <- @punctuation{'['} expr_cond @punctuation{']'}
+               / @punctuation{'.'} @property{ident}
 
 # --- Statements ------------------------------------------------------
 
-compound_stmt <- @punctuation{'{'} trivia ((block_item trivia)* @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
+compound_stmt <- @punctuation{'{'} (block_item* @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
 block_item    <- pp_line
                / decl
                / stmt
@@ -162,24 +163,24 @@ stmt          <- labeled_stmt
                / empty_stmt
                / expr_stmt
 
-labeled_stmt  <- @variable{ident} trivia @punctuation{':'} trivia stmt
-               / @keyword{'case'} trivia expr_cond trivia @punctuation{':'} trivia stmt
-               / @keyword{'default'} trivia @punctuation{':'} trivia stmt
+labeled_stmt  <- @variable{ident} @punctuation{':'} stmt
+               / @keyword{'case'} expr_cond @punctuation{':'} stmt
+               / @keyword{'default'} @punctuation{':'} stmt
 # Trailing `(else stmt)?` leniency absorbed by top-level `*^` and `^block_close`.
-~if_stmt      <- @keyword{'if'} trivia @punctuation{'('} trivia expr trivia @punctuation{')'} trivia stmt
-                 (trivia @keyword{'else'} trivia stmt)?
-for_stmt      <- @keyword{'for'} trivia @punctuation{'('} trivia for_init trivia expr? trivia @punctuation{';'} trivia expr? trivia @punctuation{')'} trivia stmt
+~if_stmt      <- @keyword{'if'} @punctuation{'('} expr @punctuation{')'} stmt
+                 (@keyword{'else'} stmt)?
+for_stmt      <- @keyword{'for'} @punctuation{'('} for_init expr? @punctuation{';'} expr? @punctuation{')'} stmt
 for_init      <- decl
-               / expr? trivia @punctuation{';'}
-while_stmt    <- @keyword{'while'} trivia @punctuation{'('} trivia expr trivia @punctuation{')'} trivia stmt
-do_while_stmt <- @keyword{'do'} trivia stmt trivia @keyword{'while'} trivia @punctuation{'('} trivia expr trivia @punctuation{')'} trivia @punctuation{';'}
-switch_stmt   <- @keyword{'switch'} trivia @punctuation{'('} trivia expr trivia @punctuation{')'} trivia stmt
-return_stmt   <- @keyword{'return'} (trivia expr)? trivia @punctuation{';'}
-break_stmt    <- @keyword{'break'} trivia @punctuation{';'}
-continue_stmt <- @keyword{'continue'} trivia @punctuation{';'}
-goto_stmt     <- @keyword{'goto'} trivia @variable{ident} trivia @punctuation{';'}
+               / expr? @punctuation{';'}
+while_stmt    <- @keyword{'while'} @punctuation{'('} expr @punctuation{')'} stmt
+do_while_stmt <- @keyword{'do'} stmt @keyword{'while'} @punctuation{'('} expr @punctuation{')'} @punctuation{';'}
+switch_stmt   <- @keyword{'switch'} @punctuation{'('} expr @punctuation{')'} stmt
+return_stmt   <- @keyword{'return'} expr? @punctuation{';'}
+break_stmt    <- @keyword{'break'} @punctuation{';'}
+continue_stmt <- @keyword{'continue'} @punctuation{';'}
+goto_stmt     <- @keyword{'goto'} @variable{ident} @punctuation{';'}
 empty_stmt    <- @punctuation{';'}
-expr_stmt     <- expr trivia @punctuation{';'}
+expr_stmt     <- expr @punctuation{';'}
 
 # --- Expressions ----------------------------------------------------
 #
@@ -191,8 +192,8 @@ expr_stmt     <- expr trivia @punctuation{';'}
 # doesn't eat a fragment of a longer operator that belongs higher up.
 # Assignment (right-associative) and ternary stay outside the LR ladder.
 
-expr          <- expr_assign (trivia @punctuation{','} trivia expr_assign)*
-expr_assign   <- expr_unary trivia assign_op trivia expr_assign
+expr          <- expr_assign (@punctuation{','} expr_assign)*
+expr_assign   <- expr_unary assign_op expr_assign
                / expr_cond
 
 
@@ -202,18 +203,18 @@ assign_op     <- @operator{'<<='} / @operator{'>>='}
                / @operator{'='} !'='
 
 # Trailing ternary `?` leniency absorbed by top-level `*^`.
-~expr_cond    <- expr_lor (trivia @operator{'?'} trivia expr trivia @punctuation{':'} trivia expr_assign)?
+~expr_cond    <- expr_lor (@operator{'?'} expr @punctuation{':'} expr_assign)?
 
-expr_lor      <- expr_lor trivia @operator{'||'} trivia expr_land / expr_land
-expr_land     <- expr_land trivia @operator{'&&'} trivia expr_bor / expr_bor
-expr_bor      <- expr_bor trivia @operator{'|'} !'|' !'=' trivia expr_bxor / expr_bxor
-expr_bxor     <- expr_bxor trivia @operator{'^'} !'=' trivia expr_band / expr_band
-expr_band     <- expr_band trivia @operator{'&'} !'&' !'=' trivia expr_eq / expr_eq
-expr_eq       <- expr_eq trivia (@operator{'=='} / @operator{'!='}) trivia expr_rel / expr_rel
-expr_rel      <- expr_rel trivia (@operator{'<='} / @operator{'>='} / @operator{'<'} !'<' / @operator{'>'} !'>') trivia expr_shift / expr_shift
-expr_shift    <- expr_shift trivia (@operator{'<<'} !'=' / @operator{'>>'} !'=') trivia expr_add / expr_add
-expr_add      <- expr_add trivia (@operator{'+'} !'=' / @operator{'-'} !'=') trivia expr_mul / expr_mul
-expr_mul      <- expr_mul trivia (@operator{'*'} !'=' / @operator{'/'} !'=' / @operator{'%'} !'=') trivia expr_unary / expr_unary
+expr_lor      <- expr_lor @operator{'||'} expr_land / expr_land
+expr_land     <- expr_land @operator{'&&'} expr_bor / expr_bor
+expr_bor      <- expr_bor @operator{'|'} !'|' !'=' expr_bxor / expr_bxor
+expr_bxor     <- expr_bxor @operator{'^'} !'=' expr_band / expr_band
+expr_band     <- expr_band @operator{'&'} !'&' !'=' expr_eq / expr_eq
+expr_eq       <- expr_eq (@operator{'=='} / @operator{'!='}) expr_rel / expr_rel
+expr_rel      <- expr_rel (@operator{'<='} / @operator{'>='} / @operator{'<'} !'<' / @operator{'>'} !'>') expr_shift / expr_shift
+expr_shift    <- expr_shift (@operator{'<<'} !'=' / @operator{'>>'} !'=') expr_add / expr_add
+expr_add      <- expr_add (@operator{'+'} !'=' / @operator{'-'} !'=') expr_mul / expr_mul
+expr_mul      <- expr_mul (@operator{'*'} !'=' / @operator{'/'} !'=' / @operator{'%'} !'=') expr_unary / expr_unary
 
 # `sizeof_type` is tried before the generic prefix loop so that
 # `sizeof(struct X)` / `sizeof(union X)` / `sizeof(counter_size_t)`
@@ -223,23 +224,23 @@ expr_mul      <- expr_mul trivia (@operator{'*'} !'=' / @operator{'/'} !'=' / @o
 # fall back to the prefix path so `sizeof expr` and `sizeof(expr)`
 # still parse.
 expr_unary    <- sizeof_type
-               / (unary_prefix trivia)* expr_postfix
+               / unary_prefix* expr_postfix
 unary_prefix  <- @operator{'++'} / @operator{'--'}
                / @operator{'+'} / @operator{'-'} / @operator{'!'} / @operator{'~'}
                / @operator{'*'} / @operator{'&'}
-               / @keyword{'sizeof'} &(trivia (@punctuation{'('} / [A-Za-z_]))
+               / @keyword{'sizeof'} &(@punctuation{'('} / [A-Za-z_])
                / @keyword{'_Alignof'}
 
-expr_postfix  <- expr_primary (trivia postfix_op)*
+expr_postfix  <- expr_primary postfix_op*
 postfix_op    <- @operator{'++'} / @operator{'--'}
-               / @punctuation{'('} trivia arg_list? trivia @punctuation{')'}
-               / @punctuation{'['} trivia expr trivia @punctuation{']'}
+               / @punctuation{'('} arg_list? @punctuation{')'}
+               / @punctuation{'['} expr @punctuation{']'}
                / @operator{'->'} postfix_member
                / @punctuation{'.'} postfix_member
-postfix_member <- @function{ident} &(trivia @punctuation{'('})
+postfix_member <- @function{ident} &(@punctuation{'('})
                 / @property{ident}
 
-arg_list      <- expr_assign (trivia @punctuation{','} trivia expr_assign)*
+arg_list      <- expr_assign (@punctuation{','} expr_assign)*
 
 expr_primary  <- string_lit
                / char_lit
@@ -253,28 +254,28 @@ expr_primary  <- string_lit
                / @variable{ident}
 
 # `sizeof(T)` must eat the whole type-name expression as a sizeof argument.
-sizeof_type   <- @keyword{'sizeof'} trivia @punctuation{'('} trivia type_name trivia @punctuation{')'}
-type_name     <- decl_spec_list (trivia abstract_declarator)?
+sizeof_type   <- @keyword{'sizeof'} @punctuation{'('} type_name @punctuation{')'}
+type_name     <- decl_spec_list abstract_declarator?
 
 # `(T)expr` vs `(expr)` — try cast first (uses decl_spec which
 # requires a type keyword/qualifier, making the distinction
 # unambiguous for real-world C).
-cast_or_paren <- @punctuation{'('} trivia type_name trivia @punctuation{')'} trivia expr_unary
-               / @punctuation{'('} trivia expr trivia @punctuation{')'}
+cast_or_paren <- @punctuation{'('} type_name @punctuation{')'} expr_unary
+               / @punctuation{'('} expr @punctuation{')'}
 
-call_ident    <- @function{ident} &(trivia @punctuation{'('})
+call_ident    <- @function{ident} &(@punctuation{'('})
 
 # --- Literals --------------------------------------------------------
 
 string_lit    <- @string{string_pieces}
-string_pieces <- string_piece (trivia string_piece)*
-string_piece  <- ('L' / 'u8' / 'u' / 'U')? '"' ('\\' . / !'"' !'\n' .)* '"'
+string_pieces <- string_piece+
+*string_piece <- ('L' / 'u8' / 'u' / 'U')? '"' ('\\' . / !'"' !'\n' .)* '"'
 
 char_lit      <- @string{char_body}
-char_body     <- ('L' / 'u' / 'U')? "'" ('\\' . / !"'" .)* "'"
+*char_body    <- ('L' / 'u' / 'U')? "'" ('\\' . / !"'" .)* "'"
 
 number_lit    <- @number{num_body}
-num_body      <- '0x' hex_digits ('.' hex_digits?)? ([pP] [+\-]? \d+)? int_suffix?
+*num_body     <- '0x' hex_digits ('.' hex_digits?)? ([pP] [+\-]? \d+)? int_suffix?
                / '0X' hex_digits ('.' hex_digits?)? ([pP] [+\-]? \d+)? int_suffix?
                / '0b' bin_digits int_suffix?
                / '0' [0-7]* int_suffix?
@@ -282,20 +283,20 @@ num_body      <- '0x' hex_digits ('.' hex_digits?)? ([pP] [+\-]? \d+)? int_suffi
                / '.' digit_seq exp_part? float_suffix?
                / digit_seq exp_part float_suffix?
                / digit_seq int_suffix?
-digit_seq     <- \d [\d']*
-hex_digits    <- [\da-fA-F] [\da-fA-F']*
-bin_digits    <- [01] [01']*
-exp_part      <- [eE] [+\-]? \d+
+*digit_seq    <- \d [\d']*
+*hex_digits   <- [\da-fA-F] [\da-fA-F']*
+*bin_digits   <- [01] [01']*
+*exp_part     <- [eE] [+\-]? \d+
 int_suffix    <- ('ULL' / 'ull' / 'LL' / 'll' / 'UL' / 'ul' / 'LU' / 'lu' / 'U' / 'u' / 'L' / 'l')
 float_suffix  <- [fFlL]
 
 # --- Identifiers ----------------------------------------------------
 
-ident         <- !reserved [A-Za-z_] ident_body*
+*ident        <- !reserved [A-Za-z_] ident_body*
 ident_body    <- [A-Za-z\d_]
 
 # Reserved keywords that must not be matched as identifiers.
-reserved      <- reserved_word !ident_body
+*reserved     <- reserved_word !ident_body
 reserved_word <- 'auto' / 'break' / 'case' / 'char' / 'const' / 'continue'
                / 'default' / 'do' / 'double' / 'else' / 'enum' / 'extern'
                / 'float' / 'for' / 'goto' / 'if' / 'inline' / 'int'
@@ -307,6 +308,4 @@ reserved_word <- 'auto' / 'break' / 'case' / 'char' / 'const' / 'continue'
 
 # --- Whitespace / comments ------------------------------------------
 
-comment       <- @comment{'//' .. '\n' / '/*' ..= '*/'}
-
-trivia        <- (comment / \s)*
+*comment      <- @comment{'//' .. '\n' / '/*' ..= '*/'}

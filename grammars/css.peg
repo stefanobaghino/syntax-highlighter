@@ -1,5 +1,4 @@
 # CSS grammar with highlight annotations.
-# The first rule is the start rule.
 #
 # Scope: highlighting, not conformance validation. Covers standard
 # rules, at-rules (`@media`, `@keyframes`, `@import`, ...), nested
@@ -24,25 +23,27 @@
 # malformed declarations inside a rule/at-rule body resync at the
 # closing `}` instead of failing the enclosing statement.
 
-css_file      <- trivia (statement)*^ trivia \z
+root          <- (statement)*^
+
+trivia        <- (comment / \s)*
 
 statement     <- at_rule
                 / rule
 
 # --- At-rules --------------------------------------------------------
 
-at_rule       <- at_name trivia prelude trivia (block / @punctuation{';'}) trivia
-at_name       <- @keyword{'@' ident_body+}
+at_rule       <- at_name prelude (block / @punctuation{';'})
+*at_name      <- @keyword{'@' ident_body+}
 
 # Prelude: tokens up to `{` or `;` — sequences of value-like tokens.
-prelude       <- (prelude_token trivia)*
+prelude       <- prelude_token*
 prelude_token <- string_lit
                 / fn_call
                 / hex_color
                 / number_with_unit
                 / @keyword{'!important'}
                 / @type{ident}
-                / @punctuation{'('} trivia prelude trivia @punctuation{')'}
+                / @punctuation{'('} prelude @punctuation{')'}
                 / @punctuation{','}
                 / @punctuation{':'}
                 / @operator{'='}
@@ -54,45 +55,45 @@ prelude_token <- string_lit
 
 # --- Rules -----------------------------------------------------------
 
-rule          <- selector_list trivia block trivia
-selector_list <- selector (trivia @punctuation{','} trivia selector)*
-selector      <- compound_selector (trivia combinator_and_next)*
-combinator_and_next <- @operator{'>'} trivia compound_selector
-                     / @operator{'+'} trivia compound_selector
-                     / @operator{'~'} trivia compound_selector
+rule          <- selector_list block
+selector_list <- selector (@punctuation{','} selector)*
+selector      <- compound_selector combinator_and_next*
+combinator_and_next <- @operator{'>'} compound_selector
+                     / @operator{'+'} compound_selector
+                     / @operator{'~'} compound_selector
                      / compound_selector
 
 compound_selector <- selector_atom+
-selector_atom <- @property{'.' ident}
-               / @constant{'#' ident}
-               / @function{'::' ident pseudo_args?}
-               / @function{':' ident pseudo_args?}
-               / @punctuation{'['} trivia (.. ']') trivia @punctuation{']'}
-               / @punctuation{'&'}
-               / @punctuation{'*'}
-               / @type{ident}
+*selector_atom <- @property{'.' ident}
+                / @constant{'#' ident}
+                / @function{'::' ident pseudo_args?}
+                / @function{':' ident pseudo_args?}
+                / @punctuation{'['} (.. ']') @punctuation{']'}
+                / @punctuation{'&'}
+                / @punctuation{'*'}
+                / @type{ident}
 
-pseudo_args    <- '(' ..= ')'
+*pseudo_args  <- '(' ..= ')'
 
 # --- Blocks & declarations ------------------------------------------
 
-block         <- @punctuation{'{'} trivia ((block_item trivia)* @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
+block         <- @punctuation{'{'} (block_item* @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
 block_item    <- at_rule
                 / declaration
                 / rule
                 / @punctuation{';'}
 
-# Trailing `important? trivia (';' / &'}')` leniency is absorbed by `block`'s `^block_close`.
-~declaration  <- @property{prop_ident} trivia @punctuation{':'} trivia value_list trivia
-                 @keyword{'!important'}? trivia (@punctuation{';'} / &'}')
+# Trailing `important? (';' / &'}')` leniency is absorbed by `block`'s `^block_close`.
+~declaration  <- @property{prop_ident} @punctuation{':'} value_list
+                 @keyword{'!important'}? (@punctuation{';'} / &'}')
 
-prop_ident    <- '--' ident_body+
+*prop_ident   <- '--' ident_body+
                 / '-'? ident
 
 # --- Values ---------------------------------------------------------
 
-value_list    <- value_term (trivia @punctuation{','} trivia value_term)*
-value_term    <- value_factor (trivia value_factor)*
+value_list    <- value_term (@punctuation{','} value_term)*
+value_term    <- value_factor+
 value_factor  <- string_lit
                 / fn_call
                 / hex_color
@@ -104,39 +105,37 @@ value_factor  <- string_lit
                 / @operator{'-'}
                 / @operator{'*'}
 
-fn_call       <- @function{ident} @punctuation{'('} trivia fn_args? trivia @punctuation{')'}
-fn_args       <- value_term (trivia @punctuation{','} trivia value_term)*
+fn_call       <- @function{ident} @punctuation{'('} fn_args? @punctuation{')'}
+fn_args       <- value_term (@punctuation{','} value_term)*
 
 # Unquoted `url(...)` arg — bare text till the closing paren.
-url_unquoted  <- @function{'url'} @punctuation{'('} trivia @string{.. ')'} trivia @punctuation{')'}
+url_unquoted  <- @function{'url'} @punctuation{'('} @string{.. ')'} @punctuation{')'}
 
 # --- Literals -------------------------------------------------------
 
-hex_color     <- @constant{'#' [\da-fA-F]+}
+*hex_color    <- @constant{'#' [\da-fA-F]+}
 
 number_with_unit <- @number{num_body}
 
 # Trailing `num_unit?` leniency: unitless numbers stop at the next non-unit byte; outer recovery handles malformed values.
-~num_body     <- [+\-]? (num_float / \d+) num_unit?
-num_float     <- \d* '.' \d+
+*~num_body    <- [+\-]? (num_float / \d+) num_unit?
+*num_float    <- \d* '.' \d+
                 / \d+ '.' \d*
 num_unit      <- '%'
                 / ident
 
 string_lit    <- @string{dq_string / sq_string}
-dq_string     <- '"' (str_escape / !'"' !'\n' .)* '"'
-sq_string     <- "'" (str_escape / !"'" !'\n' .)* "'"
-str_escape    <- '\\' .
+*dq_string    <- '"' (str_escape / !'"' !'\n' .)* '"'
+*sq_string    <- "'" (str_escape / !"'" !'\n' .)* "'"
+*str_escape   <- '\\' .
 
 # --- Identifiers ----------------------------------------------------
 
-ident         <- [A-Za-z_\-] ident_body*
+*ident        <- [A-Za-z_\-] ident_body*
 ident_body    <- [A-Za-z\d_\-]
 
 # --- Whitespace / comments -----------------------------------------
 #
 # CSS has only block comments.
 
-comment       <- @comment{'/*' ..= '*/'}
-
-trivia        <- (comment / \s)*
+*comment      <- @comment{'/*' ..= '*/'}

@@ -20,14 +20,16 @@ fn parse(src: &str) -> syntax_highlighter::pegc::Grammar {
 #[test]
 fn simple_rule() {
     let g = parse("foo <- \"hi\"");
-    assert_eq!(g.start, "foo");
+    let order: Vec<&str> = g.rule_headers.iter().map(|h| h.name.as_str()).collect();
+    assert_eq!(order, vec!["foo"]);
     assert_eq!(g.rules["foo"], Pattern::literal("hi"));
 }
 
 #[test]
-fn first_rule_is_start() {
+fn rule_order_preserved() {
     let g = parse("first <- 'a'\nsecond <- 'b'");
-    assert_eq!(g.start, "first");
+    let order: Vec<&str> = g.rule_headers.iter().map(|h| h.name.as_str()).collect();
+    assert_eq!(order, vec!["first", "second"]);
     assert_eq!(g.rules.len(), 2);
 }
 
@@ -1020,12 +1022,6 @@ fn backslash_cap_r_linebreak_atom() {
 }
 
 #[test]
-fn backslash_z_atom() {
-    let g = parse("r <- \\z");
-    assert_eq!(g.rules["r"], Pattern::not_predicate(Pattern::any_char()));
-}
-
-#[test]
 fn backslash_d_in_class_unions_digits() {
     let g = parse("r <- [\\d_]");
     let mut s = CharSet::from_ranges(&[(b'0', b'9')]);
@@ -1084,16 +1080,6 @@ fn backslash_cap_r_in_class_rejected() {
 }
 
 #[test]
-fn backslash_z_in_class_rejected() {
-    let err = parse_src("r <- [\\z]").unwrap_err();
-    assert!(
-        err.message.contains("zero-width") && err.message.contains("\\z"),
-        "expected tailored zero-width error for \\z in class, got: {}",
-        err.message
-    );
-}
-
-#[test]
 fn backslash_d_range_start_rejected() {
     // Shortcuts are sets, not bounds — `[\d-z]` is meaningless.
     let err = parse_src("r <- [\\d-z]").unwrap_err();
@@ -1117,11 +1103,13 @@ fn unknown_backslash_atom_errors() {
 #[test]
 fn end_to_end_grammar_compile_run() {
     use syntax_highlighter::pegvm::VM;
-    let g = parse("number <- [0-9]+");
+    let g = parse("root <- number\nnumber <- [0-9]+");
     let prog = g.compile().unwrap();
     let r = VM::new(&prog.code, b"42abc").run();
-    assert!(r.complete);
-    assert_eq!(r.matched, 2);
+    // `root`'s implicit `!.` rejects the trailing 'a'; the parse no
+    // longer succeeds on the prefix.
+    assert!(!r.complete);
+    assert!(r.matched >= 2, "got matched={}", r.matched);
 }
 
 #[test]
@@ -1129,7 +1117,7 @@ fn end_to_end_recover_repeat_compile_run() {
     use syntax_highlighter::pegvm::VM;
     // Top-level `*^` resyncs past garbage one byte at a time; the parse
     // completes at EOF, with one "recovery"-tagged capture per skipped byte.
-    let g = parse("doc <- @kw{\"foo\"}*^");
+    let g = parse("root <- doc\ndoc <- @kw{\"foo\"}*^");
     let prog = g.compile().unwrap();
     let r = VM::new(&prog.code, b"fooXXfoo").run();
     assert!(r.complete);
@@ -1154,12 +1142,13 @@ fn end_to_end_inferred_catch_matches_explicit_behavior() {
     // bytecode isn't expected (label numbering shifts), but the
     // MatchResult on the same input must agree.
     use syntax_highlighter::pegvm::VM;
-    let inferred = parse("list <- aliased (',' aliased)*\naliased <- 'x' ^^bad")
+    let inferred = parse("root <- list\nlist <- aliased (',' aliased)*\naliased <- 'x' ^^bad")
         .compile()
         .unwrap();
-    let explicit = parse("list <- aliased (',' aliased)*\naliased <- 'x' ^^bad (',' / !.)")
-        .compile()
-        .unwrap();
+    let explicit =
+        parse("root <- list\nlist <- aliased (',' aliased)*\naliased <- 'x' ^^bad (',' / !.)")
+            .compile()
+            .unwrap();
     for input in [&b"x,x"[..], b"xy,x", b"x"].iter() {
         let r_inferred = VM::new(&inferred.code, input).run();
         let r_explicit = VM::new(&explicit.code, input).run();
@@ -1182,7 +1171,7 @@ fn end_to_end_inferred_catch_fires_on_partial_match() {
     // `list`. Input `xy,x` — the first `x` succeeds but the next
     // byte `y` is not in FOLLOW; the catch fires, recovery skips
     // `y` until it sees `,`, and parsing resumes with the second `x`.
-    let prog = parse("list <- aliased (',' aliased)*\naliased <- 'x' ^^bad")
+    let prog = parse("root <- list\nlist <- aliased (',' aliased)*\naliased <- 'x' ^^bad")
         .compile()
         .unwrap();
     let r = VM::new(&prog.code, b"xy,x").run();
@@ -1192,7 +1181,7 @@ fn end_to_end_inferred_catch_fires_on_partial_match() {
 #[test]
 fn end_to_end_inferred_catch_clean_input_no_recovery() {
     use syntax_highlighter::pegvm::VM;
-    let prog = parse("list <- aliased (',' aliased)*\naliased <- 'x' ^^bad")
+    let prog = parse("root <- list\nlist <- aliased (',' aliased)*\naliased <- 'x' ^^bad")
         .compile()
         .unwrap();
     let r = VM::new(&prog.code, b"x,x").run();
@@ -1208,8 +1197,8 @@ fn end_to_end_inferred_catch_clean_input_no_recovery() {
 #[test]
 fn end_to_end_lenient_marker_is_runtime_transparent() {
     use syntax_highlighter::pegvm::VM;
-    let plain = parse("r <- 'x'+").compile().unwrap();
-    let lenient = parse("~r <- 'x'+").compile().unwrap();
+    let plain = parse("root <- 'x'+").compile().unwrap();
+    let lenient = parse("~root <- 'x'+").compile().unwrap();
     assert_eq!(plain.code, lenient.code, "`~` is runtime-transparent");
     let r = VM::new(&lenient.code, b"xxx").run();
     assert!(r.complete);
@@ -1224,7 +1213,7 @@ fn end_to_end_recover_repeat_with_label_intern() {
     // identical to the unlabeled form (one recovery capture per
     // skipped byte, clean exit at EOF). pegdb recoveries explain
     // clusters by this label.
-    let g = parse("doc <- @kw{\"foo\"}*^:bad_doc");
+    let g = parse("root <- doc\ndoc <- @kw{\"foo\"}*^:bad_doc");
     let prog = g.compile().unwrap();
     assert_eq!(prog.label_kinds, vec!["bad_doc"]);
     let r = VM::new(&prog.code, b"fooXXfoo").run();
@@ -1241,7 +1230,7 @@ fn end_to_end_catch_compile_run() {
     // semicolon. Input is malformed (no FROM), so the inner fails and
     // the recovery branch fires.
     let g = parse(
-        "stmt <- (@kw{'SELECT'} ' ' @kw{'FROM'} ' ' 'x' ';') ^bad_select @err{(!';' .)*} ';'",
+        "root <- stmt\nstmt <- (@kw{'SELECT'} ' ' @kw{'FROM'} ' ' 'x' ';') ^bad_select @err{(!';' .)*} ';'",
     );
     let prog = g.compile().unwrap();
     let r = VM::new(&prog.code, b"SELECT bogus;").run();
