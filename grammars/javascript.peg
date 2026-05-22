@@ -1,5 +1,4 @@
 # JavaScript (pragmatic subset) grammar with highlight annotations.
-# The first rule is the start rule.
 #
 # Scope: highlighting, not execution. Parses ES2020-ish JavaScript at
 # the token level. Precedence is not enforced and semantic constraints
@@ -30,9 +29,9 @@
 # function/control-flow bodies resync at the closing `}` instead of
 # failing the enclosing statement.
 
-*trivia        <- (comment / \s)*
+trivia         <- (comment / \s)*
 
-root           <- trivia (stmt trivia)*^
+root           <- (stmt)*^
 
 # --- Statements -------------------------------------------------------
 #
@@ -44,7 +43,7 @@ stmt           <- import_decl
                 / export_decl
                 / fn_decl
                 / class_decl
-                / var_decl trivia opt_semi
+                / var_decl opt_semi
                 / if_stmt
                 / for_stmt
                 / while_stmt
@@ -59,139 +58,139 @@ stmt           <- import_decl
                 / labeled_stmt
                 / block_stmt
                 / empty_stmt
-                / expr trivia opt_semi
+                / expr opt_semi
 
 # Definition-level `~` on `~opt_semi` covers every ASI call site; the
 # missing-else / missing-catch / missing-finally leniency on the other
 # `~`-marked stmts below is absorbed by stmt-level `*^` and
 # `block`'s `^block_close` recovery.
-~opt_semi      <- (@punctuation{';'} trivia)?
-empty_stmt     <- @punctuation{';'} trivia
+~opt_semi      <- @punctuation{';'}?
+empty_stmt     <- @punctuation{';'}
 
 # --- Imports / exports ------------------------------------------------
 
-import_decl    <- @keyword{'import'} trivia import_body trivia opt_semi
-import_body    <- import_clause trivia @keyword{'from'} trivia string_lit
+import_decl    <- @keyword{'import'} import_body opt_semi
+import_body    <- import_clause @keyword{'from'} string_lit
                 / string_lit
-import_clause  <- import_default trivia @punctuation{','} trivia import_ns_or_named
+import_clause  <- import_default @punctuation{','} import_ns_or_named
                 / import_default
                 / import_ns_or_named
 import_default <- @variable{ident}
 import_ns_or_named <- import_namespace / import_named
-import_namespace <- @operator{'*'} trivia @keyword{'as'} trivia @variable{ident}
-import_named   <- @punctuation{'{'} trivia import_specifier_list? trivia @punctuation{'}'}
-import_specifier_list <- import_specifier (trivia @punctuation{','} trivia import_specifier)* (trivia @punctuation{','})?
-import_specifier <- @variable{ident_name} trivia @keyword{'as'} trivia @variable{ident}
+import_namespace <- @operator{'*'} @keyword{'as'} @variable{ident}
+import_named   <- @punctuation{'{'} import_specifier_list? @punctuation{'}'}
+import_specifier_list <- import_specifier (@punctuation{','} import_specifier)* (@punctuation{','})?
+import_specifier <- @variable{ident_name} @keyword{'as'} @variable{ident}
                   / @variable{ident}
 
-export_decl    <- @keyword{'export'} trivia @keyword{'default'} trivia export_default_body
-                / @keyword{'export'} trivia @operator{'*'} trivia (@keyword{'as'} trivia @variable{ident_name} trivia)? @keyword{'from'} trivia string_lit trivia opt_semi
-                / @keyword{'export'} trivia export_named
-                / @keyword{'export'} trivia fn_decl
-                / @keyword{'export'} trivia class_decl
-                / @keyword{'export'} trivia var_decl trivia opt_semi
+export_decl    <- @keyword{'export'} @keyword{'default'} export_default_body
+                / @keyword{'export'} @operator{'*'} (@keyword{'as'} @variable{ident_name})? @keyword{'from'} string_lit opt_semi
+                / @keyword{'export'} export_named
+                / @keyword{'export'} fn_decl
+                / @keyword{'export'} class_decl
+                / @keyword{'export'} var_decl opt_semi
 export_default_body <- fn_decl
                      / class_decl
-                     / expr trivia opt_semi
+                     / expr opt_semi
 # Trailing `opt_semi` on `~export_named` is absorbed by stmt-level recovery.
-~export_named  <- @punctuation{'{'} trivia export_specifier_list? trivia @punctuation{'}'} (trivia @keyword{'from'} trivia string_lit)? trivia opt_semi
-export_specifier_list <- export_specifier (trivia @punctuation{','} trivia export_specifier)* (trivia @punctuation{','})?
-export_specifier <- @variable{ident_name} trivia @keyword{'as'} trivia @variable{ident_name}
+~export_named  <- @punctuation{'{'} export_specifier_list? @punctuation{'}'} (@keyword{'from'} string_lit)? opt_semi
+export_specifier_list <- export_specifier (@punctuation{','} export_specifier)* (@punctuation{','})?
+export_specifier <- @variable{ident_name} @keyword{'as'} @variable{ident_name}
                   / @variable{ident}
 
 # --- Function / class declarations ------------------------------------
 
-fn_decl        <- @keyword{'async'} trivia fn_decl_core
+fn_decl        <- @keyword{'async'} fn_decl_core
                 / fn_decl_core
-fn_decl_core   <- @keyword{'function'} (trivia @operator{'*'})? trivia @function{ident} trivia fn_params trivia block
+fn_decl_core   <- @keyword{'function'} @operator{'*'}? @function{ident} fn_params block
 
-class_decl     <- @keyword{'class'} trivia @type{ident} trivia class_heritage? trivia class_body
-class_heritage <- @keyword{'extends'} trivia expr_lhs
-class_body     <- @punctuation{'{'} trivia class_member* trivia @punctuation{'}'}
-class_member   <- @punctuation{';'} trivia
+class_decl     <- @keyword{'class'} @type{ident} class_heritage? class_body
+class_heritage <- @keyword{'extends'} expr_lhs
+class_body     <- @punctuation{'{'} class_member* @punctuation{'}'}
+class_member   <- @punctuation{';'}
                 / class_method_or_field
-class_method_or_field <- (@keyword{'static'} trivia)? (class_method / class_field)
-class_method   <- (@keyword{'async'} trivia)? (@operator{'*'} trivia)? method_head trivia fn_params trivia block trivia
-                / (@keyword{'get'} / @keyword{'set'}) trivia method_head trivia fn_params trivia block trivia
+class_method_or_field <- @keyword{'static'}? (class_method / class_field)
+class_method   <- @keyword{'async'}? @operator{'*'}? method_head fn_params block
+                / (@keyword{'get'} / @keyword{'set'}) method_head fn_params block
 method_head    <- computed_prop
                 / @function{ident_name}
                 / string_lit
                 / number_lit
-class_field    <- (computed_prop / @property{ident_name}) trivia (@operator{'='} trivia expr_no_comma)? trivia opt_semi
+class_field    <- (computed_prop / @property{ident_name}) (@operator{'='} expr_no_comma)? opt_semi
 
 # --- Variable declarations -------------------------------------------
 
-var_decl       <- (@keyword{'var'} / @keyword{'let'} / @keyword{'const'}) trivia var_declarator_list
-var_declarator_list <- var_declarator (trivia @punctuation{','} trivia var_declarator)*
+var_decl       <- (@keyword{'var'} / @keyword{'let'} / @keyword{'const'}) var_declarator_list
+var_declarator_list <- var_declarator (@punctuation{','} var_declarator)*
 # Trailing `(= expr)?` absorbed by enclosing stmt recovery.
-~var_declarator <- pattern (trivia @operator{'='} trivia expr_no_comma)?
+~var_declarator <- pattern (@operator{'='} expr_no_comma)?
 
 # --- Control flow -----------------------------------------------------
 
 # Trailing `(else stmt)?` leniency absorbed by stmt-level recovery.
-~if_stmt       <- @keyword{'if'} trivia @punctuation{'('} trivia expr trivia @punctuation{')'} trivia stmt
-                  (trivia @keyword{'else'} trivia stmt)?
-for_stmt       <- @keyword{'for'} (trivia @keyword{'await'})? trivia @punctuation{'('} trivia for_head trivia @punctuation{')'} trivia stmt
+~if_stmt       <- @keyword{'if'} @punctuation{'('} expr @punctuation{')'} stmt
+                  (@keyword{'else'} stmt)?
+for_stmt       <- @keyword{'for'} @keyword{'await'}? @punctuation{'('} for_head @punctuation{')'} stmt
 for_head       <- for_c_style
                 / for_in_of
-for_c_style    <- for_init? trivia @punctuation{';'} trivia expr? trivia @punctuation{';'} trivia expr?
-for_in_of      <- for_binding trivia (@keyword{'in'} / @keyword{'of'}) trivia expr
+for_c_style    <- for_init? @punctuation{';'} expr? @punctuation{';'} expr?
+for_in_of      <- for_binding (@keyword{'in'} / @keyword{'of'}) expr
 for_init       <- var_decl
                 / expr
-for_binding    <- (@keyword{'var'} / @keyword{'let'} / @keyword{'const'}) trivia pattern
+for_binding    <- (@keyword{'var'} / @keyword{'let'} / @keyword{'const'}) pattern
                 / pattern
 
-while_stmt     <- @keyword{'while'} trivia @punctuation{'('} trivia expr trivia @punctuation{')'} trivia stmt
-do_while_stmt  <- @keyword{'do'} trivia stmt trivia @keyword{'while'} trivia @punctuation{'('} trivia expr trivia @punctuation{')'} trivia opt_semi
-switch_stmt    <- @keyword{'switch'} trivia @punctuation{'('} trivia expr trivia @punctuation{')'} trivia
-                  @punctuation{'{'} trivia switch_case* trivia @punctuation{'}'}
-switch_case    <- @keyword{'case'} trivia expr trivia @punctuation{':'} trivia (!switch_case_term stmt trivia)*
-                / @keyword{'default'} trivia @punctuation{':'} trivia (!switch_case_term stmt trivia)*
+while_stmt     <- @keyword{'while'} @punctuation{'('} expr @punctuation{')'} stmt
+do_while_stmt  <- @keyword{'do'} stmt @keyword{'while'} @punctuation{'('} expr @punctuation{')'} opt_semi
+switch_stmt    <- @keyword{'switch'} @punctuation{'('} expr @punctuation{')'}
+                  @punctuation{'{'} switch_case* @punctuation{'}'}
+switch_case    <- @keyword{'case'} expr @punctuation{':'} (!switch_case_term stmt)*
+                / @keyword{'default'} @punctuation{':'} (!switch_case_term stmt)*
 switch_case_term <- @keyword{'case'} / @keyword{'default'} / @punctuation{'}'}
 # Trailing `(catch)? (finally)?` absorbed by stmt-level recovery.
-~try_stmt      <- @keyword{'try'} trivia block (trivia catch_clause)? (trivia finally_clause)?
-catch_clause   <- @keyword{'catch'} (trivia @punctuation{'('} trivia pattern trivia @punctuation{')'})? trivia block
-finally_clause <- @keyword{'finally'} trivia block
-throw_stmt     <- @keyword{'throw'} trivia expr trivia opt_semi
-# Trailing `(trivia expr)?` leniency on `~return_stmt` absorbed by stmt recovery.
-~return_stmt   <- @keyword{'return'} (trivia expr)? trivia opt_semi
-~break_stmt    <- @keyword{'break'} (trivia @variable{ident})? trivia opt_semi
-~continue_stmt <- @keyword{'continue'} (trivia @variable{ident})? trivia opt_semi
-debugger_stmt  <- @keyword{'debugger'} trivia opt_semi
-labeled_stmt   <- @variable{ident} trivia @punctuation{':'} trivia stmt
+~try_stmt      <- @keyword{'try'} block catch_clause? finally_clause?
+catch_clause   <- @keyword{'catch'} (@punctuation{'('} pattern @punctuation{')'})? block
+finally_clause <- @keyword{'finally'} block
+throw_stmt     <- @keyword{'throw'} expr opt_semi
+# Trailing `expr?` leniency on `~return_stmt` absorbed by stmt recovery.
+~return_stmt   <- @keyword{'return'} expr? opt_semi
+~break_stmt    <- @keyword{'break'} (@variable{ident})? opt_semi
+~continue_stmt <- @keyword{'continue'} (@variable{ident})? opt_semi
+debugger_stmt  <- @keyword{'debugger'} opt_semi
+labeled_stmt   <- @variable{ident} @punctuation{':'} stmt
 block_stmt     <- block
-block          <- @punctuation{'{'} trivia ((stmt trivia)* @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
+block          <- @punctuation{'{'} (stmt* @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
 
 # --- Function params and patterns -------------------------------------
 
-fn_params      <- @punctuation{'('} trivia fn_param_list? trivia @punctuation{')'}
-fn_param_list  <- fn_param (trivia @punctuation{','} trivia fn_param)* (trivia @punctuation{','})?
+fn_params      <- @punctuation{'('} fn_param_list? @punctuation{')'}
+fn_param_list  <- fn_param (@punctuation{','} fn_param)* (@punctuation{','})?
 fn_param       <- @operator{'...'} pattern
-                / pattern (trivia @operator{'='} trivia expr_no_comma)?
+                / pattern (@operator{'='} expr_no_comma)?
 
 # --- Destructuring patterns ------------------------------------------
 
 pattern        <- array_pattern / object_pattern / @variable{ident}
-array_pattern  <- @punctuation{'['} trivia array_pattern_list? trivia @punctuation{']'}
-array_pattern_list <- array_pattern_el (trivia @punctuation{','} trivia array_pattern_el)* (trivia @punctuation{','})?
+array_pattern  <- @punctuation{'['} array_pattern_list? @punctuation{']'}
+array_pattern_list <- array_pattern_el (@punctuation{','} array_pattern_el)* (@punctuation{','})?
 array_pattern_el <- @operator{'...'} pattern
-                  / pattern (trivia @operator{'='} trivia expr_no_comma)?
+                  / pattern (@operator{'='} expr_no_comma)?
                   / ''
-object_pattern <- @punctuation{'{'} trivia object_pattern_list? trivia @punctuation{'}'}
-object_pattern_list <- object_pattern_prop (trivia @punctuation{','} trivia object_pattern_prop)* (trivia @punctuation{','})?
+object_pattern <- @punctuation{'{'} object_pattern_list? @punctuation{'}'}
+object_pattern_list <- object_pattern_prop (@punctuation{','} object_pattern_prop)* (@punctuation{','})?
 object_pattern_prop <- @operator{'...'} pattern
-                     / (computed_prop / @property{ident_name}) trivia @punctuation{':'} trivia pattern (trivia @operator{'='} trivia expr_no_comma)?
-                     / @property{ident} (trivia @operator{'='} trivia expr_no_comma)?
+                     / (computed_prop / @property{ident_name}) @punctuation{':'} pattern (@operator{'='} expr_no_comma)?
+                     / @property{ident} (@operator{'='} expr_no_comma)?
 
-computed_prop  <- @punctuation{'['} trivia expr trivia @punctuation{']'}
+computed_prop  <- @punctuation{'['} expr @punctuation{']'}
 
 # --- Expressions ------------------------------------------------------
 
-expr           <- expr_no_comma (trivia @punctuation{','} trivia expr_no_comma)*
+expr           <- expr_no_comma (@punctuation{','} expr_no_comma)*
 expr_no_comma  <- expr_assign
 expr_assign    <- expr_arrow
                 / expr_yield
-                / expr_conditional (trivia assign_op trivia expr_assign)?
+                / expr_conditional (assign_op expr_assign)?
 
 assign_op      <- @operator{'**='}
                 / @operator{'<<='} / @operator{'>>>='} / @operator{'>>='}
@@ -202,17 +201,17 @@ assign_op      <- @operator{'**='}
 
 # Arrow functions tried first. `async x => ...`, `x => ...`,
 # `(a, b) => ...`, `() => ...`.
-expr_arrow     <- arrow_head trivia @operator{'=>'} trivia arrow_body
-arrow_head     <- @keyword{'async'} trivia arrow_params
+expr_arrow     <- arrow_head @operator{'=>'} arrow_body
+arrow_head     <- @keyword{'async'} arrow_params
                 / arrow_params
 arrow_params   <- @variable{ident}
                 / arrow_paren_params
-arrow_paren_params <- @punctuation{'('} trivia fn_param_list? trivia @punctuation{')'}
+arrow_paren_params <- @punctuation{'('} fn_param_list? @punctuation{')'}
 arrow_body     <- block
                 / expr_no_comma
 
-# Trailing `(trivia *)? (trivia expr_assign)?` absorbed by stmt-level recovery.
-~expr_yield    <- @keyword{'yield'} (trivia @operator{'*'})? (trivia expr_assign)?
+# Trailing `(*)? (expr_assign)?` absorbed by stmt-level recovery.
+~expr_yield    <- @keyword{'yield'} @operator{'*'}? expr_assign?
 
 # Ternary. Below the ternary, precedence is encoded by direct left
 # recursion — `level_n <- level_n OP level_{n+1} / level_{n+1}` per
@@ -221,24 +220,24 @@ arrow_body     <- block
 # alternation; cross-level ambiguities (`<` vs `<<`, `&` vs `&&`,
 # operator vs compound-assign, …) need explicit `!`-lookaheads.
 # Trailing ternary leniency absorbed by stmt-level recovery.
-~expr_conditional <- expr_nullish (trivia @operator{'?'} trivia expr_no_comma trivia @punctuation{':'} trivia expr_no_comma)?
+~expr_conditional <- expr_nullish (@operator{'?'} expr_no_comma @punctuation{':'} expr_no_comma)?
 
-expr_nullish   <- expr_nullish trivia @operator{'??'} !'=' trivia expr_lor / expr_lor
-expr_lor       <- expr_lor trivia @operator{'||'} !'=' trivia expr_land / expr_land
-expr_land      <- expr_land trivia @operator{'&&'} !'=' trivia expr_bor / expr_bor
-expr_bor       <- expr_bor trivia @operator{'|'} !'|' !'=' trivia expr_bxor / expr_bxor
-expr_bxor      <- expr_bxor trivia @operator{'^'} !'=' trivia expr_band / expr_band
-expr_band      <- expr_band trivia @operator{'&'} !'&' !'=' trivia expr_eq / expr_eq
-expr_eq        <- expr_eq trivia (@operator{'==='} / @operator{'!=='} / @operator{'=='} / @operator{'!='}) trivia expr_rel / expr_rel
-expr_rel       <- expr_rel trivia (@operator{'<='} / @operator{'>='} / @operator{'<'} !'<' / @operator{'>'} !'>' / @keyword{'instanceof'} / @keyword{'in'}) trivia expr_shift / expr_shift
-expr_shift     <- expr_shift trivia (@operator{'>>>'} !'=' / @operator{'<<'} !'=' / @operator{'>>'} !'=') trivia expr_add / expr_add
-expr_add       <- expr_add trivia (@operator{'+'} !'=' / @operator{'-'} !'=') trivia expr_mul / expr_mul
-expr_mul       <- expr_mul trivia (@operator{'*'} !'=' !'*' / @operator{'/'} !'=' / @operator{'%'} !'=') trivia expr_pow / expr_pow
+expr_nullish   <- expr_nullish @operator{'??'} !'=' expr_lor / expr_lor
+expr_lor       <- expr_lor @operator{'||'} !'=' expr_land / expr_land
+expr_land      <- expr_land @operator{'&&'} !'=' expr_bor / expr_bor
+expr_bor       <- expr_bor @operator{'|'} !'|' !'=' expr_bxor / expr_bxor
+expr_bxor      <- expr_bxor @operator{'^'} !'=' expr_band / expr_band
+expr_band      <- expr_band @operator{'&'} !'&' !'=' expr_eq / expr_eq
+expr_eq        <- expr_eq (@operator{'==='} / @operator{'!=='} / @operator{'=='} / @operator{'!='}) expr_rel / expr_rel
+expr_rel       <- expr_rel (@operator{'<='} / @operator{'>='} / @operator{'<'} !'<' / @operator{'>'} !'>' / @keyword{'instanceof'} / @keyword{'in'}) expr_shift / expr_shift
+expr_shift     <- expr_shift (@operator{'>>>'} !'=' / @operator{'<<'} !'=' / @operator{'>>'} !'=') expr_add / expr_add
+expr_add       <- expr_add (@operator{'+'} !'=' / @operator{'-'} !'=') expr_mul / expr_mul
+expr_mul       <- expr_mul (@operator{'*'} !'=' !'*' / @operator{'/'} !'=' / @operator{'%'} !'=') expr_pow / expr_pow
 
 # Right-associative: stays right-recursive, not LR.
-expr_pow       <- expr_unary trivia @operator{'**'} !'=' trivia expr_pow / expr_unary
+expr_pow       <- expr_unary @operator{'**'} !'=' expr_pow / expr_unary
 
-expr_unary     <- (unary_op trivia)* expr_postfix
+expr_unary     <- unary_op* expr_postfix
 unary_op       <- @keyword{'typeof'}
                 / @keyword{'void'}
                 / @keyword{'delete'}
@@ -248,30 +247,30 @@ unary_op       <- @keyword{'typeof'}
                 / @operator{'!'} / @operator{'~'}
 
 # Postfix: calls, member, optional chain, index, `++`/`--`.
-expr_postfix   <- expr_lhs (trivia postfix_op)*
+expr_postfix   <- expr_lhs postfix_op*
 postfix_op     <- @operator{'++'}
                 / @operator{'--'}
-                / @operator{'?.'} trivia postfix_after_optional
+                / @operator{'?.'} postfix_after_optional
                 / @punctuation{'.'} member_target
-                / @punctuation{'['} trivia expr trivia @punctuation{']'}
+                / @punctuation{'['} expr @punctuation{']'}
                 / call_args
                 / template_lit
 postfix_after_optional <- call_args
-                        / @punctuation{'['} trivia expr trivia @punctuation{']'}
+                        / @punctuation{'['} expr @punctuation{']'}
                         / member_target
-member_target  <- @function{ident_name} &(trivia @punctuation{'('})
+member_target  <- @function{ident_name} &(@punctuation{'('})
                 / @property{ident_name}
-call_args      <- @punctuation{'('} trivia arg_list? trivia @punctuation{')'}
-arg_list       <- arg (trivia @punctuation{','} trivia arg)* (trivia @punctuation{','})?
+call_args      <- @punctuation{'('} arg_list? @punctuation{')'}
+arg_list       <- arg (@punctuation{','} arg)* (@punctuation{','})?
 arg            <- @operator{'...'} expr_no_comma
                 / expr_no_comma
 
 expr_lhs       <- expr_new / expr_primary
-expr_new       <- @keyword{'new'} trivia expr_new_target
+expr_new       <- @keyword{'new'} expr_new_target
 expr_new_target <- @type{upper_ident} new_tail?
                  / @variable{lower_ident} new_tail?
                  / expr_primary new_tail?
-new_tail       <- (trivia postfix_op)+
+new_tail       <- postfix_op+
 
 expr_primary   <- literal
                 / expr_this
@@ -285,26 +284,26 @@ expr_primary   <- literal
                 / @type{upper_ident}
                 / @variable{lower_ident}
 
-call_ident     <- @function{ident} &(trivia @punctuation{'('})
+call_ident     <- @function{ident} &(@punctuation{'('})
 
 expr_this      <- @keyword{'this'}
 expr_super     <- @keyword{'super'}
-expr_fn        <- (@keyword{'async'} trivia)? @keyword{'function'} (trivia @operator{'*'})? trivia (@function{ident} trivia)? fn_params trivia block
-expr_class     <- @keyword{'class'} (trivia @type{ident})? trivia class_heritage? trivia class_body
-expr_array     <- @punctuation{'['} trivia array_elem_list? trivia @punctuation{']'}
-array_elem_list <- array_elem (trivia @punctuation{','} trivia array_elem)* (trivia @punctuation{','})?
+expr_fn        <- @keyword{'async'}? @keyword{'function'} @operator{'*'}? @function{ident}? fn_params block
+expr_class     <- @keyword{'class'} @type{ident}? class_heritage? class_body
+expr_array     <- @punctuation{'['} array_elem_list? @punctuation{']'}
+array_elem_list <- array_elem (@punctuation{','} array_elem)* (@punctuation{','})?
 array_elem     <- @operator{'...'} expr_no_comma
                 / expr_no_comma
                 / ''
-expr_object    <- @punctuation{'{'} trivia object_props? trivia @punctuation{'}'}
-object_props   <- object_prop (trivia @punctuation{','} trivia object_prop)* (trivia @punctuation{','})?
+expr_object    <- @punctuation{'{'} object_props? @punctuation{'}'}
+object_props   <- object_prop (@punctuation{','} object_prop)* (@punctuation{','})?
 object_prop    <- @operator{'...'} expr_no_comma
                 / object_method
-                / (computed_prop / string_lit / number_lit / @property{ident_name}) trivia @punctuation{':'} trivia expr_no_comma
+                / (computed_prop / string_lit / number_lit / @property{ident_name}) @punctuation{':'} expr_no_comma
                 / @property{ident}
-object_method  <- (@keyword{'async'} trivia)? (@operator{'*'} trivia)? method_head trivia fn_params trivia block
-                / (@keyword{'get'} / @keyword{'set'}) trivia method_head trivia fn_params trivia block
-expr_paren     <- @punctuation{'('} trivia expr trivia @punctuation{')'}
+object_method  <- @keyword{'async'}? @operator{'*'}? method_head fn_params block
+                / (@keyword{'get'} / @keyword{'set'}) method_head fn_params block
+expr_paren     <- @punctuation{'('} expr @punctuation{')'}
 
 # --- Literals ---------------------------------------------------------
 
@@ -316,42 +315,42 @@ literal        <- template_lit
                 / @constant{'undefined' !ident_body}
 
 string_lit     <- @string{sq_string / dq_string}
-sq_string      <- "'" ('\\' . / !"'" !'\n' .)* "'"
-dq_string      <- '"' ('\\' . / !'"' !'\n' .)* '"'
+*sq_string     <- "'" ('\\' . / !"'" !'\n' .)* "'"
+*dq_string     <- '"' ('\\' . / !'"' !'\n' .)* '"'
 
 # Template literals with ${...} interpolation. Chunks outside the
 # interpolations get @string; the interpolation braces stay
 # @punctuation and the inner expression is parsed as normal.
-template_lit   <- @string{'`'} template_body @string{'`'}
-template_body  <- (template_chunk / template_interp)*
-template_chunk <- @string{('\\' . / !'`' !'${' .)+}
-template_interp <- @punctuation{'${'} trivia expr trivia @punctuation{'}'}
+*template_lit  <- @string{'`'} template_body @string{'`'}
+*template_body <- (template_chunk / template_interp)*
+*template_chunk <- @string{('\\' . / !'`' !'${' .)+}
+template_interp <- @punctuation{'${'} expr @punctuation{'}'}
 
 number_lit     <- @number{num_body}
-num_body       <- '0x' hex_digits 'n'?
+*num_body      <- '0x' hex_digits 'n'?
                 / '0o' oct_digits 'n'?
                 / '0b' bin_digits 'n'?
                 / decimal_num 'n'?
-decimal_num    <- digit_seq '.' digit_seq? exp_part?
+*decimal_num   <- digit_seq '.' digit_seq? exp_part?
                 / '.' digit_seq exp_part?
                 / digit_seq exp_part?
-digit_seq      <- \d ([\d_])*
-hex_digits     <- [\da-fA-F] [\da-fA-F_]*
-oct_digits     <- [0-7] [0-7_]*
-bin_digits     <- [01] [01_]*
-exp_part       <- [eE] [+\-]? \d+
+*digit_seq     <- \d ([\d_])*
+*hex_digits    <- [\da-fA-F] [\da-fA-F_]*
+*oct_digits    <- [0-7] [0-7_]*
+*bin_digits    <- [01] [01_]*
+*exp_part      <- [eE] [+\-]? \d+
 
 # --- Identifiers / reserved words ------------------------------------
 
-ident          <- !reserved [A-Za-z_$] ident_body*
+*ident         <- !reserved [A-Za-z_$] ident_body*
 # `ident_name` mirrors ECMA's `IdentifierName`: like `ident`, but the
 # `!reserved` guard is dropped so reserved words are accepted. Use at
 # positions where ES allows IdentifierName but not BindingIdentifier
 # (member access after `.` / `?.`, property keys, imported/exported
 # names that aren't local bindings).
-ident_name     <- [A-Za-z_$] ident_body*
-upper_ident    <- !reserved [A-Z] ident_body*
-lower_ident    <- !reserved [a-z_$] ident_body*
+*ident_name    <- [A-Za-z_$] ident_body*
+*upper_ident   <- !reserved [A-Z] ident_body*
+*lower_ident   <- !reserved [a-z_$] ident_body*
 ident_body     <- [A-Za-z\d_$]
 
 # Reserved words that must not appear as identifiers. The grammar uses
@@ -360,7 +359,7 @@ ident_body     <- [A-Za-z\d_$]
 # `of`, `from`, `as`, `get`, `set`, `static`, `yield` outside
 # generators) are intentionally omitted so they can still be used as
 # identifiers where the language allows.
-reserved       <- reserved_word !ident_body
+*reserved      <- reserved_word !ident_body
 reserved_word  <- 'break' / 'case' / 'catch' / 'class' / 'const' / 'continue'
                 / 'debugger' / 'default' / 'delete' / 'do' / 'else'
                 / 'export' / 'extends' / 'false' / 'finally' / 'for'
@@ -371,4 +370,4 @@ reserved_word  <- 'break' / 'case' / 'catch' / 'class' / 'const' / 'continue'
 
 # --- Whitespace / comments --------------------------------------------
 
-comment        <- @comment{'//' .. '\n' / '/*' ..= '*/'}
+*comment       <- @comment{'//' .. '\n' / '/*' ..= '*/'}
