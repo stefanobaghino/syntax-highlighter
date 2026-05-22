@@ -31,9 +31,9 @@ pub mod compiler;
 pub mod parser;
 pub mod pattern;
 
-pub use analysis::{LintFinding, LintKind};
+pub use analysis::{tally_non_terminal_refs, LintFinding, LintKind};
 pub use compiler::{compile_pattern, CompileError};
-pub use parser::{parse, Grammar, ParseError};
+pub use parser::{parse, Grammar, ParseError, RuleHeader};
 pub use pattern::{Pattern, Span};
 
 use crate::pegvm::Program;

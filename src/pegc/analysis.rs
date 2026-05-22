@@ -1391,6 +1391,43 @@ pub(crate) fn compute_trivia_rules(rules: &HashMap<String, Pattern>) -> HashMap<
     trivia
 }
 
+/// Walk `pat` and bump `out[name]` for every `Pattern::NonTerminal { name }`
+/// occurrence. Unlike [`collect_non_terminal_refs`], duplicates count —
+/// `pegc stats` uses this to surface per-rule reference totals across all
+/// rule bodies.
+pub fn tally_non_terminal_refs(pat: &Pattern, out: &mut HashMap<String, usize>) {
+    match pat {
+        Pattern::Literal { .. } | Pattern::CharClass { .. } | Pattern::AnyChar { .. } => {}
+        Pattern::Sequence { items, .. } => {
+            for it in items {
+                tally_non_terminal_refs(it, out);
+            }
+        }
+        Pattern::OrderedChoice { alts, .. } => {
+            for it in alts {
+                tally_non_terminal_refs(it, out);
+            }
+        }
+        Pattern::Repeat { inner, .. }
+        | Pattern::RepeatOne { inner, .. }
+        | Pattern::Optional { inner, .. }
+        | Pattern::NotPredicate { inner, .. }
+        | Pattern::AndPredicate { inner, .. }
+        | Pattern::Capture { inner, .. }
+        | Pattern::Lenient { inner, .. } => tally_non_terminal_refs(inner, out),
+        Pattern::Catch {
+            inner, recovery, ..
+        } => {
+            tally_non_terminal_refs(inner, out);
+            tally_non_terminal_refs(recovery, out);
+        }
+        Pattern::InferBoundaryCatch { inner, .. } => tally_non_terminal_refs(inner, out),
+        Pattern::NonTerminal { name, .. } => {
+            *out.entry(name.clone()).or_insert(0) += 1;
+        }
+    }
+}
+
 fn collect_non_terminal_refs(pat: &Pattern, out: &mut HashSet<String>) {
     match pat {
         Pattern::Literal { .. } | Pattern::CharClass { .. } | Pattern::AnyChar { .. } => {}

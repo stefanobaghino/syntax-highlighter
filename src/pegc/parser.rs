@@ -15,16 +15,36 @@ const MAX_REPEAT_COUNT: usize = 1024;
 pub struct Grammar {
     pub rules: HashMap<String, Pattern>,
     pub start: String,
+    /// Per-rule source ranges, in declaration order. Populated by
+    /// [`parse`]; empty for grammars built via [`Grammar::new`] (which
+    /// has no source text). `pegc stats` uses these to slice the
+    /// grammar source for the `body_chars` field.
+    pub rule_headers: Vec<RuleHeader>,
+}
+
+/// Byte ranges of one rule's pieces in the grammar source. All offsets
+/// are into the same source string passed to [`parse`].
+#[derive(Debug, Clone)]
+pub struct RuleHeader {
+    pub name: String,
+    /// Byte offset of the rule's identifier (after any leading `~`).
+    pub name_byte: usize,
+    /// Byte offset of the first non-whitespace byte after `<-`.
+    pub body_byte_start: usize,
+    /// Byte offset just past the last byte consumed for the body.
+    pub body_byte_end: usize,
 }
 
 impl Grammar {
     /// Construct a grammar from a hand-built rule map. Useful for
     /// tests that build `Pattern` trees directly without going
-    /// through [`parse`].
+    /// through [`parse`]. `rule_headers` is left empty — hand-built
+    /// grammars have no source text to range over.
     pub fn new(rules: HashMap<String, Pattern>, start: impl Into<String>) -> Self {
         Grammar {
             rules,
             start: start.into(),
+            rule_headers: Vec::new(),
         }
     }
 
@@ -46,6 +66,7 @@ impl Grammar {
         let mut resolved = Grammar {
             rules: self.rules.clone(),
             start: self.start.clone(),
+            rule_headers: self.rule_headers.clone(),
         };
         resolve_inferred_boundaries(&mut resolved)?;
         let findings = lint_partial_match(&resolved);
@@ -132,7 +153,7 @@ impl<'a> Parser<'a> {
     fn parse_grammar(&mut self) -> Result<Grammar, ParseError> {
         self.skip_ws();
         let mut rules = HashMap::new();
-        let mut order = Vec::new();
+        let mut rule_headers: Vec<RuleHeader> = Vec::new();
         while self.pos < self.src.len() {
             // Definition-level lenient marker: `~name <- body` declares
             // that every call to `name` is intentionally lenient and
@@ -145,11 +166,14 @@ impl<'a> Parser<'a> {
                 lenient_span = Some(self.span());
                 self.pos += 1;
             }
+            let name_byte = self.pos;
             let name = self.parse_ident()?;
             self.skip_ws();
             self.expect_str("<-")?;
             self.skip_ws();
+            let body_byte_start = self.pos;
             let mut pat = self.parse_choice()?;
+            let body_byte_end = self.pos;
             if let Some(span) = lenient_span {
                 pat = Pattern::Lenient {
                     inner: Box::new(pat),
@@ -159,14 +183,23 @@ impl<'a> Parser<'a> {
             if rules.insert(name.clone(), pat).is_some() {
                 return Err(self.err(format!("rule '{}' defined twice", name)));
             }
-            order.push(name);
+            rule_headers.push(RuleHeader {
+                name,
+                name_byte,
+                body_byte_start,
+                body_byte_end,
+            });
             self.skip_ws();
         }
-        if order.is_empty() {
+        if rule_headers.is_empty() {
             return Err(self.err("grammar has no rules".into()));
         }
-        let start = order[0].clone();
-        Ok(Grammar { rules, start })
+        let start = rule_headers[0].name.clone();
+        Ok(Grammar {
+            rules,
+            start,
+            rule_headers,
+        })
     }
 
     fn parse_choice(&mut self) -> Result<Pattern, ParseError> {
