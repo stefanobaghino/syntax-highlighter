@@ -222,6 +222,7 @@ fn run_explain_recoveries(args: &[String]) -> ExitCode {
     p.set_input(input.into_bytes());
     let kinds = p.capture_kinds();
     let rule_names = p.rule_names();
+    let rule_is_trivia = p.rule_is_trivia();
     let complete = p.is_complete();
     let (matched, captures) = p.captures();
     let diagnostics = p.recovery_diagnostics();
@@ -234,9 +235,12 @@ fn run_explain_recoveries(args: &[String]) -> ExitCode {
     // Cluster by `(rule_stack, label_name)`. Every recovery
     // firing carries a label — labeled catches (`^label`) use the
     // author's identifier; `*^` uses the intern of its
-    // `recovery_kind` string. v1 uses the entire stack as the key;
-    // suffix-clustering is a follow-up. BTreeMap preserves a stable
-    // key order for deterministic output.
+    // `recovery_kind` string. Trailing rule_stack frames marked
+    // trivia (reached from a `trivia <- …` reserved-name root) are
+    // popped before the key is built, so two diagnostics that bottom
+    // out in different trivia merge into one cluster on the deepest
+    // semantic rule. BTreeMap preserves a stable key order for
+    // deterministic output.
     type ClusterKey = (Vec<String>, String);
     let mut clusters: std::collections::BTreeMap<ClusterKey, usize> =
         std::collections::BTreeMap::new();
@@ -244,8 +248,16 @@ fn run_explain_recoveries(args: &[String]) -> ExitCode {
         let Some(reach) = slot else {
             continue;
         };
-        let stack: Vec<String> = reach
-            .rule_stack
+        let mut trimmed_stack = reach.rule_stack.clone();
+        while let Some(last) = trimmed_stack.last() {
+            let idx = last.0 as usize;
+            if rule_is_trivia.get(idx).copied().unwrap_or(false) {
+                trimmed_stack.pop();
+            } else {
+                break;
+            }
+        }
+        let stack: Vec<String> = trimmed_stack
             .iter()
             .filter_map(|id| rule_names.get(id.0 as usize).cloned())
             .collect();

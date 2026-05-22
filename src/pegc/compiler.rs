@@ -310,6 +310,7 @@ pub fn compile_pattern(pat: &Pattern) -> Program {
         rule_count: 0,
         rule_names: Vec::new(),
         label_kinds: c.label_names,
+        rule_is_trivia: Vec::new(),
     }
 }
 
@@ -338,6 +339,12 @@ pub(crate) fn compile_rules(
     // Identify left-recursive rules (direct and indirect).
     let lr_rules = analyze_left_recursion(rules)?;
 
+    // Compute the per-rule trivia bit by cascading from any `trivia <- …`
+    // reserved-name root the grammar defines. Catch-bearing rules are
+    // pinned out of the cascade so their frames stay visible in
+    // `pegdb explain-recoveries`.
+    let trivia_bits = super::analysis::compute_trivia_rules(rules);
+
     let mut c = Compiler::new();
     c.emit(Instruction::Call(Label(0))); // patched below
     c.emit(Instruction::End);
@@ -354,11 +361,13 @@ pub(crate) fn compile_rules(
 
     let mut rule_addrs: HashMap<String, usize> = HashMap::new();
     let mut rule_names: Vec<String> = Vec::new();
+    let mut rule_is_trivia: Vec<bool> = Vec::new();
     let mut rule_count: u32 = 0;
     for name in ordered {
         rule_addrs.insert(name.clone(), c.pos());
         let memo_id = MemoId(rule_count);
         rule_names.push(name.clone());
+        rule_is_trivia.push(trivia_bits.get(name).copied().unwrap_or(false));
         rule_count += 1;
         let kind = if lr_rules.contains(name.as_str()) {
             RuleKind::Lr
@@ -404,6 +413,7 @@ pub(crate) fn compile_rules(
         rule_count: rule_count as usize,
         rule_names,
         label_kinds: c.label_names,
+        rule_is_trivia,
     })
 }
 

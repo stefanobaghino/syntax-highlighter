@@ -1277,3 +1277,100 @@ fn lower_inferred_boundary_catch(inner: Pattern, label: String, boundary: Patter
         recovery: Box::new(recovery),
     }
 }
+
+/// The reserved rule name that marks the trivia subgraph's root.
+/// If a grammar defines a rule with this name, the compiler cascades
+/// the trivia bit through every rule transitively reachable from it
+/// (subject to the catch-exclusion below).
+pub(crate) const TRIVIA_ROOT_RULE: &str = "trivia";
+
+/// Compute the per-rule trivia bit. A rule is trivia iff it's
+/// transitively reachable through the call graph from a rule named
+/// [`TRIVIA_ROOT_RULE`], excluding rules whose body contains a recovery
+/// catch (`Pattern::Catch` or `Pattern::InferBoundaryCatch`). The
+/// catch-exclusion preserves diagnostic visibility for catch-bearing
+/// frames in `pegdb explain-recoveries`: the catch is the author's
+/// signal that the rule's frame is load-bearing, and silently trimming
+/// it would hide exactly the rule the catch lives in.
+///
+/// Returns an entry for every rule in `rules`; rules in a grammar with
+/// no `trivia` root all get `false`.
+pub(crate) fn compute_trivia_rules(rules: &HashMap<String, Pattern>) -> HashMap<String, bool> {
+    let mut trivia: HashMap<String, bool> = rules.keys().map(|n| (n.clone(), false)).collect();
+    if !rules.contains_key(TRIVIA_ROOT_RULE) {
+        return trivia;
+    }
+    let pinned: HashSet<String> = rules
+        .iter()
+        .filter(|(_, body)| body_contains_catch(body))
+        .map(|(name, _)| name.clone())
+        .collect();
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut queue: Vec<String> = vec![TRIVIA_ROOT_RULE.to_string()];
+    while let Some(rule) = queue.pop() {
+        if !visited.insert(rule.clone()) {
+            continue;
+        }
+        if !pinned.contains(&rule) {
+            trivia.insert(rule.clone(), true);
+        }
+        if let Some(body) = rules.get(&rule) {
+            let mut callees = HashSet::new();
+            collect_non_terminal_refs(body, &mut callees);
+            for callee in callees {
+                if rules.contains_key(&callee) && !visited.contains(&callee) {
+                    queue.push(callee);
+                }
+            }
+        }
+    }
+    trivia
+}
+
+fn collect_non_terminal_refs(pat: &Pattern, out: &mut HashSet<String>) {
+    match pat {
+        Pattern::Literal(_) | Pattern::CharClass(_) | Pattern::AnyChar => {}
+        Pattern::Sequence(items) | Pattern::OrderedChoice(items) => {
+            for it in items {
+                collect_non_terminal_refs(it, out);
+            }
+        }
+        Pattern::Repeat(inner)
+        | Pattern::RepeatOne(inner)
+        | Pattern::Optional(inner)
+        | Pattern::NotPredicate(inner)
+        | Pattern::AndPredicate(inner)
+        | Pattern::Capture(_, inner)
+        | Pattern::Lenient(inner) => collect_non_terminal_refs(inner, out),
+        Pattern::Catch {
+            inner, recovery, ..
+        } => {
+            collect_non_terminal_refs(inner, out);
+            collect_non_terminal_refs(recovery, out);
+        }
+        Pattern::InferBoundaryCatch { inner, .. } => collect_non_terminal_refs(inner, out),
+        Pattern::NonTerminal(name) => {
+            out.insert(name.clone());
+        }
+    }
+}
+
+fn body_contains_catch(pat: &Pattern) -> bool {
+    match pat {
+        Pattern::Catch { .. } | Pattern::InferBoundaryCatch { .. } => true,
+        Pattern::Literal(_)
+        | Pattern::CharClass(_)
+        | Pattern::AnyChar
+        | Pattern::NonTerminal(_) => false,
+        Pattern::Sequence(items) | Pattern::OrderedChoice(items) => {
+            items.iter().any(body_contains_catch)
+        }
+        Pattern::Repeat(inner)
+        | Pattern::RepeatOne(inner)
+        | Pattern::Optional(inner)
+        | Pattern::NotPredicate(inner)
+        | Pattern::AndPredicate(inner)
+        | Pattern::Capture(_, inner)
+        | Pattern::Lenient(inner) => body_contains_catch(inner),
+    }
+}
