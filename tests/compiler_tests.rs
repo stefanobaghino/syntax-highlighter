@@ -2011,6 +2011,25 @@ fn trivia_cascade_handles_recursion() {
 }
 
 #[test]
+fn auto_trivia_handles_inter_repeat_whitespace() {
+    // The rewriter prepends a trivia call to each Repeat iteration so
+    // `(',' x)*` accepts whitespace between iterations, not only on
+    // the first comma (which the outer Sequence's inter-item trivia
+    // already covers). Without the prepend, ` , 2 , 3` would fail on
+    // the second iteration's leading space.
+    let prog = parse(
+        "trivia <- ' '*\n\
+         root   <- 'x' (',' 'x')*",
+    )
+    .expect("parse")
+    .compile()
+    .expect("compile");
+    let r = VM::new(&prog.code, b"x , x , x").run();
+    assert!(r.complete, "expected full match on ' '-separated items");
+    assert_eq!(r.matched, 9);
+}
+
+#[test]
 fn backslash_cap_r_matches_crlf_atomically() {
     // `\R` lowers to `'\r\n' / '\n' / '\r'` — CRLF is matched as one
     // two-byte unit, not two separate line breaks.

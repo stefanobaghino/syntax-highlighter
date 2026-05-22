@@ -1396,19 +1396,22 @@ fn auto_insertion_active(grammar: &Grammar) -> bool {
 
 /// AST-level rewrite: in every non-atomic rule's body, splice a
 /// `NonTerminal("trivia")` call between consecutive items of every
-/// `Sequence`. Runs after `lint_partial_match` and the FOLLOW-driven
-/// `^^lbl` resolver so both still see the author's original body.
+/// `Sequence`, and prepend one to every `Repeat` / `RepeatOne`
+/// iteration so inter-iteration whitespace gets consumed. Runs after
+/// `lint_partial_match` and the FOLLOW-driven `^^lbl` resolver so both
+/// still see the author's original body.
 ///
 /// No-op when the grammar has no `trivia` rule, or when `trivia` itself
-/// is marked atomic (the `*trivia <- …` grammar-wide opt-out).
+/// is marked atomic (the `*trivia <- …` grammar-wide opt-out). The
+/// `trivia` rule itself is also exempt — injecting trivia inside its
+/// own body would recurse the runtime indefinitely.
 ///
-/// The walker descends transparently through every combinator (`Choice`,
-/// `Optional`, `Repeat`, `RepeatOne`, `Capture`, `Catch`, `Lenient`,
-/// `AndPredicate`, `NotPredicate`) but stops at `NonTerminal` and the
-/// atom leaves (`Literal`, `CharClass`, `AnyChar`). Crossing a
-/// `NonTerminal` would pull trivia into the callee's body — which the
-/// callee handles by its own auto-insertion if non-atomic, or
-/// explicitly if atomic.
+/// The walker descends transparently through `Choice`, `Optional`,
+/// `Capture`, `Catch`, `Lenient`, `AndPredicate`, `NotPredicate`, and
+/// stops at `NonTerminal` and the atom leaves (`Literal`, `CharClass`,
+/// `AnyChar`). Crossing a `NonTerminal` would pull trivia into the
+/// callee's body — which the callee handles by its own auto-insertion
+/// if non-atomic, or explicitly if atomic.
 pub fn inject_auto_trivia(grammar: &mut Grammar) {
     if !auto_insertion_active(grammar) {
         return;
@@ -1416,7 +1419,11 @@ pub fn inject_auto_trivia(grammar: &mut Grammar) {
     let atomic = grammar.atomic_rules.clone();
     let rule_names: Vec<String> = grammar.rules.keys().cloned().collect();
     for name in rule_names {
-        if atomic.contains(&name) {
+        // The trivia rule itself is exempt: every `trivia_call` from
+        // the rewriter calls back into it, so injecting trivia inside
+        // its body would recurse the runtime indefinitely. Atomic
+        // rules opt out explicitly via the `*name <-` sigil.
+        if atomic.contains(&name) || name == TRIVIA_ROOT_RULE {
             continue;
         }
         if let Some(body) = grammar.rules.get_mut(&name) {
@@ -1426,7 +1433,8 @@ pub fn inject_auto_trivia(grammar: &mut Grammar) {
 }
 
 /// Walk one rule body, splicing `NonTerminal("trivia")` between every
-/// pair of consecutive `Sequence` items at every depth.
+/// pair of consecutive `Sequence` items at every depth and prepending
+/// one to every `Repeat` / `RepeatOne` iteration.
 fn inject_trivia_in(pat: &mut Pattern) {
     match pat {
         Pattern::Sequence(items) => {
@@ -1451,9 +1459,26 @@ fn inject_trivia_in(pat: &mut Pattern) {
                 inject_trivia_in(it);
             }
         }
-        Pattern::Repeat(inner)
-        | Pattern::RepeatOne(inner)
-        | Pattern::Optional(inner)
+        Pattern::Repeat(inner) | Pattern::RepeatOne(inner) => {
+            inject_trivia_in(inner);
+            // Prepend a trivia call so each iteration consumes
+            // ambient whitespace before its body runs. Without this,
+            // `(',' pair)*` would fail on the second iteration's
+            // leading whitespace — the inter-iteration boundary has
+            // no parent `Sequence` to splice trivia into. Flatten
+            // when `inner` is already a `Sequence` so the result
+            // stays at one level of nesting.
+            let original = std::mem::replace(inner.as_mut(), Pattern::AnyChar);
+            let wrapped = match original {
+                Pattern::Sequence(mut items) => {
+                    items.insert(0, trivia_call());
+                    Pattern::Sequence(items)
+                }
+                other => Pattern::Sequence(vec![trivia_call(), other]),
+            };
+            *inner = Box::new(wrapped);
+        }
+        Pattern::Optional(inner)
         | Pattern::NotPredicate(inner)
         | Pattern::AndPredicate(inner)
         | Pattern::Capture(_, inner)
