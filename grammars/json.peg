@@ -1,7 +1,8 @@
 # JSON grammar with highlight annotations.
-# The first rule is the start rule.
 
-json        <- \s* value \s* \z
+*trivia     <- \s*
+
+root        <- \s* value \s*
 
 value       <- @string{string}
              / @number{number}
@@ -30,5 +31,3 @@ number      <- '-'? int frac? exp?
 int         <- '0' / [1-9] \d*
 frac        <- '.' \d+
 exp         <- [eE] [+\-]? \d+
-
-trivia      <- \s*

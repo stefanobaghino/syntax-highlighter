@@ -155,5 +155,5 @@ fn labeled_catch_program_round_trips() {
     // table. Input drives the catch through both success and recovery
     // branches in case any future encoder change depends on runtime
     // state.
-    assert_grammar("labeled_catch", "r <- 'a' ^lbl 'b'", b"ab");
+    assert_grammar("labeled_catch", "root <- 'a' ^lbl 'b'", b"ab");
 }

@@ -451,7 +451,7 @@ fn recover_repeat_drops_unclosed_capture_from_failed_inner_attempt() {
 
 #[test]
 fn recover_repeat_inside_called_rule_returns_cleanly() {
-    // start <- "PRE" loop
+    // root <- "PRE" loop
     // loop  <- "a"*^
     //
     // Against "PREaxa": the *^ runs to EOF, then start's Return must
@@ -460,14 +460,14 @@ fn recover_repeat_inside_called_rule_returns_cleanly() {
     // documented in src/pegvm/README.md invariant 1.
     let mut rules = HashMap::new();
     rules.insert(
-        "start".into(),
+        "root".into(),
         Pattern::seq(vec![
             Pattern::literal("PRE"),
             Pattern::NonTerminal("loop".into()),
         ]),
     );
     rules.insert("loop".into(), recover(Pattern::literal("a"), "recovery"));
-    let prog = Grammar::new(rules, "start").compile().unwrap();
+    let prog = Grammar::new(rules).compile().unwrap();
     let r = VM::new(&prog.code, b"PREaxa").run();
     assert!(
         r.complete,
@@ -792,24 +792,28 @@ fn nested_captures_flow_through_compile() {
 
 #[test]
 fn grammar_with_nonterminals() {
-    // start <- digit+
+    // root  <- digit+
     // digit <- [0-9]
+    // The `root` wrap supplies the implicit end-of-input assertion;
+    // trailing non-digits now produce `complete=false`. `matched`
+    // reports the deepest position reached: `!.`'s lookahead reads one
+    // byte past the consumed digits, so the watermark sits at 4.
     let mut rules = HashMap::new();
     rules.insert(
-        "start".into(),
+        "root".into(),
         Pattern::RepeatOne(Box::new(Pattern::NonTerminal("digit".into()))),
     );
     rules.insert(
         "digit".into(),
         Pattern::CharClass(CharSet::from_ranges(&[(b'0', b'9')])),
     );
-    let prog = Grammar::new(rules, "start").compile().unwrap();
+    let prog = Grammar::new(rules).compile().unwrap();
     assert_eq!(
         VM::new(&prog.code, b"123abc").run(),
         MatchResult {
-            matched: 3,
+            matched: 4,
             captures: vec![],
-            complete: true,
+            complete: false,
             recovery_diagnostics: vec![],
         }
     );
@@ -819,8 +823,8 @@ fn grammar_with_nonterminals() {
 #[test]
 fn grammar_undefined_rule_errors() {
     let mut rules = HashMap::new();
-    rules.insert("start".into(), Pattern::NonTerminal("missing".into()));
-    let err = Grammar::new(rules, "start").compile().unwrap_err();
+    rules.insert("root".into(), Pattern::NonTerminal("missing".into()));
+    let err = Grammar::new(rules).compile().unwrap_err();
     let msg = format!("{}", err);
     assert!(msg.contains("missing"), "got: {}", msg);
 }
@@ -918,7 +922,7 @@ fn recover_repeat_labeled_interns_author_label() {
     // the capture kind at its hardcoded `"recovery"` — the catch
     // scope is renamed (so pegdb recoveries explain clusters under
     // "bad_thing"), but theme styling is unaffected.
-    let prog = syntax_highlighter::pegc::compile("r <- 'a'*^:bad_thing").unwrap();
+    let prog = syntax_highlighter::pegc::compile("root <- 'a'*^:bad_thing").unwrap();
     assert_eq!(prog.capture_kinds, vec!["recovery".to_string()]);
     assert_eq!(prog.label_kinds, vec!["bad_thing".to_string()]);
 }
@@ -1003,34 +1007,42 @@ fn sync_set_terminates_cleanly_at_eof_without_delim() {
 
 #[test]
 fn grammar_rules_are_wrapped_in_memo_open_close() {
-    // start <- "a"
+    // root  <- "a"
     // other <- "b"
-    // Layout:
-    //   0: Call(start)
+    // Layout (root's body wraps with `!.` for the implicit
+    // end-of-input assertion: Choice / Any / FailTwice for the
+    // NotPredicate):
+    //   0: Call(root)
     //   1: End
-    //   2: RuleEnter(0, Memo, L5)   ; start's Return is at 5
+    //   2: RuleEnter(0, Memo, L8)   ; root's Return is at 8
     //   3: Char 'a'
-    //   4: MemoClose(0)
-    //   5: Return
-    //   6: RuleEnter(1, Memo, L9)   ; other's Return is at 9
-    //   7: Char 'b'
-    //   8: MemoClose(1)
-    //   9: Return
+    //   4: Choice(L7)   ; !. — predicate succeeds iff Any fails
+    //   5: Any(1)
+    //   6: FailTwice
+    //   7: MemoClose(0)
+    //   8: Return
+    //   9: RuleEnter(1, Memo, L12)  ; other's Return is at 12
+    //  10: Char 'b'
+    //  11: MemoClose(1)
+    //  12: Return
     let mut rules = HashMap::new();
-    rules.insert("start".into(), Pattern::literal("a"));
+    rules.insert("root".into(), Pattern::literal("a"));
     rules.insert("other".into(), Pattern::literal("b"));
-    let prog = Grammar::new(rules, "start").compile().unwrap();
+    let prog = Grammar::new(rules).compile().unwrap();
     assert_eq!(prog.rule_count, 2);
     assert_eq!(
         prog.code,
         vec![
             Instruction::Call(Label(2)),
             Instruction::End,
-            Instruction::RuleEnter(MemoId(0), RuleKind::Memo, Label(5)),
+            Instruction::RuleEnter(MemoId(0), RuleKind::Memo, Label(8)),
             Instruction::Char(b'a'),
+            Instruction::Choice(Label(7)),
+            Instruction::Any(1),
+            Instruction::FailTwice,
             Instruction::MemoClose(MemoId(0)),
             Instruction::Return,
-            Instruction::RuleEnter(MemoId(1), RuleKind::Memo, Label(9)),
+            Instruction::RuleEnter(MemoId(1), RuleKind::Memo, Label(12)),
             Instruction::Char(b'b'),
             Instruction::MemoClose(MemoId(1)),
             Instruction::Return,
@@ -1040,7 +1052,7 @@ fn grammar_rules_are_wrapped_in_memo_open_close() {
 
 #[test]
 fn direct_lr_rule_emits_lrbody_lrtail_skeleton() {
-    // start <- start "+" "n" / "n"
+    // root <- root "+" "n" / "n"
     // Layout (no MemoClose for an LR rule — LRTail closes the body):
     //   0: Call(2)
     //   1: End
@@ -1055,17 +1067,17 @@ fn direct_lr_rule_emits_lrbody_lrtail_skeleton() {
     // only assert the prologue/epilogue shape.
     let mut rules = HashMap::new();
     rules.insert(
-        "start".into(),
+        "root".into(),
         Pattern::choice(vec![
             Pattern::seq(vec![
-                Pattern::NonTerminal("start".into()),
+                Pattern::NonTerminal("root".into()),
                 Pattern::literal("+"),
                 Pattern::literal("n"),
             ]),
             Pattern::literal("n"),
         ]),
     );
-    let prog = Grammar::new(rules, "start").compile().unwrap();
+    let prog = Grammar::new(rules).compile().unwrap();
     assert_eq!(prog.rule_count, 1);
     // Prologue is at code[2]; the bootstrap is the usual Call/End pair.
     assert!(matches!(prog.code[0], Instruction::Call(Label(2))));
@@ -1105,23 +1117,23 @@ fn direct_lr_rule_emits_lrbody_lrtail_skeleton() {
 
 #[test]
 fn right_recursive_rule_is_not_marked_lr() {
-    // start <- "n" "+" start / "n"
+    // root <- "n" "+" start / "n"
     // The recursive call is not in first-call position — "n" consumes
     // input first. Compile must use the standard Memo-kind RuleEnter
     // and MemoClose.
     let mut rules = HashMap::new();
     rules.insert(
-        "start".into(),
+        "root".into(),
         Pattern::choice(vec![
             Pattern::seq(vec![
                 Pattern::literal("n"),
                 Pattern::literal("+"),
-                Pattern::NonTerminal("start".into()),
+                Pattern::NonTerminal("root".into()),
             ]),
             Pattern::literal("n"),
         ]),
     );
-    let prog = Grammar::new(rules, "start").compile().unwrap();
+    let prog = Grammar::new(rules).compile().unwrap();
     let has_memo_open = prog
         .code
         .iter()
@@ -1165,7 +1177,8 @@ fn indirect_lr_cycle_of_2_emits_lrbody_lrtail() {
             Pattern::literal("w"),
         ]),
     );
-    let prog = Grammar::new(rules, "a").compile().unwrap();
+    rules.insert("root".into(), Pattern::NonTerminal("a".into()));
+    let prog = Grammar::new(rules).compile().unwrap();
     let lr_bodies = prog
         .code
         .iter()
@@ -1178,15 +1191,26 @@ fn indirect_lr_cycle_of_2_emits_lrbody_lrtail() {
         .count();
     assert_eq!(lr_bodies, 2, "both SCC members must emit Lr-kind RuleEnter");
     assert_eq!(lr_tails, 2, "both SCC members must emit LRTail");
+    // `a` and `b` (the SCC) must not be Memo-kind. The synthesized
+    // `root <- a` wrapper is itself Memo (root isn't in any cycle); that's
+    // fine — the assertion is about the cycle members.
+    let a_idx = prog.rule_names.iter().position(|n| n == "a").unwrap();
+    let b_idx = prog.rule_names.iter().position(|n| n == "b").unwrap();
     for ins in &prog.code {
-        assert!(
-            !matches!(
-                ins,
-                Instruction::RuleEnter(_, RuleKind::Memo, _) | Instruction::MemoClose(..)
-            ),
-            "indirect-LR rules must not emit Memo-kind RuleEnter/MemoClose: {:?}",
-            ins
-        );
+        if let Instruction::RuleEnter(id, RuleKind::Memo, _) = ins {
+            assert!(
+                id.0 as usize != a_idx && id.0 as usize != b_idx,
+                "indirect-LR cycle members must not emit Memo-kind RuleEnter: {:?}",
+                ins
+            );
+        }
+        if let Instruction::MemoClose(id) = ins {
+            assert!(
+                id.0 as usize != a_idx && id.0 as usize != b_idx,
+                "indirect-LR cycle members must not emit MemoClose: {:?}",
+                ins
+            );
+        }
     }
 }
 
@@ -1227,7 +1251,8 @@ fn indirect_lr_cycle_of_3_emits_lrbody_lrtail() {
             Pattern::literal("r"),
         ]),
     );
-    let prog = Grammar::new(rules, "a").compile().unwrap();
+    rules.insert("root".into(), Pattern::NonTerminal("a".into()));
+    let prog = Grammar::new(rules).compile().unwrap();
     let lr_bodies = prog
         .code
         .iter()
@@ -1243,15 +1268,27 @@ fn indirect_lr_cycle_of_3_emits_lrbody_lrtail() {
         "all three SCC members must emit Lr-kind RuleEnter"
     );
     assert_eq!(lr_tails, 3, "all three SCC members must emit LRTail");
+    // `a`, `b`, `c` (the SCC) must not be Memo-kind; the synthesized
+    // `root <- a` rule is Memo and that's fine.
+    let cycle: Vec<usize> = ["a", "b", "c"]
+        .iter()
+        .map(|n| prog.rule_names.iter().position(|r| r == *n).unwrap())
+        .collect();
     for ins in &prog.code {
-        assert!(
-            !matches!(
-                ins,
-                Instruction::RuleEnter(_, RuleKind::Memo, _) | Instruction::MemoClose(..)
-            ),
-            "indirect-LR rules must not emit Memo-kind RuleEnter/MemoClose: {:?}",
-            ins
-        );
+        if let Instruction::RuleEnter(id, RuleKind::Memo, _) = ins {
+            assert!(
+                !cycle.contains(&(id.0 as usize)),
+                "indirect-LR cycle members must not emit Memo-kind RuleEnter: {:?}",
+                ins
+            );
+        }
+        if let Instruction::MemoClose(id) = ins {
+            assert!(
+                !cycle.contains(&(id.0 as usize)),
+                "indirect-LR cycle members must not emit MemoClose: {:?}",
+                ins
+            );
+        }
     }
 }
 
@@ -1283,7 +1320,8 @@ fn right_recursive_two_rule_grammar_is_not_marked_lr() {
             Pattern::literal("w"),
         ]),
     );
-    let prog = Grammar::new(rules, "a").compile().unwrap();
+    rules.insert("root".into(), Pattern::NonTerminal("a".into()));
+    let prog = Grammar::new(rules).compile().unwrap();
     let has_lr = prog.code.iter().any(|i| {
         matches!(
             i,
@@ -1300,17 +1338,17 @@ fn right_recursive_two_rule_grammar_is_not_marked_lr() {
 
 #[test]
 fn lr_through_nullable_prefix_is_detected() {
-    // start <- opt start "+" "n" / "n"
+    // root <- opt root "+" "n" / "n"
     // opt   <- "x"?
     // The recursive call is gated by an optional prefix; nullability
     // analysis must propagate the first-call through `opt`.
     let mut rules = HashMap::new();
     rules.insert(
-        "start".into(),
+        "root".into(),
         Pattern::choice(vec![
             Pattern::seq(vec![
                 Pattern::NonTerminal("opt".into()),
-                Pattern::NonTerminal("start".into()),
+                Pattern::NonTerminal("root".into()),
                 Pattern::literal("+"),
                 Pattern::literal("n"),
             ]),
@@ -1321,7 +1359,7 @@ fn lr_through_nullable_prefix_is_detected() {
         "opt".into(),
         Pattern::Optional(Box::new(Pattern::literal("x"))),
     );
-    let prog = Grammar::new(rules, "start").compile().unwrap();
+    let prog = Grammar::new(rules).compile().unwrap();
     assert!(prog
         .code
         .iter()
@@ -1347,39 +1385,39 @@ fn cap_lit(kind: &str, s: &str) -> FollowElement {
 
 #[test]
 fn follow_set_single_rule_tail() {
-    // start <- a; a <- 'x'
+    // root <- a; a <- 'x'
     let mut rules = HashMap::new();
-    rules.insert("start".into(), Pattern::NonTerminal("a".into()));
+    rules.insert("root".into(), Pattern::NonTerminal("a".into()));
     rules.insert("a".into(), Pattern::literal("x"));
-    let g = Grammar::new(rules, "start");
+    let g = Grammar::new(rules);
     let follow = compute_follow(&g);
     assert_eq!(follow["a"], BTreeSetOf::from([FollowElement::Eof]));
-    assert_eq!(follow["start"], BTreeSetOf::from([FollowElement::Eof]));
+    assert_eq!(follow["root"], BTreeSetOf::from([FollowElement::Eof]));
 }
 
 #[test]
 fn follow_set_sequence_after() {
-    // start <- a 'y'; a <- 'x'
+    // root <- a 'y'; a <- 'x'
     let mut rules = HashMap::new();
     rules.insert(
-        "start".into(),
+        "root".into(),
         Pattern::seq(vec![
             Pattern::NonTerminal("a".into()),
             Pattern::literal("y"),
         ]),
     );
     rules.insert("a".into(), Pattern::literal("x"));
-    let g = Grammar::new(rules, "start");
+    let g = Grammar::new(rules);
     let follow = compute_follow(&g);
     assert_eq!(follow["a"], BTreeSetOf::from([lit("y")]));
 }
 
 #[test]
 fn follow_set_choice_tail() {
-    // start <- a / b; a <- 'x'; b <- 'y'
+    // root <- a / b; a <- 'x'; b <- 'y'
     let mut rules = HashMap::new();
     rules.insert(
-        "start".into(),
+        "root".into(),
         Pattern::choice(vec![
             Pattern::NonTerminal("a".into()),
             Pattern::NonTerminal("b".into()),
@@ -1387,7 +1425,7 @@ fn follow_set_choice_tail() {
     );
     rules.insert("a".into(), Pattern::literal("x"));
     rules.insert("b".into(), Pattern::literal("y"));
-    let g = Grammar::new(rules, "start");
+    let g = Grammar::new(rules);
     let follow = compute_follow(&g);
     // Each alt sits at the tail of `start`; FOLLOW(start) = {Eof}.
     assert_eq!(follow["a"], BTreeSetOf::from([FollowElement::Eof]));
@@ -1396,14 +1434,14 @@ fn follow_set_choice_tail() {
 
 #[test]
 fn follow_set_repeat_self() {
-    // start <- a*; a <- 'x'
+    // root <- a*; a <- 'x'
     let mut rules = HashMap::new();
     rules.insert(
-        "start".into(),
+        "root".into(),
         Pattern::Repeat(Box::new(Pattern::NonTerminal("a".into()))),
     );
     rules.insert("a".into(), Pattern::literal("x"));
-    let g = Grammar::new(rules, "start");
+    let g = Grammar::new(rules);
     let follow = compute_follow(&g);
     // Body can iterate (next iteration's FIRST = FIRST(a) = {Rule("a")}),
     // and at termination FOLLOW(start) = {Eof} applies.
@@ -1420,10 +1458,10 @@ fn follow_set_repeat_self() {
 
 #[test]
 fn follow_set_nullable_skip() {
-    // start <- a b 'z'; a <- 'x'; b <- 'y'?
+    // root <- a b 'z'; a <- 'x'; b <- 'y'?
     let mut rules = HashMap::new();
     rules.insert(
-        "start".into(),
+        "root".into(),
         Pattern::seq(vec![
             Pattern::NonTerminal("a".into()),
             Pattern::NonTerminal("b".into()),
@@ -1435,7 +1473,7 @@ fn follow_set_nullable_skip() {
         "b".into(),
         Pattern::Optional(Box::new(Pattern::literal("y"))),
     );
-    let g = Grammar::new(rules, "start");
+    let g = Grammar::new(rules);
     let follow = compute_follow(&g);
     let f_a = &follow["a"];
     // After `a`: FIRST(b) = {Rule("b")} (opaque, one-level), plus — since b
@@ -1455,36 +1493,36 @@ fn follow_set_recursive() {
     // list <- 'x' (',' list)?
     let mut rules = HashMap::new();
     rules.insert(
-        "list".into(),
+        "root".into(),
         Pattern::seq(vec![
             Pattern::literal("x"),
             Pattern::Optional(Box::new(Pattern::seq(vec![
                 Pattern::literal(","),
-                Pattern::NonTerminal("list".into()),
+                Pattern::NonTerminal("root".into()),
             ]))),
         ]),
     );
-    let g = Grammar::new(rules, "list");
+    let g = Grammar::new(rules);
     let follow = compute_follow(&g);
-    // The recursive `list` call is at the tail of an Optional, which is at
-    // the tail of `list` itself — so FOLLOW(list) propagates to itself,
+    // The recursive `root` call is at the tail of an Optional, which is at
+    // the tail of `root` itself — so FOLLOW(root) propagates to itself,
     // and the seed Eof reaches all the way down.
-    assert_eq!(follow["list"], BTreeSetOf::from([FollowElement::Eof]));
+    assert_eq!(follow["root"], BTreeSetOf::from([FollowElement::Eof]));
 }
 
 #[test]
 fn follow_set_capture_preserved() {
-    // start <- a @punctuation{','}; a <- 'x'
+    // root <- a @punctuation{','}; a <- 'x'
     let mut rules = HashMap::new();
     rules.insert(
-        "start".into(),
+        "root".into(),
         Pattern::seq(vec![
             Pattern::NonTerminal("a".into()),
             Pattern::Capture("punctuation".into(), Box::new(Pattern::literal(","))),
         ]),
     );
     rules.insert("a".into(), Pattern::literal("x"));
-    let g = Grammar::new(rules, "start");
+    let g = Grammar::new(rules);
     let follow = compute_follow(&g);
     let f_a = &follow["a"];
     assert!(
@@ -1495,10 +1533,10 @@ fn follow_set_capture_preserved() {
 
 #[test]
 fn follow_set_predicate_lookahead() {
-    // start <- a &'y' 'z'; a <- 'x'
+    // root <- a &'y' 'z'; a <- 'x'
     let mut rules = HashMap::new();
     rules.insert(
-        "start".into(),
+        "root".into(),
         Pattern::seq(vec![
             Pattern::NonTerminal("a".into()),
             Pattern::AndPredicate(Box::new(Pattern::literal("y"))),
@@ -1506,7 +1544,7 @@ fn follow_set_predicate_lookahead() {
         ]),
     );
     rules.insert("a".into(), Pattern::literal("x"));
-    let g = Grammar::new(rules, "start");
+    let g = Grammar::new(rules);
     let follow = compute_follow(&g);
     let f_a = &follow["a"];
     // The lookahead &'y' contributes FIRST('y') = {'y'} (predicate is
@@ -1570,11 +1608,11 @@ fn finding(rule: &str, caller: &str) -> LintFinding {
 
 #[test]
 fn lint_partial_match_trailing_optional_with_eof_validator() {
-    // start <- a; a <- 'x' 'y'?
+    // root <- a; a <- 'x' 'y'?
     // a is called from the start rule, whose only continuation is Eof.
     // Eof rejects any non-empty leftover bytes — a validator. No flag.
     let mut rules = HashMap::new();
-    rules.insert("start".into(), Pattern::NonTerminal("a".into()));
+    rules.insert("root".into(), Pattern::NonTerminal("a".into()));
     rules.insert(
         "a".into(),
         Pattern::seq(vec![
@@ -1582,31 +1620,31 @@ fn lint_partial_match_trailing_optional_with_eof_validator() {
             Pattern::Optional(Box::new(Pattern::literal("y"))),
         ]),
     );
-    let g = Grammar::new(rules, "start");
+    let g = Grammar::new(rules);
     assert!(lint_partial_match(&g).is_empty());
 }
 
 #[test]
 fn lint_partial_match_no_trailing_nullable_skipped() {
-    // start <- a; a <- 'x' 'y' — no trailing optional/nullable.
+    // root <- a; a <- 'x' 'y' — no trailing optional/nullable.
     let mut rules = HashMap::new();
-    rules.insert("start".into(), Pattern::NonTerminal("a".into()));
+    rules.insert("root".into(), Pattern::NonTerminal("a".into()));
     rules.insert(
         "a".into(),
         Pattern::seq(vec![Pattern::literal("x"), Pattern::literal("y")]),
     );
-    let g = Grammar::new(rules, "start");
+    let g = Grammar::new(rules);
     assert!(lint_partial_match(&g).is_empty());
 }
 
 #[test]
 fn lint_partial_match_anchored_via_andpredicate() {
-    // start <- a &'y' 'y'; a <- 'x' 'y'?
+    // root <- a &'y' 'y'; a <- 'x' 'y'?
     // The AndPredicate anchors the call to a even though a's trailing
     // overlaps with what follows.
     let mut rules = HashMap::new();
     rules.insert(
-        "start".into(),
+        "root".into(),
         Pattern::seq(vec![
             Pattern::NonTerminal("a".into()),
             Pattern::AndPredicate(Box::new(Pattern::literal("y"))),
@@ -1620,7 +1658,7 @@ fn lint_partial_match_anchored_via_andpredicate() {
             Pattern::Optional(Box::new(Pattern::literal("y"))),
         ]),
     );
-    let g = Grammar::new(rules, "start");
+    let g = Grammar::new(rules);
     assert!(
         lint_partial_match(&g).is_empty(),
         "AndPredicate should anchor"
@@ -1629,12 +1667,12 @@ fn lint_partial_match_anchored_via_andpredicate() {
 
 #[test]
 fn lint_partial_match_validated_by_disjoint_consumer() {
-    // start <- a 'z'; a <- 'x' 'y'?
+    // root <- a 'z'; a <- 'x' 'y'?
     // 'z' after a is a non-nullable consumer with FIRST={'z'} disjoint
     // from a's trailing {'y'}. The consumer validates.
     let mut rules = HashMap::new();
     rules.insert(
-        "start".into(),
+        "root".into(),
         Pattern::seq(vec![
             Pattern::NonTerminal("a".into()),
             Pattern::literal("z"),
@@ -1647,13 +1685,13 @@ fn lint_partial_match_validated_by_disjoint_consumer() {
             Pattern::Optional(Box::new(Pattern::literal("y"))),
         ]),
     );
-    let g = Grammar::new(rules, "start");
+    let g = Grammar::new(rules);
     assert!(lint_partial_match(&g).is_empty());
 }
 
 #[test]
 fn lint_partial_match_absorbed_by_outer_catch_flagged() {
-    // start <- (a)*^[;]
+    // root <- (a)*^[;]
     // a <- 'x' 'y'?
     // a's leniency at the call site is absorbed by the *^ recovery
     // wrapper — exactly the PR #101 shape.
@@ -1667,7 +1705,7 @@ fn lint_partial_match_absorbed_by_outer_catch_flagged() {
         label: "recovery".into(),
         recovery: Box::new(recovery_body),
     }));
-    rules.insert("start".into(), call_inside_catch);
+    rules.insert("root".into(), call_inside_catch);
     rules.insert(
         "a".into(),
         Pattern::seq(vec![
@@ -1675,9 +1713,9 @@ fn lint_partial_match_absorbed_by_outer_catch_flagged() {
             Pattern::Optional(Box::new(Pattern::literal("y"))),
         ]),
     );
-    let g = Grammar::new(rules, "start");
+    let g = Grammar::new(rules);
     let findings = lint_partial_match(&g);
-    assert_eq!(findings, vec![finding("a", "start")]);
+    assert_eq!(findings, vec![finding("a", "root")]);
 }
 
 #[test]
@@ -1753,15 +1791,15 @@ fn definition_lenient_marker_requires_touching_name() {
 fn definition_lenient_suppresses_lint_at_every_call_site() {
     // Use the Catch-absorbed shape the lint reliably flags: a
     // top-level `*^[;]` recovery loop calling a trailing-Optional rule.
-    let unmarked = parse("start <- (r)*^[;]\nr <- 'x' 'y'?").expect("parse unmarked");
+    let unmarked = parse("root <- (r)*^[;]\nr <- 'x' 'y'?").expect("parse unmarked");
     assert!(
         lint_partial_match(&unmarked)
             .iter()
-            .any(|f| f.rule == "r" && f.caller == "start"),
+            .any(|f| f.rule == "r" && f.caller == "root"),
         "baseline: unmarked grammar should flag r"
     );
 
-    let marked = parse("start <- (r)*^[;]\n~r <- 'x' 'y'?").expect("parse marked");
+    let marked = parse("root <- (r)*^[;]\n~r <- 'x' 'y'?").expect("parse marked");
     let findings = lint_partial_match(&marked);
     assert!(
         !findings.iter().any(|f| f.rule == "r"),
@@ -1772,11 +1810,11 @@ fn definition_lenient_suppresses_lint_at_every_call_site() {
 #[test]
 fn definition_lenient_marker_is_runtime_transparent() {
     // The `~name <-` wrap compiles to the same bytecode as the bare form.
-    let plain = parse("r <- 'x'+")
+    let plain = parse("root <- 'x'+")
         .expect("parse plain")
         .compile()
         .expect("compile plain");
-    let marked = parse("~r <- 'x'+")
+    let marked = parse("~root <- 'x'+")
         .expect("parse marked")
         .compile()
         .expect("compile marked");
@@ -1788,14 +1826,14 @@ fn definition_lenient_marker_is_runtime_transparent() {
 #[test]
 fn compile_errors_on_partial_match_leniency() {
     // `*^[;]` Catch-absorbed shape — the lint reliably flags this.
-    let g = parse("start <- (r)*^[;]\nr <- 'x' 'y'?").expect("parse");
+    let g = parse("root <- (r)*^[;]\nr <- 'x' 'y'?").expect("parse");
     let err = g.compile().expect_err("compile should fail");
     match err {
         syntax_highlighter::pegc::CompileError::PartialMatchLeniency(findings) => {
             assert!(
                 findings
                     .iter()
-                    .any(|f| f.rule == "r" && f.caller == "start"),
+                    .any(|f| f.rule == "r" && f.caller == "root"),
                 "expected r → start finding, got: {findings:?}"
             );
         }
@@ -1805,7 +1843,7 @@ fn compile_errors_on_partial_match_leniency() {
 
 #[test]
 fn compile_succeeds_with_definition_lenient_on_flagged_rule() {
-    let g = parse("start <- (r)*^[;]\n~r <- 'x' 'y'?").expect("parse");
+    let g = parse("root <- (r)*^[;]\n~r <- 'x' 'y'?").expect("parse");
     g.compile()
         .expect("compile should succeed with definition-level `~r`");
 }
@@ -1814,7 +1852,7 @@ fn compile_succeeds_with_definition_lenient_on_flagged_rule() {
 fn compile_succeeds_with_boundary_catch_anchor() {
     // `^^bad ';'` lowers to `Catch { Seq(a, &';'), bad, recovery }` —
     // anchoring `a` by lookahead so the lint sees no leniency.
-    let g = parse("start <- (a ^^bad ';')*\na <- 'x' 'y'?").expect("parse");
+    let g = parse("root <- (a ^^bad ';')*\na <- 'x' 'y'?").expect("parse");
     g.compile()
         .expect("compile should succeed with `^^bad ';'` anchor");
 }
@@ -1825,7 +1863,7 @@ fn compile_succeeds_with_bracketed_close_catch_sugar() {
     // and whose recovery is `Seq(@recovery{(!'}' .)*}, '}')`. The
     // inner ends in `'}'` (a hard terminator), so `lint_partial_match`
     // sees no trailing-nullable shape and compilation succeeds.
-    let g = parse("start <- ('{' a '}' ^^bad ..= '}')*\na <- 'x'+").expect("parse");
+    let g = parse("root <- ('{' a '}' ^^bad ..= '}')*\na <- 'x'+").expect("parse");
     g.compile()
         .expect("compile should succeed with `^^bad ..= '}'` sugar");
 }
@@ -1839,7 +1877,7 @@ fn bracketed_close_catch_runs_recovery_path() {
     // exercises the recovery: skip captures `garbage` and `}` is
     // captured as `@punctuation`.
     let g = parse(
-        "start <- @punctuation{'{'} (body @punctuation{'}'} ^^bad ..= @punctuation{'}'})\nbody <- 'x'",
+        "root <- @punctuation{'{'} (body @punctuation{'}'} ^^bad ..= @punctuation{'}'})\nbody <- 'x'",
     )
     .expect("parse");
     let prog = g.compile().expect("compile");
@@ -1860,12 +1898,12 @@ fn bracketed_close_catch_runs_recovery_path() {
 
 #[test]
 fn compile_error_display_lists_findings() {
-    let g = parse("start <- (r)*^[;]\nr <- 'x' 'y'?").expect("parse");
+    let g = parse("root <- (r)*^[;]\nr <- 'x' 'y'?").expect("parse");
     let err = g.compile().expect_err("compile should fail");
     let msg = format!("{err}");
     assert!(msg.contains("partial-match leniency"));
     assert!(msg.contains("`r`"));
-    assert!(msg.contains("`start`"));
+    assert!(msg.contains("`root`"));
 }
 
 #[test]
@@ -1873,7 +1911,7 @@ fn compile_errors_on_uninferable_boundary() {
     // The start rule has no FOLLOW context other than EOF — for a
     // rule with no callers at all, the inferred boundary would be
     // empty. Construct that case via a non-start unreachable rule.
-    let g = parse("start <- 'x'\norphan <- 'a' ^^bad").expect("parse");
+    let g = parse("root <- 'x'\norphan <- 'a' ^^bad").expect("parse");
     let err = g.compile().expect_err("compile should fail");
     assert!(
         matches!(
@@ -1902,27 +1940,29 @@ fn trivia_idx(program: &syntax_highlighter::pegvm::Program, name: &str) -> usize
 #[test]
 fn trivia_root_marks_itself_and_no_root_leaves_bits_false() {
     // Without a `trivia` rule the bits are all false.
-    let no_root = parse("start <- 'x'")
+    let no_root = parse("root <- 'x'")
         .expect("parse")
         .compile()
         .expect("compile");
     assert!(no_root.rule_is_trivia.iter().all(|b| !b));
 
-    // The trivia rule itself gets the bit when present.
-    let with_root = parse("start <- trivia 'x'\ntrivia <- ' '*")
+    // The trivia rule itself gets the bit when present. `*trivia`
+    // disables auto-insertion, so explicit `trivia` calls inside
+    // `root` remain in the body.
+    let with_root = parse("*trivia <- ' '*\nroot <- trivia 'x'")
         .expect("parse")
         .compile()
         .expect("compile");
     assert!(with_root.rule_is_trivia[trivia_idx(&with_root, "trivia")]);
-    assert!(!with_root.rule_is_trivia[trivia_idx(&with_root, "start")]);
+    assert!(!with_root.rule_is_trivia[trivia_idx(&with_root, "root")]);
 }
 
 #[test]
 fn trivia_cascades_to_transitive_callees() {
     let program = parse(
-        "start  <- trivia 'x'\n\
-         trivia <- ws\n\
-         ws     <- (comment / ' ')*\n\
+        "*trivia <- ws\n\
+         root    <- trivia 'x'\n\
+         ws      <- (comment / ' ')*\n\
          comment <- '#' (!'\\n' .)*",
     )
     .expect("parse")
@@ -1931,7 +1971,7 @@ fn trivia_cascades_to_transitive_callees() {
     assert!(program.rule_is_trivia[trivia_idx(&program, "trivia")]);
     assert!(program.rule_is_trivia[trivia_idx(&program, "ws")]);
     assert!(program.rule_is_trivia[trivia_idx(&program, "comment")]);
-    assert!(!program.rule_is_trivia[trivia_idx(&program, "start")]);
+    assert!(!program.rule_is_trivia[trivia_idx(&program, "root")]);
 }
 
 #[test]
@@ -1940,9 +1980,9 @@ fn trivia_cascade_skips_catch_bearing_rules() {
     // in its body. The cascade pins it out so the catch's frame stays
     // visible in `pegdb recoveries explain`.
     let program = parse(
-        "start  <- trivia 'x'\n\
-         trivia <- (victim / ' ')*\n\
-         victim <- 'a' ^bad 'b'",
+        "*trivia <- (victim / ' ')*\n\
+         root    <- trivia 'x'\n\
+         victim  <- 'a' ^bad 'b'",
     )
     .expect("parse")
     .compile()
@@ -1959,9 +1999,9 @@ fn trivia_cascade_handles_recursion() {
     // Trivia subgraph with a self-cycle; fixpoint should terminate
     // and mark every reachable rule.
     let program = parse(
-        "start  <- trivia 'x'\n\
-         trivia <- ws\n\
-         ws     <- (ws / ' ')*",
+        "*trivia <- ws\n\
+         root    <- trivia 'x'\n\
+         ws      <- (ws / ' ')*",
     )
     .expect("parse")
     .compile()
@@ -1974,7 +2014,7 @@ fn trivia_cascade_handles_recursion() {
 fn backslash_cap_r_matches_crlf_atomically() {
     // `\R` lowers to `'\r\n' / '\n' / '\r'` — CRLF is matched as one
     // two-byte unit, not two separate line breaks.
-    let g = parse("r <- \\R").expect("parse");
+    let g = parse("root <- \\R").expect("parse");
     let prog = g.compile().expect("compile");
     let r = VM::new(&prog.code, b"\r\n").run();
     assert!(r.complete, "\\R should match CRLF");
@@ -1990,34 +2030,40 @@ fn backslash_cap_r_matches_crlf_atomically() {
 }
 
 #[test]
-fn backslash_z_matches_eof() {
-    // `\z` lowers to `!.` — succeeds at end of input, fails otherwise.
-    let g = parse("r <- \\z").expect("parse");
+fn backslash_not_dot_matches_eof() {
+    // `\z` was removed; the post-migration spelling is the explicit
+    // `!.`. Verifies it succeeds at end-of-input and fails otherwise.
+    let g = parse("root <- !.").expect("parse");
     let prog = g.compile().expect("compile");
     let r = VM::new(&prog.code, b"").run();
-    assert!(r.complete, "\\z should match empty input");
+    assert!(r.complete, "!. should match empty input");
     assert_eq!(r.matched, 0);
 
     let r = VM::new(&prog.code, b"x").run();
-    assert!(!r.complete, "\\z should fail when bytes remain");
+    assert!(!r.complete, "!. should fail when bytes remain");
 }
 
 #[test]
 fn repeat_count_matches_exact_length() {
     // End-to-end smoke for `p{n}` — verifies the parse-time desugaring
     // produces the same VM behavior as four hand-written `\d`s.
-    let g = parse("r <- \\d{4} \\z").expect("parse");
+    // The `root` wrap supplies the trailing end-of-input assertion
+    // implicitly.
+    let g = parse("root <- \\d{4}").expect("parse");
     let prog = g.compile().expect("compile");
 
     let r = VM::new(&prog.code, b"1234").run();
-    assert!(r.complete, "\\d{{4}} \\z should match exactly four digits");
+    assert!(r.complete, "\\d{{4}} should match exactly four digits");
     assert_eq!(r.matched, 4);
 
     let r = VM::new(&prog.code, b"123").run();
     assert!(!r.complete, "\\d{{4}} should fail on three digits");
 
     let r = VM::new(&prog.code, b"12345").run();
-    assert!(!r.complete, "\\z should fail when a fifth byte remains");
+    assert!(
+        !r.complete,
+        "root's implicit end-of-input must fail when a fifth byte remains"
+    );
 }
 
 #[test]

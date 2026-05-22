@@ -24,7 +24,9 @@
 # malformed declarations inside a rule/at-rule body resync at the
 # closing `}` instead of failing the enclosing statement.
 
-css_file      <- trivia (statement)*^ trivia \z
+*trivia       <- (comment / \s)*
+
+root          <- trivia (statement)*^ trivia
 
 statement     <- at_rule
                 / rule
@@ -138,5 +140,3 @@ ident_body    <- [A-Za-z\d_\-]
 # CSS has only block comments.
 
 comment       <- @comment{'/*' ..= '*/'}
-
-trivia        <- (comment / \s)*

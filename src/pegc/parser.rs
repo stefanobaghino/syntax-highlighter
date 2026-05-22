@@ -1,9 +1,24 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use super::analysis::{lint_partial_match, resolve_inferred_boundaries};
+use super::analysis::{
+    inject_auto_trivia, lint_partial_match, resolve_inferred_boundaries, wrap_root,
+};
 use super::compiler::{compile_rules, CompileError};
 use super::pattern::Pattern;
 use crate::pegvm::{CharSet, Program};
+
+/// Reserved rule name for the grammar's start rule. Every grammar must
+/// define exactly one rule named [`ROOT_RULE`]; the compiler wraps its
+/// body to assert end-of-input and to splice optional leading / trailing
+/// `trivia` calls when an auto-insertion target exists.
+pub const ROOT_RULE: &str = "root";
+
+/// Reserved rule name for the (optional) auto-insertion target. When a
+/// grammar defines a rule named [`TRIVIA_RULE`], the compiler injects a
+/// call to it between consecutive `Sequence` items in every non-atomic
+/// rule's body. Marking the rule atomic (`*trivia <- …`) keeps the
+/// definition but disables auto-insertion grammar-wide.
+pub const TRIVIA_RULE: &str = "trivia";
 
 /// Cap for the `p{n}` exact-count quantifier. Conservative typo guard:
 /// the largest plausible corpus site is `hex{8}`. Above this the parser
@@ -14,17 +29,43 @@ const MAX_REPEAT_COUNT: usize = 1024;
 #[derive(Debug, Clone)]
 pub struct Grammar {
     pub rules: HashMap<String, Pattern>,
-    pub start: String,
+    /// Names of rules marked atomic with the `*name <- body` sigil. The
+    /// auto-insertion rewriter skips these rules: `Sequence` items inside
+    /// an atomic body don't get a synthesized `trivia` call spliced
+    /// between them. `*trivia <- …` (the auto-insertion target itself
+    /// being atomic) is the special case that disables auto-insertion
+    /// grammar-wide.
+    pub atomic_rules: HashSet<String>,
+    /// Source-order list of rule names. Populated by [`parse`]; hand-
+    /// built grammars from [`Grammar::new`] leave this empty (the
+    /// reserved-name position check in [`Grammar::compile`] short-
+    /// circuits when no order is recorded).
+    pub rule_order: Vec<String>,
 }
 
 impl Grammar {
     /// Construct a grammar from a hand-built rule map. Useful for
     /// tests that build `Pattern` trees directly without going
     /// through [`parse`].
-    pub fn new(rules: HashMap<String, Pattern>, start: impl Into<String>) -> Self {
+    ///
+    /// The start rule is always [`ROOT_RULE`]; the rule map must
+    /// contain a `"root"` entry. No rules are atomic.
+    pub fn new(rules: HashMap<String, Pattern>) -> Self {
         Grammar {
             rules,
-            start: start.into(),
+            atomic_rules: HashSet::new(),
+            rule_order: Vec::new(),
+        }
+    }
+
+    /// Construct a grammar with a pre-built atomic-rule set. Test-only
+    /// shortcut for exercising the `*name` sigil's behavior without
+    /// routing through grammar source.
+    pub fn with_atomic(rules: HashMap<String, Pattern>, atomic_rules: HashSet<String>) -> Self {
+        Grammar {
+            rules,
+            atomic_rules,
+            rule_order: Vec::new(),
         }
     }
 
@@ -41,18 +82,53 @@ impl Grammar {
     ///    `CompileError::PartialMatchLeniency`. Anchor real bugs with
     ///    `^^lbl B` (or `^^lbl`); mark intentional leniency with `~`
     ///    at the call site or `~name <- body` at the rule definition.
-    /// 3. Emit bytecode via `compile_rules`.
+    /// 3. Inject auto-trivia calls into every non-atomic rule's body
+    ///    (no-op when the grammar has no `trivia` rule or when
+    ///    `trivia` itself is atomic).
+    /// 4. Wrap `root`'s body with `trivia? body trivia? !.` (the
+    ///    `trivia?` calls are present iff auto-insertion is active).
+    /// 5. Emit bytecode via `compile_rules`.
+    ///
+    /// The lint and FOLLOW-driven boundary resolver see the author's
+    /// original body — auto-insertion and the `root` wrap run after
+    /// both, so synthesized `trivia` calls and the EOF assertion can't
+    /// confuse the lint walker or the FOLLOW set.
     pub fn compile(&self) -> Result<Program, CompileError> {
+        if !self.rules.contains_key(ROOT_RULE) {
+            return Err(CompileError::MissingRootRule);
+        }
+        // When the grammar was parsed from source, enforce that `root`
+        // sits at the start of the file (or immediately after `trivia`).
+        // Hand-built grammars from `Grammar::new` skip this — the
+        // ordered list is empty for them.
+        if !self.rule_order.is_empty() {
+            let has_trivia = self.rules.contains_key(TRIVIA_RULE);
+            let root_pos = self
+                .rule_order
+                .iter()
+                .position(|n| n == ROOT_RULE)
+                .expect("ROOT_RULE presence checked above");
+            let expected_pos = if has_trivia { 1 } else { 0 };
+            if root_pos != expected_pos {
+                return Err(CompileError::RootRulePosition {
+                    expected_pos,
+                    has_trivia,
+                });
+            }
+        }
         let mut resolved = Grammar {
             rules: self.rules.clone(),
-            start: self.start.clone(),
+            atomic_rules: self.atomic_rules.clone(),
+            rule_order: self.rule_order.clone(),
         };
         resolve_inferred_boundaries(&mut resolved)?;
         let findings = lint_partial_match(&resolved);
         if !findings.is_empty() {
             return Err(CompileError::PartialMatchLeniency(findings));
         }
-        compile_rules(&resolved.rules, &resolved.start)
+        inject_auto_trivia(&mut resolved);
+        wrap_root(&mut resolved);
+        compile_rules(&resolved.rules)
     }
 }
 
@@ -96,6 +172,7 @@ impl<'a> Parser<'a> {
     fn parse_grammar(&mut self) -> Result<Grammar, ParseError> {
         self.skip_ws();
         let mut rules = HashMap::new();
+        let mut atomic_rules: HashSet<String> = HashSet::new();
         let mut order = Vec::new();
         while self.pos < self.src.len() {
             // Definition-level lenient marker: `~name <- body` declares
@@ -104,10 +181,26 @@ impl<'a> Parser<'a> {
             // of `name`. The marker touches the name (no whitespace);
             // the rule's body is wrapped with `Pattern::Lenient` so the
             // lint walker sees the same shape as a per-call-site `~p`.
+            //
+            // The atomic marker `*name <- body` (sibling of `~`) opts
+            // the rule out of trivia auto-insertion: the rewriter walks
+            // the body but does not splice `trivia` between `Sequence`
+            // items. `*trivia <- …` is the special case that disables
+            // auto-insertion grammar-wide.
             let mut definition_lenient = false;
-            if self.peek() == Some(b'~') {
-                self.pos += 1;
-                definition_lenient = true;
+            let mut definition_atomic = false;
+            loop {
+                match self.peek() {
+                    Some(b'~') if !definition_lenient => {
+                        self.pos += 1;
+                        definition_lenient = true;
+                    }
+                    Some(b'*') if !definition_atomic => {
+                        self.pos += 1;
+                        definition_atomic = true;
+                    }
+                    _ => break,
+                }
             }
             let name = self.parse_ident()?;
             self.skip_ws();
@@ -116,6 +209,9 @@ impl<'a> Parser<'a> {
             let mut pat = self.parse_choice()?;
             if definition_lenient {
                 pat = Pattern::Lenient(Box::new(pat));
+            }
+            if definition_atomic {
+                atomic_rules.insert(name.clone());
             }
             if rules.insert(name.clone(), pat).is_some() {
                 return Err(self.err(format!("rule '{}' defined twice", name)));
@@ -126,8 +222,24 @@ impl<'a> Parser<'a> {
         if order.is_empty() {
             return Err(self.err("grammar has no rules".into()));
         }
-        let start = order[0].clone();
-        Ok(Grammar { rules, start })
+        // Reserved-name enforcement for `trivia`'s position is parse-
+        // time so the error points at the offending source location.
+        // `root`'s presence (and `root`'s position relative to
+        // `trivia`) is enforced by `Grammar::compile` — that lets
+        // AST-only parser tests build fixtures with arbitrary rule
+        // names without inventing a `root` placeholder.
+        if let Some(trivia_pos) = order.iter().position(|n| n == TRIVIA_RULE) {
+            if trivia_pos != 0 {
+                return Err(self.err(format!(
+                    "`{TRIVIA_RULE}` must be the first rule when present"
+                )));
+            }
+        }
+        Ok(Grammar {
+            rules,
+            atomic_rules,
+            rule_order: order,
+        })
     }
 
     fn parse_choice(&mut self) -> Result<Pattern, ParseError> {
@@ -504,21 +616,26 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse a backslash-letter atom. The eight one-letter escapes are
+    /// Parse a backslash-letter atom. The seven one-letter escapes are
     /// the regex-style character-class family:
     ///
     /// - `\d` / `\D`: `[0-9]` / its complement.
     /// - `\s` / `\S`: `[ \t\n\r]` / its complement.
     /// - `\h` / `\H`: `[ \t]` / its complement.
     /// - `\R`: ordered choice `'\r\n' / '\n' / '\r'` (CRLF atomic).
-    /// - `\z`: end of input — `!.`.
     ///
     /// ASCII-only and byte-oriented, matching the rest of the engine.
     /// These are *atom-level* escapes; they are not recognized inside
     /// string literals (`'\d'` keeps today's `unknown escape` error).
     /// The six byte-set escapes are *also* recognized inside `[...]`
-    /// by `parse_charclass`; `\R` and `\z` are rejected there with a
-    /// pointer back to this form.
+    /// by `parse_charclass`; `\R` is rejected there with a pointer
+    /// back to this form.
+    ///
+    /// `\z` was a former alias for `!.` (end-of-input). It is now
+    /// rejected with a migration error: the `root` rule's wrap supplies
+    /// the same end-of-input assertion automatically, and the rare
+    /// non-`root` site that genuinely needs `!.` can spell it
+    /// out (`!.` is still a valid atom).
     fn parse_backslash_atom(&mut self) -> Result<Pattern, ParseError> {
         debug_assert_eq!(self.peek(), Some(b'\\'));
         self.pos += 1;
@@ -537,10 +654,14 @@ impl<'a> Parser<'a> {
             }
             Some(b'z') => {
                 self.pos += 1;
-                Ok(Pattern::NotPredicate(Box::new(Pattern::AnyChar)))
+                Err(self.err(
+                    "`\\z` was removed; the `root` rule asserts end-of-input automatically. \
+                     Drop it, or use `!.` directly when an inner rule needs the assertion"
+                        .into(),
+                ))
             }
             Some(c) => Err(self.err(format!(
-                "unknown atom '\\{}' (valid: \\d \\D \\s \\S \\h \\H \\R \\z)",
+                "unknown atom '\\{}' (valid: \\d \\D \\s \\S \\h \\H \\R)",
                 c as char
             ))),
             None => Err(self.err("unterminated escape at top level".into())),

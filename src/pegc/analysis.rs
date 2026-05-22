@@ -377,7 +377,7 @@ pub fn compute_follow(grammar: &Grammar) -> HashMap<String, FollowSet> {
         .keys()
         .map(|n| (n.clone(), FollowSet::new()))
         .collect();
-    if let Some(entry) = follow.get_mut(&grammar.start) {
+    if let Some(entry) = follow.get_mut(super::parser::ROOT_RULE) {
         entry.insert(FollowElement::Eof);
     }
     loop {
@@ -778,13 +778,22 @@ fn leniency_reaches_unguarded(
     }
 
     if !visited_callers.insert(caller.to_string()) {
-        return true;
+        // Caller cycle: returning `true` here would treat a recursive
+        // self-call as a confirmed leak, but the same target_trailing
+        // is already being evaluated at the outer frame. Defer the
+        // verdict to that frame by returning `inside_catch` (same
+        // sentinel the root-rule short-circuit below uses). If the
+        // outer frame eventually concludes the leniency is contained,
+        // the cycle is too; if it concludes the leniency leaks via
+        // some non-cyclic caller, the iteration over other rules in
+        // the outer frame will catch that.
+        return inside_catch;
     }
 
     let mut rule_names: Vec<&String> = ctx.grammar.rules.keys().collect();
     rule_names.sort();
 
-    if caller == ctx.grammar.start && !target_trailing.contains(&FollowElement::Eof) {
+    if caller == super::parser::ROOT_RULE && !target_trailing.contains(&FollowElement::Eof) {
         visited_callers.remove(caller);
         return inside_catch;
     }
@@ -1373,4 +1382,124 @@ fn body_contains_catch(pat: &Pattern) -> bool {
         | Pattern::Capture(_, inner)
         | Pattern::Lenient(inner) => body_contains_catch(inner),
     }
+}
+
+/// True iff the grammar has an active auto-insertion target: a rule
+/// named `trivia` that isn't marked atomic. Both
+/// [`inject_auto_trivia`] and [`wrap_root`] consult this; on `false`
+/// they no-op (no inter-Sequence splicing, no `trivia?` siblings in the
+/// root wrap).
+fn auto_insertion_active(grammar: &Grammar) -> bool {
+    grammar.rules.contains_key(TRIVIA_ROOT_RULE)
+        && !grammar.atomic_rules.contains(TRIVIA_ROOT_RULE)
+}
+
+/// AST-level rewrite: in every non-atomic rule's body, splice a
+/// `NonTerminal("trivia")` call between consecutive items of every
+/// `Sequence`. Runs after `lint_partial_match` and the FOLLOW-driven
+/// `^^lbl` resolver so both still see the author's original body.
+///
+/// No-op when the grammar has no `trivia` rule, or when `trivia` itself
+/// is marked atomic (the `*trivia <- …` grammar-wide opt-out).
+///
+/// The walker descends transparently through every combinator (`Choice`,
+/// `Optional`, `Repeat`, `RepeatOne`, `Capture`, `Catch`, `Lenient`,
+/// `AndPredicate`, `NotPredicate`) but stops at `NonTerminal` and the
+/// atom leaves (`Literal`, `CharClass`, `AnyChar`). Crossing a
+/// `NonTerminal` would pull trivia into the callee's body — which the
+/// callee handles by its own auto-insertion if non-atomic, or
+/// explicitly if atomic.
+pub fn inject_auto_trivia(grammar: &mut Grammar) {
+    if !auto_insertion_active(grammar) {
+        return;
+    }
+    let atomic = grammar.atomic_rules.clone();
+    let rule_names: Vec<String> = grammar.rules.keys().cloned().collect();
+    for name in rule_names {
+        if atomic.contains(&name) {
+            continue;
+        }
+        if let Some(body) = grammar.rules.get_mut(&name) {
+            inject_trivia_in(body);
+        }
+    }
+}
+
+/// Walk one rule body, splicing `NonTerminal("trivia")` between every
+/// pair of consecutive `Sequence` items at every depth.
+fn inject_trivia_in(pat: &mut Pattern) {
+    match pat {
+        Pattern::Sequence(items) => {
+            for it in items.iter_mut() {
+                inject_trivia_in(it);
+            }
+            if items.len() >= 2 {
+                let mut spliced = Vec::with_capacity(items.len() * 2 - 1);
+                let drained: Vec<Pattern> = std::mem::take(items);
+                let last = drained.len() - 1;
+                for (i, it) in drained.into_iter().enumerate() {
+                    spliced.push(it);
+                    if i != last {
+                        spliced.push(trivia_call());
+                    }
+                }
+                *items = spliced;
+            }
+        }
+        Pattern::OrderedChoice(items) => {
+            for it in items {
+                inject_trivia_in(it);
+            }
+        }
+        Pattern::Repeat(inner)
+        | Pattern::RepeatOne(inner)
+        | Pattern::Optional(inner)
+        | Pattern::NotPredicate(inner)
+        | Pattern::AndPredicate(inner)
+        | Pattern::Capture(_, inner)
+        | Pattern::Lenient(inner) => inject_trivia_in(inner),
+        Pattern::Catch {
+            inner, recovery, ..
+        } => {
+            inject_trivia_in(inner);
+            inject_trivia_in(recovery);
+        }
+        Pattern::InferBoundaryCatch { inner, .. } => inject_trivia_in(inner),
+        Pattern::Literal(_)
+        | Pattern::CharClass(_)
+        | Pattern::AnyChar
+        | Pattern::NonTerminal(_) => {}
+    }
+}
+
+/// Wrap the start rule's body so it reads `trivia? body trivia? !.` —
+/// implicit leading/trailing trivia and end-of-input assertion. Built
+/// manually as a `Sequence` *after* [`inject_auto_trivia`] has run on
+/// `root`'s body, so the synthesized siblings here don't themselves
+/// pick up trivia injection.
+///
+/// `trivia?` is included iff auto-insertion is active. With no `trivia`
+/// rule (or with `*trivia`), the wrap collapses to `body !.` — still
+/// supplying the EOF assertion uniformly.
+pub fn wrap_root(grammar: &mut Grammar) {
+    let active = auto_insertion_active(grammar);
+    let Some(body) = grammar.rules.remove(super::parser::ROOT_RULE) else {
+        return;
+    };
+    let mut items: Vec<Pattern> = Vec::with_capacity(4);
+    if active {
+        items.push(Pattern::Optional(Box::new(trivia_call())));
+    }
+    items.push(body);
+    if active {
+        items.push(Pattern::Optional(Box::new(trivia_call())));
+    }
+    items.push(Pattern::NotPredicate(Box::new(Pattern::AnyChar)));
+    grammar
+        .rules
+        .insert(super::parser::ROOT_RULE.to_string(), Pattern::seq(items));
+}
+
+fn trivia_call() -> Pattern {
+    Pattern::NonTerminal(TRIVIA_ROOT_RULE.to_string())
 }

@@ -30,7 +30,9 @@
 # function/control-flow bodies resync at the closing `}` instead of
 # failing the enclosing statement.
 
-js_file        <- trivia (stmt trivia)*^ \z
+*trivia        <- (comment / \s)*
+
+root           <- trivia (stmt trivia)*^
 
 # --- Statements -------------------------------------------------------
 #
@@ -370,5 +372,3 @@ reserved_word  <- 'break' / 'case' / 'catch' / 'class' / 'const' / 'continue'
 # --- Whitespace / comments --------------------------------------------
 
 comment        <- @comment{'//' .. '\n' / '/*' ..= '*/'}
-
-trivia         <- (comment / \s)*

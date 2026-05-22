@@ -30,7 +30,9 @@
 # `^block_close` catch so malformed function bodies resync at the
 # closing `}` instead of failing the enclosing `fn_def`.
 
-c_file        <- trivia (external_decl)*^ trivia \z
+*trivia       <- (comment / \s)*
+
+root          <- trivia (external_decl)*^ trivia
 
 # --- Preprocessor directives (absorbed as @comment) ------------------
 
@@ -308,5 +310,3 @@ reserved_word <- 'auto' / 'break' / 'case' / 'char' / 'const' / 'continue'
 # --- Whitespace / comments ------------------------------------------
 
 comment       <- @comment{'//' .. '\n' / '/*' ..= '*/'}
-
-trivia        <- (comment / \s)*

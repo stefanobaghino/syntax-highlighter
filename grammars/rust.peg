@@ -25,7 +25,9 @@
 # malformed bodies (fn, match arm, etc.) resync at the closing `}`
 # instead of failing the enclosing item.
 
-rust_file     <- trivia (item)*^ trivia \z
+*trivia       <- (comment / \s)*
+
+root          <- trivia (item)*^ trivia
 
 # --- Items -------------------------------------------------------------
 #
@@ -471,5 +473,3 @@ ident_body    <- [A-Za-z\d_]
 # Non-nested block comment. Real Rust allows nesting; for highlighting
 # the occasional mismatch is acceptable and keeps the grammar simpler.
 comment       <- @comment{'//' .. '\n' / '/*' ..= '*/'}
-
-trivia        <- (comment / \s)*

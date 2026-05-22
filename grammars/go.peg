@@ -25,7 +25,9 @@
 # malformed function/control-flow bodies resync at the closing `}`
 # instead of failing the enclosing declaration.
 
-go_file       <- trivia package_clause trivia (import_decl trivia)* (top_decl trivia)*^ \z
+*trivia       <- (comment / \s)*
+
+root          <- trivia package_clause trivia (import_decl trivia)* (top_decl trivia)*^
 
 # --- Package / imports ----------------------------------------------
 
@@ -386,5 +388,3 @@ predeclared_fn <- ('append' / 'cap' / 'close' / 'complex' / 'copy'
 ~opt_semi     <- (@punctuation{';'} trivia)?
 
 comment       <- @comment{'//' .. '\n' / '/*' ..= '*/'}
-
-trivia        <- (comment / \s)*

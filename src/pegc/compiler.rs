@@ -7,7 +7,19 @@ use crate::pegvm::{CaptureKind, Instruction, Label, LabelId, MemoId, Program, Ru
 #[derive(Debug)]
 pub enum CompileError {
     UndefinedRule(String),
-    UnknownStartRule(String),
+    /// Grammar (whether parsed from source or hand-built via
+    /// `Grammar::new`) doesn't define the reserved `root` rule. The
+    /// parser also raises this — surfaced here too because hand-built
+    /// grammars in tests bypass the parser.
+    MissingRootRule,
+    /// Grammar defines `root` but not at the expected source position.
+    /// `expected_pos` is `0` when no `trivia` rule is present, `1` when
+    /// `trivia` is the first rule. Only raised for parsed grammars
+    /// (hand-built ones have no recorded source order).
+    RootRulePosition {
+        expected_pos: usize,
+        has_trivia: bool,
+    },
     /// One or more `^^lbl` catches have no following context to infer
     /// their boundary from. Emitted by `resolve_inferred_boundaries`.
     CannotInferBoundary {
@@ -26,7 +38,26 @@ impl std::fmt::Display for CompileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CompileError::UndefinedRule(name) => write!(f, "undefined rule: {}", name),
-            CompileError::UnknownStartRule(name) => write!(f, "unknown start rule: {}", name),
+            CompileError::MissingRootRule => write!(
+                f,
+                "grammar must define a `root` rule (the entry point)"
+            ),
+            CompileError::RootRulePosition {
+                expected_pos: _,
+                has_trivia,
+            } => {
+                if *has_trivia {
+                    write!(
+                        f,
+                        "`root` must immediately follow `trivia` when both are defined"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "`root` must be the first rule when no `trivia` rule is defined"
+                    )
+                }
+            }
             CompileError::CannotInferBoundary { rule, label } => write!(
                 f,
                 "cannot infer boundary for `^^{label}` in rule `{rule}`: no following context. \
@@ -318,17 +349,20 @@ pub fn compile_pattern(pat: &Pattern) -> Program {
 /// reach this via [`Grammar::compile`](super::Grammar::compile) or
 /// the one-step [`super::compile`].
 ///
+/// The start rule is always [`ROOT_RULE`](super::parser::ROOT_RULE);
+/// `Grammar::compile` checks for its presence up front and wraps its
+/// body via [`super::analysis::wrap_root`] before this is called.
+///
 /// Code layout:
-///   0: Call(<start address>)
+///   0: Call(<root address>)
 ///   1: End
 ///   2..: rule bodies, each ending with Return
-pub(crate) fn compile_rules(
-    rules: &HashMap<String, Pattern>,
-    start: &str,
-) -> Result<Program, CompileError> {
-    if !rules.contains_key(start) {
-        return Err(CompileError::UnknownStartRule(start.to_string()));
-    }
+pub(crate) fn compile_rules(rules: &HashMap<String, Pattern>) -> Result<Program, CompileError> {
+    let start = super::parser::ROOT_RULE;
+    debug_assert!(
+        rules.contains_key(start),
+        "compile_rules: `root` rule must be present (Grammar::compile enforces this)"
+    );
 
     // Detect undefined NonTerminal references up front so the LR analysis
     // doesn't have to defend against missing rules in the call graph.

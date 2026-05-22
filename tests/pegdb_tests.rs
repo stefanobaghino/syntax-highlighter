@@ -620,7 +620,7 @@ fn recoveries_explain_uses_author_supplied_recovery_label() {
         "pegdb_recoveries_explain_label_{}.peg",
         std::process::id()
     ));
-    let grammar = b"doc <- 'x'*^:bad_doc\n";
+    let grammar = b"root <- 'x'*^:bad_doc\n";
     let mut f = std::fs::File::create(&path).expect("create temp grammar");
     f.write_all(grammar).expect("write temp grammar");
     drop(f);

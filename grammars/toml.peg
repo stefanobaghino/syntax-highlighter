@@ -15,7 +15,11 @@
 #     kind; revisit when a theme-file is introduced.
 #   - inf / nan are @constant (like true/false), not @number.
 
-toml          <- trivia (entry (entry_sep entry)*)? trivia \z
+# Vertical whitespace: spaces/tabs/newlines plus comments. Each atom
+# consumes at least one byte, so the enclosing '*' cannot infinite-loop.
+*trivia       <- (comment / \s)*
+
+root          <- trivia (entry (entry_sep entry)*)? trivia
 
 entry         <- array_of_tables_header / table_header / pair
 entry_sep     <- inline_space comment? \R trivia
@@ -97,7 +101,3 @@ inline_pair   <- key inline_space @punctuation{'='} inline_space value
 # --- Whitespace & comments --------------------------------------------
 inline_space  <- \h*
 comment       <- @comment{'#' .. \R}
-
-# Vertical whitespace: spaces/tabs/newlines plus comments. Each atom
-# consumes at least one byte, so the enclosing '*' cannot infinite-loop.
-trivia        <- (comment / \s)*

@@ -32,7 +32,7 @@ fn two_rule_grammar() -> syntax_highlighter::pegvm::Program {
     // the mechanism regardless.
     let mut rules = HashMap::new();
     rules.insert(
-        "start".into(),
+        "root".into(),
         Pattern::seq(vec![
             Pattern::NonTerminal("word".into()),
             Pattern::literal(" "),
@@ -45,7 +45,7 @@ fn two_rule_grammar() -> syntax_highlighter::pegvm::Program {
             b'a', b'z',
         )])))),
     );
-    Grammar::new(rules, "start").compile().unwrap()
+    Grammar::new(rules).compile().unwrap()
 }
 
 #[test]
@@ -116,7 +116,7 @@ fn lr_cache_entry_invalidated_by_edit_inside_examined_range() {
     // seed-and-grow loop looked at.
     use syntax_highlighter::pegc;
     use syntax_highlighter::pegvm::Edit;
-    let prog = pegc::compile("expr <- expr '+' [0-9]+ / [0-9]+").unwrap();
+    let prog = pegc::compile("root <- expr\n        expr <- expr '+' [0-9]+ / [0-9]+").unwrap();
 
     let (_, _, mut cache) = VM::new(&prog.code, b"1+2+3")
         .with_memo_threshold(0)
@@ -149,7 +149,7 @@ fn lr_cache_round_trip_after_edit_matches_fresh_parse() {
     // gives an equivalent fresh-parse result on every edit).
     use syntax_highlighter::pegc;
     use syntax_highlighter::pegvm::Edit;
-    let prog = pegc::compile("expr <- expr '+' [0-9]+ / [0-9]+").unwrap();
+    let prog = pegc::compile("root <- expr\n        expr <- expr '+' [0-9]+ / [0-9]+").unwrap();
 
     let (_, _, mut cache) = VM::new(&prog.code, b"1+2+3")
         .with_memo_threshold(0)

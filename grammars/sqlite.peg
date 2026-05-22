@@ -54,7 +54,9 @@
 
 # --- Top level --------------------------------------------------------
 
-sql_file   <- (trivia statement stmt_sep?)*^[;] trivia \z
+*trivia    <- (comment / \s)*
+
+root       <- (trivia statement stmt_sep?)*^[;] trivia
 stmt_sep   <- trivia @punctuation{';'} trivia
 statement       <- explain_stmt / statement_body
 statement_body  <- select_stmt
@@ -111,7 +113,7 @@ result_column_boundary <- @punctuation{','} / @punctuation{')'} / @punctuation{'
                         / kw_from / kw_where / kw_group / kw_having
                         / kw_order / kw_limit / kw_offset / kw_window
                         / kw_union / kw_intersect / kw_except
-                        / \z
+                        / !.
 table_star     <- @type{bare_ident_nonkw} @punctuation{'.'} @operator{'*'}
 aliased_expr   <- expr (trivia kw_as trivia @variable{bare_ident_nonkw}
                       / trivia @variable{bare_ident_nonkw})?
@@ -152,7 +154,7 @@ where_clause_boundary <- @punctuation{')'} / @punctuation{';'}
                        / kw_group / kw_having / kw_order / kw_limit
                        / kw_offset / kw_window / kw_returning
                        / kw_union / kw_intersect / kw_except
-                       / \z
+                       / !.
 group_clause   <- kw_group trivia kw_by trivia expr (trivia @punctuation{','} trivia expr)*
 having_clause  <- kw_having trivia expr
 
@@ -996,5 +998,3 @@ keyword_word <-
 # --- Whitespace & comments -------------------------------------------
 
 comment       <- @comment{'--' .. \R / '/*' ..= '*/'}
-
-trivia        <- (comment / \s)*
