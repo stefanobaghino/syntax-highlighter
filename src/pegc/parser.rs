@@ -5,6 +5,12 @@ use super::compiler::{compile_rules, CompileError};
 use super::pattern::Pattern;
 use crate::pegvm::{CharSet, Program};
 
+/// Cap for the `p{n}` exact-count quantifier. Conservative typo guard:
+/// the largest plausible corpus site is `hex{8}`. Above this the parser
+/// rejects with a clear error instead of expanding a malformed grammar
+/// into a pathologically large bytecode block.
+const MAX_REPEAT_COUNT: usize = 1024;
+
 #[derive(Debug, Clone)]
 pub struct Grammar {
     pub rules: HashMap<String, Pattern>,
@@ -362,10 +368,54 @@ impl<'a> Parser<'a> {
                     self.pos += 1;
                     atom = Pattern::Optional(Box::new(atom));
                 }
+                Some(b'{') => {
+                    self.pos += 1;
+                    let n = self.parse_repeat_count()?;
+                    self.expect(b'}')?;
+                    atom = Pattern::seq(vec![atom; n]);
+                }
                 _ => break,
             }
         }
         Ok(atom)
+    }
+
+    /// Parse the body of an exact-count quantifier `{n}`. The opening
+    /// `{` has already been consumed; this reads decimal digits, checks
+    /// `1 ≤ n ≤ MAX_REPEAT_COUNT`, and leaves the cursor at the byte
+    /// following the digits (the closing `}` is consumed by the caller).
+    /// The cap is a typo guard — the largest plausible site in the
+    /// shipped corpus is `hex{8}`.
+    fn parse_repeat_count(&mut self) -> Result<usize, ParseError> {
+        let start = self.pos;
+        while let Some(c) = self.peek() {
+            if c.is_ascii_digit() {
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+        if self.pos == start {
+            return Err(self.err("expected positive integer in `{n}`".into()));
+        }
+        let digits =
+            std::str::from_utf8(&self.src[start..self.pos]).expect("ASCII digits are valid UTF-8");
+        let n: usize = digits.parse().map_err(|_| {
+            self.err(format!(
+                "repeat count `{}` exceeds maximum {}",
+                digits, MAX_REPEAT_COUNT
+            ))
+        })?;
+        if n == 0 {
+            return Err(self.err("repeat count must be positive (got `{0}`)".into()));
+        }
+        if n > MAX_REPEAT_COUNT {
+            return Err(self.err(format!(
+                "repeat count {} exceeds maximum {}",
+                n, MAX_REPEAT_COUNT
+            )));
+        }
+        Ok(n)
     }
 
     /// If the byte following `*^` / `+^` is `[`, parse a delimiter set

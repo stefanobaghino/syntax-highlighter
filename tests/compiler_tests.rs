@@ -2003,6 +2003,24 @@ fn backslash_z_matches_eof() {
 }
 
 #[test]
+fn repeat_count_matches_exact_length() {
+    // End-to-end smoke for `p{n}` — verifies the parse-time desugaring
+    // produces the same VM behavior as four hand-written `\d`s.
+    let g = parse("r <- \\d{4} \\z").expect("parse");
+    let prog = g.compile().expect("compile");
+
+    let r = VM::new(&prog.code, b"1234").run();
+    assert!(r.complete, "\\d{{4}} \\z should match exactly four digits");
+    assert_eq!(r.matched, 4);
+
+    let r = VM::new(&prog.code, b"123").run();
+    assert!(!r.complete, "\\d{{4}} should fail on three digits");
+
+    let r = VM::new(&prog.code, b"12345").run();
+    assert!(!r.complete, "\\z should fail when a fifth byte remains");
+}
+
+#[test]
 fn all_shipped_grammars_compile_clean() {
     // Load-bearing: every grammar in `grammars/*.peg` must compile
     // cleanly via `pegc::compile`. Re-introducing partial-match
