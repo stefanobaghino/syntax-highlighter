@@ -1,16 +1,35 @@
 use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
 
 use syntax_highlighter::pegc;
 use syntax_highlighter::pegvm::{Capture, Program, VM};
 
 const C_GRAMMAR: &str = include_str!("../grammars/c.peg");
 
-fn compile_c() -> Program {
-    pegc::compile(C_GRAMMAR).expect("C grammar should compile")
+// Compile the grammar exactly once per test process. The init lock's
+// poisoning is what concentrates a broken-grammar failure into one
+// informative panic plus N-1 trivial "previously failed" panics across
+// the rest of the file's tests.
+static C_PROGRAM: OnceLock<Program> = OnceLock::new();
+static C_INIT: Mutex<()> = Mutex::new(());
+
+fn c_program() -> &'static Program {
+    if let Some(p) = C_PROGRAM.get() {
+        return p;
+    }
+    let _guard = C_INIT
+        .lock()
+        .expect("C grammar compile previously failed; see the first failure");
+    C_PROGRAM.get_or_init(|| pegc::compile(C_GRAMMAR).expect("C grammar should compile"))
+}
+
+#[test]
+fn grammar_compiles() {
+    let _ = c_program();
 }
 
 fn run(input: &str) -> (usize, Vec<Capture>, Vec<String>, bool) {
-    let prog = compile_c();
+    let prog = c_program();
     let r = VM::new(&prog.code, input.as_bytes()).run();
     (
         r.matched,
@@ -41,14 +60,14 @@ fn kinds_for<'a>(captures: &[Capture], kinds: &'a [String]) -> Vec<&'a str> {
 
 #[test]
 fn grammar_parses_and_compiles() {
-    let prog = compile_c();
+    let prog = c_program();
     assert!(!prog.code.is_empty());
     assert!(!prog.capture_kinds.is_empty());
 }
 
 #[test]
 fn capture_kinds_stay_in_theme_vocabulary() {
-    let prog = compile_c();
+    let prog = c_program();
     let allowed: HashSet<&str> = [
         "keyword",
         "string",

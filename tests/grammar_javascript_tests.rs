@@ -1,16 +1,35 @@
 use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
 
 use syntax_highlighter::pegc;
 use syntax_highlighter::pegvm::{Capture, Program, VM};
 
 const JS_GRAMMAR: &str = include_str!("../grammars/javascript.peg");
 
-fn compile_js() -> Program {
-    pegc::compile(JS_GRAMMAR).expect("JavaScript grammar should compile")
+// Compile the grammar exactly once per test process. The init lock's
+// poisoning is what concentrates a broken-grammar failure into one
+// informative panic plus N-1 trivial "previously failed" panics across
+// the rest of the file's tests.
+static JS_PROGRAM: OnceLock<Program> = OnceLock::new();
+static JS_INIT: Mutex<()> = Mutex::new(());
+
+fn js_program() -> &'static Program {
+    if let Some(p) = JS_PROGRAM.get() {
+        return p;
+    }
+    let _guard = JS_INIT
+        .lock()
+        .expect("JavaScript grammar compile previously failed; see the first failure");
+    JS_PROGRAM.get_or_init(|| pegc::compile(JS_GRAMMAR).expect("JavaScript grammar should compile"))
+}
+
+#[test]
+fn grammar_compiles() {
+    let _ = js_program();
 }
 
 fn run(input: &str) -> (usize, Vec<Capture>, Vec<String>, bool) {
-    let prog = compile_js();
+    let prog = js_program();
     let r = VM::new(&prog.code, input.as_bytes()).run();
     (
         r.matched,
@@ -49,14 +68,14 @@ fn kind_spans(captures: &[Capture], kinds: &[String], kind: &str) -> Vec<String>
 
 #[test]
 fn grammar_parses_and_compiles() {
-    let prog = compile_js();
+    let prog = js_program();
     assert!(!prog.code.is_empty());
     assert!(!prog.capture_kinds.is_empty());
 }
 
 #[test]
 fn capture_kinds_stay_in_theme_vocabulary() {
-    let prog = compile_js();
+    let prog = js_program();
     let allowed: HashSet<&str> = [
         "keyword",
         "string",

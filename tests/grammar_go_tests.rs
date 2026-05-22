@@ -1,16 +1,35 @@
 use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
 
 use syntax_highlighter::pegc;
 use syntax_highlighter::pegvm::{Capture, Program, VM};
 
 const GO_GRAMMAR: &str = include_str!("../grammars/go.peg");
 
-fn compile_go() -> Program {
-    pegc::compile(GO_GRAMMAR).expect("Go grammar should compile")
+// Compile the grammar exactly once per test process. The init lock's
+// poisoning is what concentrates a broken-grammar failure into one
+// informative panic plus N-1 trivial "previously failed" panics across
+// the rest of the file's tests.
+static GO_PROGRAM: OnceLock<Program> = OnceLock::new();
+static GO_INIT: Mutex<()> = Mutex::new(());
+
+fn go_program() -> &'static Program {
+    if let Some(p) = GO_PROGRAM.get() {
+        return p;
+    }
+    let _guard = GO_INIT
+        .lock()
+        .expect("Go grammar compile previously failed; see the first failure");
+    GO_PROGRAM.get_or_init(|| pegc::compile(GO_GRAMMAR).expect("Go grammar should compile"))
+}
+
+#[test]
+fn grammar_compiles() {
+    let _ = go_program();
 }
 
 fn run(input: &str) -> (usize, Vec<Capture>, Vec<String>, bool) {
-    let prog = compile_go();
+    let prog = go_program();
     let r = VM::new(&prog.code, input.as_bytes()).run();
     (
         r.matched,
@@ -57,14 +76,14 @@ fn non_ws_recovery_literals<'a>(
 
 #[test]
 fn grammar_parses_and_compiles() {
-    let prog = compile_go();
+    let prog = go_program();
     assert!(!prog.code.is_empty());
     assert!(!prog.capture_kinds.is_empty());
 }
 
 #[test]
 fn capture_kinds_stay_in_theme_vocabulary() {
-    let prog = compile_go();
+    let prog = go_program();
     let allowed: HashSet<&str> = [
         "keyword",
         "string",
