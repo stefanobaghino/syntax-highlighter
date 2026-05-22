@@ -550,7 +550,7 @@ ident_char        <- [a-zA-Z0-9_]
 
 double_quoted_id  <- '"' ('""' / !'"' !linebreak .)* '"'
 backtick_id       <- '`' ('``' / !'`' !linebreak .)* '`'
-bracket_id        <- '[' (!']' !linebreak .)* ']'
+bracket_id        <- '[' .. (']' / linebreak) ']'
 
 # --- Keywords (case-insensitive) --------------------------------------
 # Per-letter character classes give case-insensitive matching without
@@ -999,7 +999,7 @@ trivia        <- ws
 
 ws            <- (comment / [ \t\n\r])*
 comment       <- line_comment / block_comment
-line_comment  <- @comment{'--' (!linebreak .)*}
+line_comment  <- @comment{'--' .. linebreak}
 block_comment <- @comment{'/*' block_body '*/'}
-block_body    <- (!'*/' .)*
+block_body    <- .. '*/'
 linebreak     <- '\r'? '\n'

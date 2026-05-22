@@ -315,8 +315,8 @@ reserved_word <- 'auto' / 'break' / 'case' / 'char' / 'const' / 'continue'
 # --- Whitespace / comments ------------------------------------------
 
 comment       <- @comment{line_comment / block_comment}
-line_comment  <- '//' (!'\n' .)*
-block_comment <- '/*' (!'*/' .)* '*/'
+line_comment  <- '//' .. '\n'
+block_comment <- '/*' ..= '*/'
 
 trivia        <- ws
 

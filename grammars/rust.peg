@@ -52,7 +52,7 @@ item          <- attr_outer
 # Attributes and doc-comments at item position.
 attr_outer    <- @punctuation{'#'} @punctuation{'['} attr_body @punctuation{']'} ws
 attr_inner    <- @punctuation{'#'} @punctuation{'!'} @punctuation{'['} attr_body @punctuation{']'} ws
-attr_body     <- (!']' .)*
+attr_body     <- .. ']'
 
 # `use foo::bar::{baz, qux as q};`
 use_item      <- @keyword{'use'} ws use_tree ws @punctuation{';'} ws
@@ -437,7 +437,7 @@ raw_string    <- 'r' raw_hashes '"' raw_body_0 '"' raw_hashes
 # Keeping this simple: require the closing `"#*` to match the opening.
 # We approximate by supporting 0..=8 hashes explicitly.
 raw_hashes    <- '########' / '#######' / '######' / '#####' / '####' / '###' / '##' / '#' / ''
-raw_body_0    <- (!'"' .)*
+raw_body_0    <- .. '"'
 
 char_lit      <- @string{"'" (char_escape / !"'" .) "'"}
 char_escape   <- '\\' (!'\n' .)
@@ -473,10 +473,10 @@ ident_body    <- [A-Za-z0-9_]
 # --- Whitespace and comments ------------------------------------------
 
 comment       <- @comment{line_comment / block_comment}
-line_comment  <- '//' (!'\n' .)*
+line_comment  <- '//' .. '\n'
 # Non-nested block comment. Real Rust allows nesting; for highlighting
 # the occasional mismatch is acceptable and keeps the grammar simpler.
-block_comment <- '/*' (!'*/' .)* '*/'
+block_comment <- '/*' ..= '*/'
 
 trivia        <- ws
 

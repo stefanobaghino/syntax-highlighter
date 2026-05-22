@@ -63,13 +63,13 @@ basic_char    <- !["\\\n\r] .
 escape        <- '\\' (["\\bfnrt] / 'u' hex hex hex hex / 'U' hex hex hex hex hex hex hex hex)
 
 basic_multiline <- '"""' multiline_basic_body '"""'
-multiline_basic_body <- (!'"""' .)*
+multiline_basic_body <- .. '"""'
 
 literal_string  <- "'" literal_char* "'"
 literal_char    <- !['\n\r] .
 
 literal_multiline <- "'''" multiline_literal_body "'''"
-multiline_literal_body <- (!"'''" .)*
+multiline_literal_body <- .. "'''"
 
 # --- Numbers -----------------------------------------------------------
 integer       <- @number{int_body}
@@ -113,7 +113,7 @@ inline_pair   <- key inline_space @punctuation{'='} inline_space value
 # --- Whitespace & comments --------------------------------------------
 inline_space  <- [ \t]*
 linebreak     <- '\r'? '\n'
-comment       <- @comment{'#' (!linebreak .)*}
+comment       <- @comment{'#' .. linebreak}
 
 # Vertical whitespace: spaces/tabs/newlines plus comments. Each atom
 # consumes at least one byte, so the enclosing '*' cannot infinite-loop.
