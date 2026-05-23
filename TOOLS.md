@@ -101,6 +101,8 @@ every rule appears, including unreferenced ones):
 | `references` | Total occurrences of `<rule>` as a `NonTerminal` across every rule's body.   |
 | `body_chars` | Source character count of the rule's body (after `<-`), trimmed.             |
 
+`references` counts **author-written** `NonTerminal` calls in rule bodies. The auto-injected `trivia` calls produced by `src/pegc/analysis.rs::inject_auto_trivia` are not counted, so the reserved `trivia` rule typically reports `references: 0` even though it is the most-invoked rule at runtime. Use the count to find dead or single-use rules in *authored* grammar source; do not read it as runtime call frequency.
+
 **Stdin:** not accepted — `stats` always takes a `<grammar.peg>` path.
 
 **Exit codes:** 0 success, 2 usage error, 3 grammar-compile error.
