@@ -70,9 +70,8 @@ use_seg       <- @keyword{'self'}
                / @variable{lower_ident}
 
 # `fn name<T>(a: T) -> T where T: Bound { ... }`
-fn_item       <- vis? fn_qualifiers @keyword{'fn'} @function{ident} generic_params?
+fn_item       <- vis? fn_qualifier* @keyword{'fn'} @function{ident} generic_params?
                  fn_params fn_return? where_clause? (block / @punctuation{';'})
-fn_qualifiers <- fn_qualifier*
 fn_qualifier  <- @keyword{'const'}
                / @keyword{'async'}
                / @keyword{'unsafe'}
@@ -393,8 +392,7 @@ struct_init_base   <- @punctuation{'..'} expr
 
 # --- Statements & blocks ----------------------------------------------
 
-block         <- @punctuation{'{'} (block_body @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
-block_body    <- stmt*
+block         <- @punctuation{'{'} (stmt* @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
 
 stmt          <- let_stmt
                / expr @punctuation{';'}

@@ -267,8 +267,7 @@ call_ident    <- @function{ident} &(@punctuation{'('})
 
 # --- Literals --------------------------------------------------------
 
-string_lit    <- @string{string_pieces}
-string_pieces <- string_piece+
+string_lit    <- @string{string_piece+}
 *string_piece <- ('L' / 'u8' / 'u' / 'U')? '"' ('\\' . / !'"' !'\n' .)* '"'
 
 char_lit      <- @string{char_body}
