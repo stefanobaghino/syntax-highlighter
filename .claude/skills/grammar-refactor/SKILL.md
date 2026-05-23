@@ -1,17 +1,11 @@
 ---
 name: grammar-refactor
-description: Audit the eight shipped grammars (`grammars/*.peg`) for inlining and dead-code cleanup opportunities, in the spirit of PRs #123 and #136. Use when the user wants to sweep grammars for thin aliases, single-use rules, name-longer-than-body rules, character-class re-aliases, or duplicate-body rules. The skill *surfaces and classifies* candidates — apply step is a separate human/agent decision, because the keep-or-inline call is judgment-heavy.
+description: Audit the shipped grammars (`grammars/*.peg`) for inlining and dead-code cleanup opportunities, in the spirit of PRs #123 and #136. Surfaces and classifies candidates — thin aliases, single-use rules, name-longer-than-body rules, character-class re-aliases, duplicate-body rules — without applying changes, because the keep-or-inline call is judgment-heavy. Invoke explicitly.
 ---
 
 # grammar-refactor
 
-A periodic cleanup sweep over `grammars/*.peg`. Each sweep tends to harvest a small, finite number of trivial-alias / thin-wrapper rules and then runs dry until the grammars accumulate more boilerplate. PRs #123 (the big sweep) and #136 (the small follow-up) are the reference shape.
-
-## When to run
-
-- After landing several grammar PRs that introduced new helper rules.
-- When the user explicitly asks to "clean up grammars", "refactor grammars", "find unused rules", "inline thin aliases", or anything in that neighbourhood.
-- As a periodic hygiene check — but expect diminishing returns: a sweep that finds zero candidates is a normal outcome.
+A periodic cleanup sweep over `grammars/*.peg`. Each sweep tends to harvest a small, finite number of trivial-alias / thin-wrapper rules and then runs dry until the grammars accumulate more boilerplate. PRs #123 (the big sweep) and #136 (the small follow-up) are the reference shape. A sweep that finds zero candidates is a normal outcome.
 
 ## What it does NOT do
 
