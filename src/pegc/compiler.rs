@@ -91,6 +91,7 @@ struct Compiler {
     label_kinds: HashMap<String, LabelId>,
     label_names: Vec<String>,
     char_sets: Vec<crate::pegvm::CharSet>,
+    char_set_dedup: HashMap<crate::pegvm::CharSet, crate::pegvm::SetId>,
 }
 
 impl Compiler {
@@ -103,19 +104,24 @@ impl Compiler {
             label_kinds: HashMap::new(),
             label_names: Vec::new(),
             char_sets: Vec::new(),
+            char_set_dedup: HashMap::new(),
         }
     }
 
-    /// Intern a character set. Returns a fresh `SetId` referring to
-    /// the new entry in `char_sets`. Sets are not deduped at the
-    /// compiler level — the same `CharSet` constructed twice would
-    /// yield two entries. Deduplication is cheap to add later if it
-    /// shows up in `pegc stats`.
+    /// Intern a character set. Identical sets share one entry in
+    /// `char_sets` and one `SetId`; this matters for grammars that
+    /// inline the same character class at many sites (e.g. the
+    /// ASCII-letter `{lower, upper}` pairs that show up in every
+    /// `i"…"` literal across the SQL keywords).
     fn intern_char_set(&mut self, set: crate::pegvm::CharSet) -> crate::pegvm::SetId {
+        if let Some(&id) = self.char_set_dedup.get(&set) {
+            return id;
+        }
         let id = crate::pegvm::SetId(
             u16::try_from(self.char_sets.len()).expect("char_sets count exceeds u16::MAX"),
         );
-        self.char_sets.push(set);
+        self.char_sets.push(set.clone());
+        self.char_set_dedup.insert(set, id);
         id
     }
 
