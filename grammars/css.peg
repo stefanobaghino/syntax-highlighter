@@ -131,8 +131,21 @@ string_lit    <- @string{dq_string / sq_string}
 
 # --- Identifiers ----------------------------------------------------
 
-*ident        <- [A-Za-z_\-] ident_body*
-ident_body    <- [A-Za-z\d_\-]
+# Per CSS Syntax Module L3 §4.6: ident-start = letter | _ | non-ASCII
+# code point (≥ U+0080) | css_escape; ident code point = ident-start |
+# digit | -. The escape is `\` followed by 1-6 hex digits and an
+# optional trailing whitespace (consumed by the escape, not the ident).
+*ident        <- (ident_start_char / css_escape) (ident_body_char / css_escape)*
+ident_start_char <- [A-Za-z_\-\u{80}-\u{10FFFF}]
+ident_body_char  <- [A-Za-z\d_\-\u{80}-\u{10FFFF}]
+ident_body    <- ident_body_char / css_escape
+# Per CSS Syntax Module L3 §4.6 an escape is `\\` followed by either
+# 1-6 hex digits (plus optional trailing whitespace) or any non-newline
+# code point. The broader "any non-newline byte" form covers both
+# cases for highlighter purposes; encoding the hex-digit-count
+# refinement separately would force a partial-match call site that
+# trips the lint.
+*css_escape   <- '\\' !\R .
 
 # --- Whitespace / comments -----------------------------------------
 #

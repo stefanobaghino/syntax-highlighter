@@ -463,10 +463,21 @@ number_lit    <- @number{num_body}
 # of special meaning for highlighting.
 ident_any     <- @type{upper_ident}
                / @variable{lower_ident}
+# Per Rust Reference "Identifiers": XID_Start (or `_`) followed by
+# XID_Continue per UAX #31. `r#` raw-identifier prefix admits keywords
+# as identifiers. `_` is XID_Continue but not XID_Start, so the start
+# alternation keeps it explicit.
+#
+# `upper_ident` / `lower_ident` keep their ASCII-only start because
+# they encode a case-based naming convention used by the highlighter to
+# colour-by-shape (PascalCase → type, snake_case → variable). Admitting
+# non-ASCII letters into both ranges would collapse that distinction.
+# Stage 2 widens the body but leaves the shape gate ASCII; future work
+# can refine the upper/lower split using `\p{Lu}` / `\p{Ll}` if needed.
 *upper_ident  <- 'r#'? [A-Z] ident_body*
 *lower_ident  <- 'r#'? [a-z_] ident_body*
-*ident        <- 'r#'? [A-Za-z_] ident_body*
-ident_body    <- [A-Za-z\d_]
+*ident        <- 'r#'? [\p{XID_Start}_] ident_body*
+ident_body    <- [\p{XID_Continue}]
 
 # --- Whitespace and comments ------------------------------------------
 

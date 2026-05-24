@@ -439,3 +439,22 @@ fn operator_longest_match_disambiguates_lr_cascade() {
         assert!(k.contains(&"operator"), "expected operators in {:?}", input);
     }
 }
+
+// --- Stage 2 UTF-8 tests ----------------------------------------------
+
+#[test]
+fn non_ascii_identifier_let_binding() {
+    // Per Rust Reference: identifier = XID_Start (or `_`)
+    // XID_Continue*. Non-ASCII letters / digits permitted.
+    let input = "fn f() { let mañana = 1; }\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let var_spans: Vec<&str> = caps
+        .iter()
+        .filter(|c| kinds[c.kind.0 as usize] == "variable")
+        .map(|c| &input[c.start..c.end])
+        .collect();
+    assert!(
+        var_spans.contains(&"mañana"),
+        "expected non-ASCII identifier `mañana` as variable; got {var_spans:?}"
+    );
+}

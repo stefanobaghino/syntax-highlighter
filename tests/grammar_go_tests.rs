@@ -354,3 +354,22 @@ fn blank_lines_between_top_decls_emit_no_recovery() {
         k
     );
 }
+
+// --- Stage 2 UTF-8 tests ----------------------------------------------
+
+#[test]
+fn non_ascii_identifier_in_short_var_decl() {
+    // Per Go spec "Identifiers": letter = unicode_letter | "_"; both
+    // start and continuation admit code points classified as Letter.
+    let input = "package main\n\nfunc f() { 世界 := 1; _ = 世界 }\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let var_spans: Vec<&str> = caps
+        .iter()
+        .filter(|c| kinds[c.kind.0 as usize] == "variable")
+        .map(|c| &input[c.start..c.end])
+        .collect();
+    assert!(
+        var_spans.contains(&"世界"),
+        "expected non-ASCII identifier `世界` as variable; got {var_spans:?}"
+    );
+}

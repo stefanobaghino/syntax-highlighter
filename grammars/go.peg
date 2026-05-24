@@ -353,10 +353,19 @@ number_lit    <- @number{num_body}
 
 # --- Identifiers / predeclared names ---------------------------------
 
-*ident        <- !reserved [A-Za-z_] ident_body*
+# Per Go spec "Identifiers": identifier = letter { letter | unicode_digit };
+# letter = unicode_letter | "_"; unicode_letter = General_Category L;
+# unicode_digit = General_Category Nd.
+#
+# `upper_ident` / `lower_ident` keep their ASCII-only start because
+# they encode a case-based naming convention used by the highlighter
+# (exported names start uppercase). Admitting non-ASCII letters into
+# both ranges would collapse the distinction; refine with `\p{Lu}` /
+# `\p{Ll}` in a follow-on if needed.
+*ident        <- !reserved [\p{L}_] ident_body*
 *upper_ident  <- !reserved [A-Z] ident_body*
 *lower_ident  <- !reserved [a-z_] ident_body*
-ident_body    <- [A-Za-z\d_]
+ident_body    <- [\p{L}\p{Nd}_]
 
 # Reserved keywords blocking identifier capture.
 *reserved     <- reserved_word !ident_body

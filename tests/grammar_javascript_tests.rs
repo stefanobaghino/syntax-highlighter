@@ -601,3 +601,54 @@ fn export_specifier_allows_reserved_exported_name() {
 fn export_star_as_reserved_parses() {
     let (_, _) = assert_complete_full("export * as default from 'm';\n");
 }
+
+// --- Stage 2 UTF-8 tests ----------------------------------------------
+
+#[test]
+fn non_ascii_identifier_const_binding() {
+    // Per ECMAScript §12.7.1: IdentifierStartChar = ID_Start | $ | _;
+    // IdentifierPartChar = ID_Continue | $ | ZWNJ | ZWJ.
+    let input = "const café = 1;\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let var_spans: Vec<&str> = caps
+        .iter()
+        .filter(|c| kinds[c.kind.0 as usize] == "variable")
+        .map(|c| &input[c.start..c.end])
+        .collect();
+    assert!(
+        var_spans.contains(&"café"),
+        "expected non-ASCII identifier `café` as variable; got {var_spans:?}"
+    );
+}
+
+#[test]
+fn unicode_escape_in_identifier() {
+    // ECMAScript §12.7.1 admits `\\uHHHH` and `\\u{H..}` escapes in
+    // IdentifierStart and IdentifierPart positions.
+    let input = "const \\u00E9clair = 1;\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let var_spans: Vec<&str> = caps
+        .iter()
+        .filter(|c| kinds[c.kind.0 as usize] == "variable")
+        .map(|c| &input[c.start..c.end])
+        .collect();
+    assert!(
+        var_spans.iter().any(|v| v.contains("\\u00E9")),
+        "expected `\\u00E9clair` to capture as variable; got {var_spans:?}"
+    );
+}
+
+#[test]
+fn unicode_brace_escape_in_identifier() {
+    let input = "const \\u{1F600}fish = 1;\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let var_spans: Vec<&str> = caps
+        .iter()
+        .filter(|c| kinds[c.kind.0 as usize] == "variable")
+        .map(|c| &input[c.start..c.end])
+        .collect();
+    assert!(
+        var_spans.iter().any(|v| v.contains("\\u{1F600}")),
+        "expected \\u{{}}-bearing identifier to capture; got {var_spans:?}"
+    );
+}

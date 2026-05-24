@@ -341,16 +341,31 @@ number_lit     <- @number{num_body}
 
 # --- Identifiers / reserved words ------------------------------------
 
-*ident         <- !reserved [A-Za-z_$] ident_body*
+# Per ECMAScript 2024 §12.7.1: IdentifierStartChar = ID_Start | $ | _;
+# IdentifierPartChar = ID_Continue | $ | ZWNJ (U+200C) | ZWJ (U+200D).
+# `_` is in ID_Start, but `$` is not (it's ASCII punctuation outside
+# Unicode's identifier properties); same for the ZWNJ/ZWJ continuation
+# extras. Escape forms `\uHHHH` and `\u{H..}` are admitted in both
+# positions.
+*ident         <- !reserved ([\p{ID_Start}_$] / js_uesc) ident_body_part*
 # `ident_name` mirrors ECMA's `IdentifierName`: like `ident`, but the
 # `!reserved` guard is dropped so reserved words are accepted. Use at
 # positions where ES allows IdentifierName but not BindingIdentifier
 # (member access after `.` / `?.`, property keys, imported/exported
 # names that aren't local bindings).
-*ident_name    <- [A-Za-z_$] ident_body*
-*upper_ident   <- !reserved [A-Z] ident_body*
-*lower_ident   <- !reserved [a-z_$] ident_body*
-ident_body     <- [A-Za-z\d_$]
+*ident_name    <- ([\p{ID_Start}_$] / js_uesc) ident_body_part*
+# Per §12.7.1 UnicodeEscapeSequence: 4 fixed hex digits or `{H..}` for
+# 1-6 hex digits inside braces. Atomic so the prefix-then-fail shape
+# stays internal.
+*js_uesc       <- '\\u{' [0-9A-Fa-f]+ '}' / '\\u' [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]
+# `upper_ident` / `lower_ident` keep their ASCII-only start so the
+# case-based shape gate (PascalCase → @type, etc.) doesn't dissolve
+# into "any ID_Start letter". Future refinement via `\p{Lu}` /
+# `\p{Ll}` if a non-ASCII-aware variant is needed.
+*upper_ident   <- !reserved [A-Z] ident_body_part*
+*lower_ident   <- !reserved [a-z_$] ident_body_part*
+ident_body_part <- ident_body / js_uesc
+ident_body     <- [\p{ID_Continue}$\u{200C}\u{200D}]
 
 # Reserved words that must not appear as identifiers. The grammar uses
 # explicit `@keyword{...}` at each call site, so this list only blocks
