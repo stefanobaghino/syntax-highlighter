@@ -1481,3 +1481,141 @@ fn bracketed_close_catch_does_not_swallow_trailing_atoms() {
         other => panic!("expected Sequence, got: {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------
+// `i"…"` / `i'…'` — case-insensitive literal sugar.
+//
+// The desugar emits a `Sequence` of `CharClass` nodes, one per code
+// point: ASCII letters fold to `{lower, upper}`, everything else stays
+// a singleton. Each test below asserts the desugar shape directly
+// against a hand-built fixture; the per-letter `[xX][yY]…` form parses
+// to the same shape, which is what makes the sugar a drop-in for the
+// hand-rolled keyword bodies in `grammars/sqlite.peg`.
+
+fn ci_class(lower: char, upper: char) -> Pattern {
+    Pattern::char_class(CharSet::from_chars(&[lower, upper]))
+}
+
+#[test]
+fn case_insensitive_literal_basic() {
+    let g = parse("r <- i\"select\"");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::seq(vec![
+            ci_class('s', 'S'),
+            ci_class('e', 'E'),
+            ci_class('l', 'L'),
+            ci_class('e', 'E'),
+            ci_class('c', 'C'),
+            ci_class('t', 'T'),
+        ])
+    );
+}
+
+#[test]
+fn case_insensitive_literal_equivalent_to_manual_form() {
+    // The drop-in invariant: `i"select"` and `[sS][eE][lL][eE][cC][tT]`
+    // parse to byte-identical AST shapes (modulo spans, stripped here).
+    let g_sugared = parse("r <- i\"select\"");
+    let g_manual = parse("r <- [sS][eE][lL][eE][cC][tT]");
+    assert_eq!(g_sugared.rules["r"], g_manual.rules["r"]);
+}
+
+#[test]
+fn case_insensitive_literal_single_quoted() {
+    // Both quote flavours work, mirroring `parse_string`.
+    let g_double = parse("r <- i\"abc\"");
+    let g_single = parse("r <- i'abc'");
+    assert_eq!(g_double.rules["r"], g_single.rules["r"]);
+}
+
+#[test]
+fn case_insensitive_literal_non_letter_codepoints_stay_singletons() {
+    let g = parse("r <- i\"a1_z\"");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::seq(vec![
+            ci_class('a', 'A'),
+            Pattern::char_class(CharSet::singleton('1')),
+            Pattern::char_class(CharSet::singleton('_')),
+            ci_class('z', 'Z'),
+        ])
+    );
+}
+
+#[test]
+fn case_insensitive_literal_empty_is_empty_literal() {
+    // Matches `parse_string`'s treatment of `""`: no atoms to fold, so
+    // the result is the empty `Literal` (matches the empty string).
+    let g = parse("r <- i\"\"");
+    assert_eq!(g.rules["r"], Pattern::literal(""));
+}
+
+#[test]
+fn case_insensitive_literal_no_letters_is_singletons() {
+    let g = parse("r <- i\"123\"");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::seq(vec![
+            Pattern::char_class(CharSet::singleton('1')),
+            Pattern::char_class(CharSet::singleton('2')),
+            Pattern::char_class(CharSet::singleton('3')),
+        ])
+    );
+}
+
+#[test]
+fn case_insensitive_literal_handles_escapes() {
+    // Same escape handling as `parse_string`: `\n` is the literal byte,
+    // not a letter, so it stays a singleton.
+    let g = parse("r <- i\"a\\nb\"");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::seq(vec![
+            ci_class('a', 'A'),
+            Pattern::char_class(CharSet::singleton('\n')),
+            ci_class('b', 'B'),
+        ])
+    );
+}
+
+#[test]
+fn case_insensitive_literal_disambiguates_against_identifier() {
+    // `i` followed by a non-quote byte must still parse as the start of
+    // a `NonTerminal` — otherwise grammars with identifiers like
+    // `ident_char` would suddenly become parse errors.
+    let g = parse("r <- ident_char");
+    assert_eq!(g.rules["r"], Pattern::nt("ident_char"));
+}
+
+#[test]
+fn case_insensitive_literal_inside_capture() {
+    let g = parse("r <- @keyword{i\"select\"}");
+    let body = Pattern::seq(vec![
+        ci_class('s', 'S'),
+        ci_class('e', 'E'),
+        ci_class('l', 'L'),
+        ci_class('e', 'E'),
+        ci_class('c', 'C'),
+        ci_class('t', 'T'),
+    ]);
+    assert_eq!(g.rules["r"], Pattern::capture("keyword", body));
+}
+
+#[test]
+fn case_insensitive_literal_composes_with_postfix_and_lookahead() {
+    let g = parse("r <- i\"a\"*\ns <- !i\"a\"");
+    let body = ci_class('a', 'A');
+    assert_eq!(g.rules["r"], Pattern::repeat(body.clone()));
+    assert_eq!(g.rules["s"], Pattern::not_predicate(body));
+}
+
+#[test]
+fn case_insensitive_literal_unterminated_errors() {
+    let err = parse_src("r <- i\"select").unwrap_err();
+    assert!(
+        err.message.contains("unterminated"),
+        "expected unterminated-literal error, got: {}",
+        err.message
+    );
+}

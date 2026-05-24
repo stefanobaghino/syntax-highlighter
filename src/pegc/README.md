@@ -73,6 +73,7 @@ the whole rule as intentionally lenient — see
 | Syntax | Meaning |
 |---|---|
 | `"abc"` / `'abc'` | Literal byte sequence. |
+| `i"abc"` / `i'abc'` | Case-insensitive literal — ASCII letters fold, other code points stay literal. |
 | `[a-z]` / `[^"\\]` | Character class — a set of bytes; leading `^` negates. |
 | `.` | Any single byte (fails only at end of input). |
 | `\d \D \s \S \h \H \R` | Built-in character classes — see below. |
@@ -85,6 +86,16 @@ the whole rule as intentionally lenient — see
 `\'`, `\"`, `\]`, `\[`, `\-`, `\/`. Unknown escapes are a parse error.
 The backslash-letter atoms below (`\d`, `\R`, etc.) are *not* string
 escapes — `'\d'` keeps the `unknown escape` error.
+
+**Case-insensitive literals** add an `i` prefix immediately before the
+opening quote: `i"select"` matches `select`, `SELECT`, `SeLeCt`, etc.
+The `i` is only recognized when followed by `"` or `'` — identifiers
+that happen to start with `i` (`ident`, `int_body`) still parse as rule
+references. ASCII letters in the body fold to `{lower, upper}`; every
+other code point is matched literally (no Unicode case folding —
+grammars that need it can hand-roll the character class). Parse-time
+sugar: `i"select"` desugars to the same shape as
+`[sS][eE][lL][eE][cC][tT]` and produces byte-identical bytecode.
 
 **Character classes** use the standard `[lo-hi]` range syntax. A `-`
 immediately before the closing `]` is a literal hyphen. Ranges with
