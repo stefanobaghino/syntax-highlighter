@@ -511,8 +511,8 @@ literal     <- blob_lit / string_lit / @number{number_body} / null_lit / bool_li
 
 *null_lit    <- @constant{null_body !ident_char}
 *bool_lit    <- @constant{bool_body !ident_char}
-*null_body   <- [nN][uU][lL][lL]
-*bool_body   <- [tT][rR][uU][eE] / [fF][aA][lL][sS][eE]
+*null_body   <- i"null"
+*bool_body   <- i"true" / i"false"
 
 *blob_lit    <- @string{blob_body}
 *blob_body   <- [xX] "'" [\da-fA-F]* "'"
@@ -557,301 +557,160 @@ literal     <- blob_lit / string_lit / @number{number_body} / null_lit / bool_li
 *bracket_id        <- '[' .. (']' / \R) ']'
 
 # --- Keywords (case-insensitive) --------------------------------------
-# Per-letter character classes give case-insensitive matching without
-# VM support. Every kw_* wraps its body in @keyword{...} and appends
-# the `!ident_char` boundary so `SELECT` doesn't match the prefix of
-# `SELECTED`. `keyword_word` reuses the same boundary for the
-# identifier-exclusion negative lookahead.
+# Every kw_* wraps its body in @keyword{...} and appends the
+# `!ident_char` boundary so `SELECT` doesn't match the prefix of
+# `SELECTED`. The `i"…"` literal sugar gives case-insensitive matching
+# at the parser level — see src/pegc/README.md. `keyword_word` reuses
+# the same boundary for the identifier-exclusion negative lookahead.
 
-*kw_select    <- @keyword{sel_body !ident_char}
-*kw_from      <- @keyword{from_body !ident_char}
-*kw_where     <- @keyword{where_body !ident_char}
-*kw_group     <- @keyword{group_body !ident_char}
-*kw_by        <- @keyword{by_body !ident_char}
-*kw_having    <- @keyword{having_body !ident_char}
-*kw_order     <- @keyword{order_body !ident_char}
-*kw_asc       <- @keyword{asc_body !ident_char}
-*kw_desc      <- @keyword{desc_body !ident_char}
-*kw_limit     <- @keyword{limit_body !ident_char}
-*kw_offset    <- @keyword{offset_body !ident_char}
-*kw_join      <- @keyword{join_body !ident_char}
-*kw_inner     <- @keyword{inner_body !ident_char}
-*kw_left      <- @keyword{left_body !ident_char}
-*kw_right     <- @keyword{right_body !ident_char}
-*kw_full      <- @keyword{full_body !ident_char}
-*kw_outer     <- @keyword{outer_body !ident_char}
-*kw_cross     <- @keyword{cross_body !ident_char}
-*kw_natural   <- @keyword{natural_body !ident_char}
-*kw_on        <- @keyword{on_body !ident_char}
-*kw_using     <- @keyword{using_body !ident_char}
-*kw_as        <- @keyword{as_body !ident_char}
-*kw_distinct  <- @keyword{distinct_body !ident_char}
-*kw_all       <- @keyword{all_body !ident_char}
-*kw_union     <- @keyword{union_body !ident_char}
-*kw_intersect <- @keyword{intersect_body !ident_char}
-*kw_except    <- @keyword{except_body !ident_char}
-*kw_with      <- @keyword{with_body !ident_char}
-*kw_and       <- @keyword{and_body !ident_char}
-*kw_or        <- @keyword{or_body !ident_char}
-*kw_not       <- @keyword{not_body !ident_char}
-*kw_is        <- @keyword{is_body !ident_char}
-*kw_in        <- @keyword{in_body !ident_char}
-*kw_like      <- @keyword{like_body !ident_char}
-*kw_glob      <- @keyword{glob_body !ident_char}
-*kw_match     <- @keyword{match_body !ident_char}
-*kw_regexp    <- @keyword{regexp_body !ident_char}
-*kw_between   <- @keyword{between_body !ident_char}
-*kw_escape    <- @keyword{escape_body !ident_char}
-*kw_case      <- @keyword{case_body !ident_char}
-*kw_when      <- @keyword{when_body !ident_char}
-*kw_then      <- @keyword{then_body !ident_char}
-*kw_else      <- @keyword{else_body !ident_char}
-*kw_end       <- @keyword{end_body !ident_char}
-*kw_cast      <- @keyword{cast_body !ident_char}
-*kw_exists    <- @keyword{exists_body !ident_char}
-*kw_collate   <- @keyword{collate_body !ident_char}
+*kw_select    <- @keyword{i"select" !ident_char}
+*kw_from      <- @keyword{i"from" !ident_char}
+*kw_where     <- @keyword{i"where" !ident_char}
+*kw_group     <- @keyword{i"group" !ident_char}
+*kw_by        <- @keyword{i"by" !ident_char}
+*kw_having    <- @keyword{i"having" !ident_char}
+*kw_order     <- @keyword{i"order" !ident_char}
+*kw_asc       <- @keyword{i"asc" !ident_char}
+*kw_desc      <- @keyword{i"desc" !ident_char}
+*kw_limit     <- @keyword{i"limit" !ident_char}
+*kw_offset    <- @keyword{i"offset" !ident_char}
+*kw_join      <- @keyword{i"join" !ident_char}
+*kw_inner     <- @keyword{i"inner" !ident_char}
+*kw_left      <- @keyword{i"left" !ident_char}
+*kw_right     <- @keyword{i"right" !ident_char}
+*kw_full      <- @keyword{i"full" !ident_char}
+*kw_outer     <- @keyword{i"outer" !ident_char}
+*kw_cross     <- @keyword{i"cross" !ident_char}
+*kw_natural   <- @keyword{i"natural" !ident_char}
+*kw_on        <- @keyword{i"on" !ident_char}
+*kw_using     <- @keyword{i"using" !ident_char}
+*kw_as        <- @keyword{i"as" !ident_char}
+*kw_distinct  <- @keyword{i"distinct" !ident_char}
+*kw_all       <- @keyword{i"all" !ident_char}
+*kw_union     <- @keyword{i"union" !ident_char}
+*kw_intersect <- @keyword{i"intersect" !ident_char}
+*kw_except    <- @keyword{i"except" !ident_char}
+*kw_with      <- @keyword{i"with" !ident_char}
+*kw_and       <- @keyword{i"and" !ident_char}
+*kw_or        <- @keyword{i"or" !ident_char}
+*kw_not       <- @keyword{i"not" !ident_char}
+*kw_is        <- @keyword{i"is" !ident_char}
+*kw_in        <- @keyword{i"in" !ident_char}
+*kw_like      <- @keyword{i"like" !ident_char}
+*kw_glob      <- @keyword{i"glob" !ident_char}
+*kw_match     <- @keyword{i"match" !ident_char}
+*kw_regexp    <- @keyword{i"regexp" !ident_char}
+*kw_between   <- @keyword{i"between" !ident_char}
+*kw_escape    <- @keyword{i"escape" !ident_char}
+*kw_case      <- @keyword{i"case" !ident_char}
+*kw_when      <- @keyword{i"when" !ident_char}
+*kw_then      <- @keyword{i"then" !ident_char}
+*kw_else      <- @keyword{i"else" !ident_char}
+*kw_end       <- @keyword{i"end" !ident_char}
+*kw_cast      <- @keyword{i"cast" !ident_char}
+*kw_exists    <- @keyword{i"exists" !ident_char}
+*kw_collate   <- @keyword{i"collate" !ident_char}
 
 # Window-function vocabulary. Only WINDOW and OVER are reserved; the
 # rest are matched positionally inside window_defn / frame_spec and
 # remain usable as identifiers outside those positions.
-*kw_recursive <- @keyword{recursive_body !ident_char}
-*kw_window    <- @keyword{window_body !ident_char}
-*kw_over      <- @keyword{over_body !ident_char}
-*kw_filter    <- @keyword{filter_body !ident_char}
-*kw_partition <- @keyword{partition_body !ident_char}
-*kw_range     <- @keyword{range_body !ident_char}
-*kw_rows      <- @keyword{rows_body !ident_char}
-*kw_groups    <- @keyword{groups_body !ident_char}
-*kw_unbounded <- @keyword{unbounded_body !ident_char}
-*kw_preceding <- @keyword{preceding_body !ident_char}
-*kw_following <- @keyword{following_body !ident_char}
-*kw_current   <- @keyword{current_body !ident_char}
-*kw_row       <- @keyword{row_body !ident_char}
-*kw_exclude   <- @keyword{exclude_body !ident_char}
-*kw_ties      <- @keyword{ties_body !ident_char}
-*kw_others    <- @keyword{others_body !ident_char}
-*kw_no        <- @keyword{no_body !ident_char}
+*kw_recursive <- @keyword{i"recursive" !ident_char}
+*kw_window    <- @keyword{i"window" !ident_char}
+*kw_over      <- @keyword{i"over" !ident_char}
+*kw_filter    <- @keyword{i"filter" !ident_char}
+*kw_partition <- @keyword{i"partition" !ident_char}
+*kw_range     <- @keyword{i"range" !ident_char}
+*kw_rows      <- @keyword{i"rows" !ident_char}
+*kw_groups    <- @keyword{i"groups" !ident_char}
+*kw_unbounded <- @keyword{i"unbounded" !ident_char}
+*kw_preceding <- @keyword{i"preceding" !ident_char}
+*kw_following <- @keyword{i"following" !ident_char}
+*kw_current   <- @keyword{i"current" !ident_char}
+*kw_row       <- @keyword{i"row" !ident_char}
+*kw_exclude   <- @keyword{i"exclude" !ident_char}
+*kw_ties      <- @keyword{i"ties" !ident_char}
+*kw_others    <- @keyword{i"others" !ident_char}
+*kw_no        <- @keyword{i"no" !ident_char}
 
 # DML (INSERT family). UPDATE lands in a later commit but its keyword
 # rule goes here so UPSERT's DO UPDATE path can use it now.
-*kw_insert    <- @keyword{insert_body !ident_char}
-*kw_replace   <- @keyword{replace_body !ident_char}
-*kw_into      <- @keyword{into_body !ident_char}
-*kw_values    <- @keyword{values_body !ident_char}
-*kw_default   <- @keyword{default_body !ident_char}
-*kw_conflict  <- @keyword{conflict_body !ident_char}
-*kw_do        <- @keyword{do_body !ident_char}
-*kw_nothing   <- @keyword{nothing_body !ident_char}
-*kw_rollback  <- @keyword{rollback_body !ident_char}
-*kw_abort     <- @keyword{abort_body !ident_char}
-*kw_fail      <- @keyword{fail_body !ident_char}
-*kw_ignore    <- @keyword{ignore_body !ident_char}
-*kw_set       <- @keyword{set_body !ident_char}
-*kw_returning <- @keyword{returning_body !ident_char}
-*kw_update    <- @keyword{update_body !ident_char}
-*kw_delete    <- @keyword{delete_body !ident_char}
+*kw_insert    <- @keyword{i"insert" !ident_char}
+*kw_replace   <- @keyword{i"replace" !ident_char}
+*kw_into      <- @keyword{i"into" !ident_char}
+*kw_values    <- @keyword{i"values" !ident_char}
+*kw_default   <- @keyword{i"default" !ident_char}
+*kw_conflict  <- @keyword{i"conflict" !ident_char}
+*kw_do        <- @keyword{i"do" !ident_char}
+*kw_nothing   <- @keyword{i"nothing" !ident_char}
+*kw_rollback  <- @keyword{i"rollback" !ident_char}
+*kw_abort     <- @keyword{i"abort" !ident_char}
+*kw_fail      <- @keyword{i"fail" !ident_char}
+*kw_ignore    <- @keyword{i"ignore" !ident_char}
+*kw_set       <- @keyword{i"set" !ident_char}
+*kw_returning <- @keyword{i"returning" !ident_char}
+*kw_update    <- @keyword{i"update" !ident_char}
+*kw_delete    <- @keyword{i"delete" !ident_char}
 
 # DDL (CREATE / ALTER / DROP TABLE, constraints, foreign-key actions).
-*kw_create    <- @keyword{create_body !ident_char}
-*kw_table     <- @keyword{table_body !ident_char}
-*kw_alter     <- @keyword{alter_body !ident_char}
-*kw_drop      <- @keyword{drop_body !ident_char}
-*kw_rename    <- @keyword{rename_body !ident_char}
-*kw_add       <- @keyword{add_body !ident_char}
-*kw_column    <- @keyword{column_body !ident_char}
-*kw_if        <- @keyword{if_body !ident_char}
-*kw_temp      <- @keyword{temp_body !ident_char}
-*kw_temporary <- @keyword{temporary_body !ident_char}
-*kw_primary   <- @keyword{primary_body !ident_char}
-*kw_key       <- @keyword{key_body !ident_char}
-*kw_unique    <- @keyword{unique_body !ident_char}
-*kw_check     <- @keyword{check_body !ident_char}
-*kw_null      <- @keyword{null_body !ident_char}
-*kw_references <- @keyword{references_body !ident_char}
-*kw_generated <- @keyword{generated_body !ident_char}
-*kw_always    <- @keyword{always_body !ident_char}
-*kw_stored    <- @keyword{stored_body !ident_char}
-*kw_virtual   <- @keyword{virtual_body !ident_char}
-*kw_constraint<- @keyword{constraint_body !ident_char}
-*kw_foreign   <- @keyword{foreign_body !ident_char}
-*kw_action    <- @keyword{action_body !ident_char}
-*kw_cascade   <- @keyword{cascade_body !ident_char}
-*kw_restrict  <- @keyword{restrict_body !ident_char}
-*kw_deferrable<- @keyword{deferrable_body !ident_char}
-*kw_initially <- @keyword{initially_body !ident_char}
-*kw_immediate <- @keyword{immediate_body !ident_char}
-*kw_deferred  <- @keyword{deferred_body !ident_char}
-*kw_autoincrement <- @keyword{autoincrement_body !ident_char}
-*kw_rowid     <- @keyword{rowid_body !ident_char}
-*kw_strict    <- @keyword{strict_body !ident_char}
-*kw_without   <- @keyword{without_body !ident_char}
-*kw_to        <- @keyword{to_body !ident_char}
-*kw_index     <- @keyword{index_body !ident_char}
-*kw_view      <- @keyword{view_body !ident_char}
-*kw_trigger   <- @keyword{trigger_body !ident_char}
-*kw_before    <- @keyword{before_body !ident_char}
-*kw_after     <- @keyword{after_body !ident_char}
-*kw_instead   <- @keyword{instead_body !ident_char}
-*kw_of        <- @keyword{of_body !ident_char}
-*kw_for       <- @keyword{for_body !ident_char}
-*kw_each      <- @keyword{each_body !ident_char}
-*kw_begin     <- @keyword{begin_body !ident_char}
-*kw_commit    <- @keyword{commit_body !ident_char}
-*kw_transaction <- @keyword{transaction_body !ident_char}
-*kw_savepoint <- @keyword{savepoint_body !ident_char}
-*kw_release   <- @keyword{release_body !ident_char}
-*kw_exclusive <- @keyword{exclusive_body !ident_char}
-*kw_pragma    <- @keyword{pragma_body !ident_char}
-*kw_vacuum    <- @keyword{vacuum_body !ident_char}
-*kw_attach    <- @keyword{attach_body !ident_char}
-*kw_detach    <- @keyword{detach_body !ident_char}
-*kw_database  <- @keyword{database_body !ident_char}
-*kw_reindex   <- @keyword{reindex_body !ident_char}
-*kw_analyze   <- @keyword{analyze_body !ident_char}
-*kw_explain   <- @keyword{explain_body !ident_char}
-*kw_query     <- @keyword{query_body !ident_char}
-*kw_plan      <- @keyword{plan_body !ident_char}
-
-# Keyword bodies — raw letter matchers, no boundary check.
-
-*sel_body       <- [sS][eE][lL][eE][cC][tT]
-*from_body      <- [fF][rR][oO][mM]
-*where_body     <- [wW][hH][eE][rR][eE]
-*group_body     <- [gG][rR][oO][uU][pP]
-*by_body        <- [bB][yY]
-*having_body    <- [hH][aA][vV][iI][nN][gG]
-*order_body     <- [oO][rR][dD][eE][rR]
-*asc_body       <- [aA][sS][cC]
-*desc_body      <- [dD][eE][sS][cC]
-*limit_body     <- [lL][iI][mM][iI][tT]
-*offset_body    <- [oO][fF][fF][sS][eE][tT]
-*join_body      <- [jJ][oO][iI][nN]
-*inner_body     <- [iI][nN][nN][eE][rR]
-*left_body      <- [lL][eE][fF][tT]
-*right_body     <- [rR][iI][gG][hH][tT]
-*full_body      <- [fF][uU][lL][lL]
-*outer_body     <- [oO][uU][tT][eE][rR]
-*cross_body     <- [cC][rR][oO][sS][sS]
-*natural_body   <- [nN][aA][tT][uU][rR][aA][lL]
-*on_body        <- [oO][nN]
-*using_body     <- [uU][sS][iI][nN][gG]
-*as_body        <- [aA][sS]
-*distinct_body  <- [dD][iI][sS][tT][iI][nN][cC][tT]
-*all_body       <- [aA][lL][lL]
-*union_body     <- [uU][nN][iI][oO][nN]
-*intersect_body <- [iI][nN][tT][eE][rR][sS][eE][cC][tT]
-*except_body    <- [eE][xX][cC][eE][pP][tT]
-*with_body      <- [wW][iI][tT][hH]
-*and_body       <- [aA][nN][dD]
-*or_body        <- [oO][rR]
-*not_body       <- [nN][oO][tT]
-*is_body        <- [iI][sS]
-*in_body        <- [iI][nN]
-*like_body      <- [lL][iI][kK][eE]
-*glob_body      <- [gG][lL][oO][bB]
-*match_body     <- [mM][aA][tT][cC][hH]
-*regexp_body    <- [rR][eE][gG][eE][xX][pP]
-*between_body   <- [bB][eE][tT][wW][eE][eE][nN]
-*escape_body    <- [eE][sS][cC][aA][pP][eE]
-*case_body      <- [cC][aA][sS][eE]
-*when_body      <- [wW][hH][eE][nN]
-*then_body      <- [tT][hH][eE][nN]
-*else_body      <- [eE][lL][sS][eE]
-*end_body       <- [eE][nN][dD]
-*cast_body      <- [cC][aA][sS][tT]
-*exists_body    <- [eE][xX][iI][sS][tT][sS]
-*collate_body   <- [cC][oO][lL][lL][aA][tT][eE]
-*recursive_body <- [rR][eE][cC][uU][rR][sS][iI][vV][eE]
-*window_body    <- [wW][iI][nN][dD][oO][wW]
-*over_body      <- [oO][vV][eE][rR]
-*filter_body    <- [fF][iI][lL][tT][eE][rR]
-*partition_body <- [pP][aA][rR][tT][iI][tT][iI][oO][nN]
-*range_body     <- [rR][aA][nN][gG][eE]
-*rows_body      <- [rR][oO][wW][sS]
-*groups_body    <- [gG][rR][oO][uU][pP][sS]
-*unbounded_body <- [uU][nN][bB][oO][uU][nN][dD][eE][dD]
-*preceding_body <- [pP][rR][eE][cC][eE][dD][iI][nN][gG]
-*following_body <- [fF][oO][lL][lL][oO][wW][iI][nN][gG]
-*current_body   <- [cC][uU][rR][rR][eE][nN][tT]
-*row_body       <- [rR][oO][wW]
-*exclude_body   <- [eE][xX][cC][lL][uU][dD][eE]
-*ties_body      <- [tT][iI][eE][sS]
-*others_body    <- [oO][tT][hH][eE][rR][sS]
-*no_body        <- [nN][oO]
-*insert_body    <- [iI][nN][sS][eE][rR][tT]
-*replace_body   <- [rR][eE][pP][lL][aA][cC][eE]
-*into_body      <- [iI][nN][tT][oO]
-*values_body    <- [vV][aA][lL][uU][eE][sS]
-*default_body   <- [dD][eE][fF][aA][uU][lL][tT]
-*conflict_body  <- [cC][oO][nN][fF][lL][iI][cC][tT]
-*do_body        <- [dD][oO]
-*nothing_body   <- [nN][oO][tT][hH][iI][nN][gG]
-*rollback_body  <- [rR][oO][lL][lL][bB][aA][cC][kK]
-*abort_body     <- [aA][bB][oO][rR][tT]
-*fail_body      <- [fF][aA][iI][lL]
-*ignore_body    <- [iI][gG][nN][oO][rR][eE]
-*set_body       <- [sS][eE][tT]
-*returning_body <- [rR][eE][tT][uU][rR][nN][iI][nN][gG]
-*update_body    <- [uU][pP][dD][aA][tT][eE]
-*delete_body    <- [dD][eE][lL][eE][tT][eE]
-*create_body    <- [cC][rR][eE][aA][tT][eE]
-*table_body     <- [tT][aA][bB][lL][eE]
-*alter_body     <- [aA][lL][tT][eE][rR]
-*drop_body      <- [dD][rR][oO][pP]
-*rename_body    <- [rR][eE][nN][aA][mM][eE]
-*add_body       <- [aA][dD][dD]
-*column_body    <- [cC][oO][lL][uU][mM][nN]
-*if_body        <- [iI][fF]
-*temp_body      <- [tT][eE][mM][pP]
-*temporary_body <- [tT][eE][mM][pP][oO][rR][aA][rR][yY]
-*primary_body   <- [pP][rR][iI][mM][aA][rR][yY]
-*key_body       <- [kK][eE][yY]
-*unique_body    <- [uU][nN][iI][qQ][uU][eE]
-*check_body     <- [cC][hH][eE][cC][kK]
-*references_body <- [rR][eE][fF][eE][rR][eE][nN][cC][eE][sS]
-*generated_body <- [gG][eE][nN][eE][rR][aA][tT][eE][dD]
-*always_body    <- [aA][lL][wW][aA][yY][sS]
-*stored_body    <- [sS][tT][oO][rR][eE][dD]
-*virtual_body   <- [vV][iI][rR][tT][uU][aA][lL]
-*constraint_body<- [cC][oO][nN][sS][tT][rR][aA][iI][nN][tT]
-*foreign_body   <- [fF][oO][rR][eE][iI][gG][nN]
-*action_body    <- [aA][cC][tT][iI][oO][nN]
-*cascade_body   <- [cC][aA][sS][cC][aA][dD][eE]
-*restrict_body  <- [rR][eE][sS][tT][rR][iI][cC][tT]
-*deferrable_body<- [dD][eE][fF][eE][rR][rR][aA][bB][lL][eE]
-*initially_body <- [iI][nN][iI][tT][iI][aA][lL][lL][yY]
-*immediate_body <- [iI][mM][mM][eE][dD][iI][aA][tT][eE]
-*deferred_body  <- [dD][eE][fF][eE][rR][rR][eE][dD]
-*autoincrement_body <- [aA][uU][tT][oO][iI][nN][cC][rR][eE][mM][eE][nN][tT]
-*rowid_body     <- [rR][oO][wW][iI][dD]
-*strict_body    <- [sS][tT][rR][iI][cC][tT]
-*without_body   <- [wW][iI][tT][hH][oO][uU][tT]
-*to_body        <- [tT][oO]
-*index_body     <- [iI][nN][dD][eE][xX]
-*view_body      <- [vV][iI][eE][wW]
-*trigger_body   <- [tT][rR][iI][gG][gG][eE][rR]
-*before_body    <- [bB][eE][fF][oO][rR][eE]
-*after_body     <- [aA][fF][tT][eE][rR]
-*instead_body   <- [iI][nN][sS][tT][eE][aA][dD]
-*of_body        <- [oO][fF]
-*for_body       <- [fF][oO][rR]
-*each_body      <- [eE][aA][cC][hH]
-*begin_body     <- [bB][eE][gG][iI][nN]
-*commit_body    <- [cC][oO][mM][mM][iI][tT]
-*transaction_body <- [tT][rR][aA][nN][sS][aA][cC][tT][iI][oO][nN]
-*savepoint_body <- [sS][aA][vV][eE][pP][oO][iI][nN][tT]
-*release_body   <- [rR][eE][lL][eE][aA][sS][eE]
-*exclusive_body <- [eE][xX][cC][lL][uU][sS][iI][vV][eE]
-*pragma_body    <- [pP][rR][aA][gG][mM][aA]
-*vacuum_body    <- [vV][aA][cC][uU][uU][mM]
-*attach_body    <- [aA][tT][tT][aA][cC][hH]
-*detach_body    <- [dD][eE][tT][aA][cC][hH]
-*database_body  <- [dD][aA][tT][aA][bB][aA][sS][eE]
-*reindex_body   <- [rR][eE][iI][nN][dD][eE][xX]
-*analyze_body   <- [aA][nN][aA][lL][yY][zZ][eE]
-*explain_body   <- [eE][xX][pP][lL][aA][iI][nN]
-*query_body     <- [qQ][uU][eE][rR][yY]
-*plan_body      <- [pP][lL][aA][nN]
+*kw_create    <- @keyword{i"create" !ident_char}
+*kw_table     <- @keyword{i"table" !ident_char}
+*kw_alter     <- @keyword{i"alter" !ident_char}
+*kw_drop      <- @keyword{i"drop" !ident_char}
+*kw_rename    <- @keyword{i"rename" !ident_char}
+*kw_add       <- @keyword{i"add" !ident_char}
+*kw_column    <- @keyword{i"column" !ident_char}
+*kw_if        <- @keyword{i"if" !ident_char}
+*kw_temp      <- @keyword{i"temp" !ident_char}
+*kw_temporary <- @keyword{i"temporary" !ident_char}
+*kw_primary   <- @keyword{i"primary" !ident_char}
+*kw_key       <- @keyword{i"key" !ident_char}
+*kw_unique    <- @keyword{i"unique" !ident_char}
+*kw_check     <- @keyword{i"check" !ident_char}
+*kw_null      <- @keyword{i"null" !ident_char}
+*kw_references <- @keyword{i"references" !ident_char}
+*kw_generated <- @keyword{i"generated" !ident_char}
+*kw_always    <- @keyword{i"always" !ident_char}
+*kw_stored    <- @keyword{i"stored" !ident_char}
+*kw_virtual   <- @keyword{i"virtual" !ident_char}
+*kw_constraint<- @keyword{i"constraint" !ident_char}
+*kw_foreign   <- @keyword{i"foreign" !ident_char}
+*kw_action    <- @keyword{i"action" !ident_char}
+*kw_cascade   <- @keyword{i"cascade" !ident_char}
+*kw_restrict  <- @keyword{i"restrict" !ident_char}
+*kw_deferrable<- @keyword{i"deferrable" !ident_char}
+*kw_initially <- @keyword{i"initially" !ident_char}
+*kw_immediate <- @keyword{i"immediate" !ident_char}
+*kw_deferred  <- @keyword{i"deferred" !ident_char}
+*kw_autoincrement <- @keyword{i"autoincrement" !ident_char}
+*kw_rowid     <- @keyword{i"rowid" !ident_char}
+*kw_strict    <- @keyword{i"strict" !ident_char}
+*kw_without   <- @keyword{i"without" !ident_char}
+*kw_to        <- @keyword{i"to" !ident_char}
+*kw_index     <- @keyword{i"index" !ident_char}
+*kw_view      <- @keyword{i"view" !ident_char}
+*kw_trigger   <- @keyword{i"trigger" !ident_char}
+*kw_before    <- @keyword{i"before" !ident_char}
+*kw_after     <- @keyword{i"after" !ident_char}
+*kw_instead   <- @keyword{i"instead" !ident_char}
+*kw_of        <- @keyword{i"of" !ident_char}
+*kw_for       <- @keyword{i"for" !ident_char}
+*kw_each      <- @keyword{i"each" !ident_char}
+*kw_begin     <- @keyword{i"begin" !ident_char}
+*kw_commit    <- @keyword{i"commit" !ident_char}
+*kw_transaction <- @keyword{i"transaction" !ident_char}
+*kw_savepoint <- @keyword{i"savepoint" !ident_char}
+*kw_release   <- @keyword{i"release" !ident_char}
+*kw_exclusive <- @keyword{i"exclusive" !ident_char}
+*kw_pragma    <- @keyword{i"pragma" !ident_char}
+*kw_vacuum    <- @keyword{i"vacuum" !ident_char}
+*kw_attach    <- @keyword{i"attach" !ident_char}
+*kw_detach    <- @keyword{i"detach" !ident_char}
+*kw_database  <- @keyword{i"database" !ident_char}
+*kw_reindex   <- @keyword{i"reindex" !ident_char}
+*kw_analyze   <- @keyword{i"analyze" !ident_char}
+*kw_explain   <- @keyword{i"explain" !ident_char}
+*kw_query     <- @keyword{i"query" !ident_char}
+*kw_plan      <- @keyword{i"plan" !ident_char}
 
 # Keyword negative-lookahead for the identifier rule.
 #
@@ -871,130 +730,130 @@ literal     <- blob_lit / string_lit / @number{number_body} / null_lit / bool_li
 # `!ident_char` is applied once on the outside so each body stays
 # boundary-free.
 *keyword_word <-
-    ( autoincrement_body   # 13
-    / transaction_body     # 11
-    / constraint_body      # 10
-    / deferrable_body      # 10
-    / references_body      # 10
-    / exclusive_body       # 9
-    / generated_body       # 9
-    / immediate_body       # 9
-    / initially_body       # 9
-    / intersect_body       # 9
-    / returning_body       # 9
-    / savepoint_body       # 9
-    / temporary_body       # 9
-    / conflict_body        # 8
-    / database_body        # 8
-    / deferred_body        # 8
-    / distinct_body        # 8
-    / restrict_body        # 8
-    / rollback_body        # 8
-    / analyze_body         # 7
-    / between_body         # 7
-    / cascade_body         # 7
-    / collate_body         # 7
-    / default_body         # 7
-    / explain_body         # 7
-    / foreign_body         # 7
-    / instead_body         # 7
-    / natural_body         # 7
-    / nothing_body         # 7
-    / primary_body         # 7
-    / reindex_body         # 7
-    / release_body         # 7
-    / replace_body         # 7
-    / trigger_body         # 7
-    / virtual_body         # 7
-    / without_body         # 7
-    / action_body          # 6
-    / always_body          # 6
-    / attach_body          # 6
-    / before_body          # 6
-    / column_body          # 6
-    / commit_body          # 6
-    / create_body          # 6
-    / delete_body          # 6
-    / detach_body          # 6
-    / escape_body          # 6
-    / except_body          # 6
-    / exists_body          # 6
-    / having_body          # 6
-    / ignore_body          # 6
-    / insert_body          # 6
-    / offset_body          # 6
-    / pragma_body          # 6
-    / regexp_body          # 6
-    / rename_body          # 6
-    / sel_body             # 6 (SELECT)
-    / stored_body          # 6
-    / strict_body          # 6
-    / unique_body          # 6
-    / update_body          # 6
-    / vacuum_body          # 6
-    / values_body          # 6
-    / window_body          # 6
-    / abort_body           # 5
-    / after_body           # 5
-    / alter_body           # 5
-    / begin_body           # 5
-    / bool_body            # 5 (FALSE) / 4 (TRUE); alternation handles both
-    / check_body           # 5
-    / cross_body           # 5
-    / group_body           # 5
-    / index_body           # 5
-    / inner_body           # 5
-    / limit_body           # 5
-    / match_body           # 5
-    / order_body           # 5
-    / outer_body           # 5
-    / query_body           # 5
-    / right_body           # 5
-    / rowid_body           # 5
-    / table_body           # 5
-    / union_body           # 5
-    / using_body           # 5
-    / where_body           # 5
-    / case_body            # 4
-    / cast_body            # 4
-    / desc_body            # 4
-    / drop_body            # 4
-    / each_body            # 4
-    / else_body            # 4
-    / fail_body            # 4
-    / from_body            # 4
-    / full_body            # 4
-    / glob_body            # 4
-    / into_body            # 4
-    / join_body            # 4
-    / left_body            # 4
-    / like_body            # 4
-    / null_body            # 4
-    / over_body            # 4
-    / plan_body            # 4
-    / temp_body            # 4
-    / then_body            # 4
-    / view_body            # 4
-    / when_body            # 4
-    / with_body            # 4
-    / add_body             # 3
-    / all_body             # 3
-    / and_body             # 3
-    / asc_body             # 3
-    / end_body             # 3
-    / for_body             # 3
-    / not_body             # 3
-    / set_body             # 3
-    / as_body              # 2
-    / by_body              # 2
-    / if_body              # 2
-    / in_body              # 2
-    / is_body              # 2
-    / no_body              # 2
-    / of_body              # 2
-    / on_body              # 2
-    / or_body              # 2
-    / to_body              # 2
+    ( i"autoincrement"  # 13
+    / i"transaction"    # 11
+    / i"constraint"     # 10
+    / i"deferrable"     # 10
+    / i"references"     # 10
+    / i"exclusive"      # 9
+    / i"generated"      # 9
+    / i"immediate"      # 9
+    / i"initially"      # 9
+    / i"intersect"      # 9
+    / i"returning"      # 9
+    / i"savepoint"      # 9
+    / i"temporary"      # 9
+    / i"conflict"       # 8
+    / i"database"       # 8
+    / i"deferred"       # 8
+    / i"distinct"       # 8
+    / i"restrict"       # 8
+    / i"rollback"       # 8
+    / i"analyze"        # 7
+    / i"between"        # 7
+    / i"cascade"        # 7
+    / i"collate"        # 7
+    / i"default"        # 7
+    / i"explain"        # 7
+    / i"foreign"        # 7
+    / i"instead"        # 7
+    / i"natural"        # 7
+    / i"nothing"        # 7
+    / i"primary"        # 7
+    / i"reindex"        # 7
+    / i"release"        # 7
+    / i"replace"        # 7
+    / i"trigger"        # 7
+    / i"virtual"        # 7
+    / i"without"        # 7
+    / i"action"         # 6
+    / i"always"         # 6
+    / i"attach"         # 6
+    / i"before"         # 6
+    / i"column"         # 6
+    / i"commit"         # 6
+    / i"create"         # 6
+    / i"delete"         # 6
+    / i"detach"         # 6
+    / i"escape"         # 6
+    / i"except"         # 6
+    / i"exists"         # 6
+    / i"having"         # 6
+    / i"ignore"         # 6
+    / i"insert"         # 6
+    / i"offset"         # 6
+    / i"pragma"         # 6
+    / i"regexp"         # 6
+    / i"rename"         # 6
+    / i"select"         # 6 (SELECT)
+    / i"stored"         # 6
+    / i"strict"         # 6
+    / i"unique"         # 6
+    / i"update"         # 6
+    / i"vacuum"         # 6
+    / i"values"         # 6
+    / i"window"         # 6
+    / i"abort"          # 5
+    / i"after"          # 5
+    / i"alter"          # 5
+    / i"begin"          # 5
+    / bool_body         # 5 (FALSE) / 4 (TRUE); alternation handles both
+    / i"check"          # 5
+    / i"cross"          # 5
+    / i"group"          # 5
+    / i"index"          # 5
+    / i"inner"          # 5
+    / i"limit"          # 5
+    / i"match"          # 5
+    / i"order"          # 5
+    / i"outer"          # 5
+    / i"query"          # 5
+    / i"right"          # 5
+    / i"rowid"          # 5
+    / i"table"          # 5
+    / i"union"          # 5
+    / i"using"          # 5
+    / i"where"          # 5
+    / i"case"           # 4
+    / i"cast"           # 4
+    / i"desc"           # 4
+    / i"drop"           # 4
+    / i"each"           # 4
+    / i"else"           # 4
+    / i"fail"           # 4
+    / i"from"           # 4
+    / i"full"           # 4
+    / i"glob"           # 4
+    / i"into"           # 4
+    / i"join"           # 4
+    / i"left"           # 4
+    / i"like"           # 4
+    / null_body         # 4
+    / i"over"           # 4
+    / i"plan"           # 4
+    / i"temp"           # 4
+    / i"then"           # 4
+    / i"view"           # 4
+    / i"when"           # 4
+    / i"with"           # 4
+    / i"add"            # 3
+    / i"all"            # 3
+    / i"and"            # 3
+    / i"asc"            # 3
+    / i"end"            # 3
+    / i"for"            # 3
+    / i"not"            # 3
+    / i"set"            # 3
+    / i"as"             # 2
+    / i"by"             # 2
+    / i"if"             # 2
+    / i"in"             # 2
+    / i"is"             # 2
+    / i"no"             # 2
+    / i"of"             # 2
+    / i"on"             # 2
+    / i"or"             # 2
+    / i"to"             # 2
     ) !ident_char
 
 # --- Whitespace & comments -------------------------------------------
