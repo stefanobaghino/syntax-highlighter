@@ -40,6 +40,8 @@ pub enum Pattern {
         bytes: Vec<u8>,
         span: Span,
     },
+    /// Character class: a set of Unicode scalar values matched against
+    /// one UTF-8-decoded code point at the input pointer.
     CharClass {
         set: CharSet,
         span: Span,
@@ -294,7 +296,7 @@ impl Pattern {
                 span: Span::SYNTHETIC,
             },
             Pattern::CharClass { set, .. } => Pattern::CharClass {
-                set: *set,
+                set: set.clone(),
                 span: Span::SYNTHETIC,
             },
             Pattern::AnyChar { .. } => Pattern::AnyChar {

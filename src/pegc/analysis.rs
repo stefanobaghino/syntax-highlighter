@@ -308,10 +308,10 @@ fn pattern_first(pat: &Pattern, nullable: &HashSet<String>) -> FollowSet {
             out.insert(FollowElement::Literal(bytes.clone()));
         }
         Pattern::CharClass { set, .. } => {
-            out.insert(FollowElement::CharClass(*set));
+            out.insert(FollowElement::CharClass(set.clone()));
         }
         Pattern::AnyChar { .. } => {
-            out.insert(FollowElement::CharClass(CharSet::full()));
+            out.insert(FollowElement::CharClass(CharSet::any()));
         }
         Pattern::NonTerminal { name, .. } => {
             out.insert(FollowElement::Rule(name.clone()));
@@ -1053,7 +1053,7 @@ fn scan_frame_for_validator(
 /// `AnyChar` similarly; otherwise checks for exact membership. Rule
 /// references and captures aren't expanded.
 fn element_subsumed_by(elem: &FollowElement, set: &FollowSet) -> bool {
-    let any_char = CharSet::full();
+    let any_char = CharSet::any();
     if set
         .iter()
         .any(|s| matches!(s, FollowElement::CharClass(cs) if *cs == any_char))
@@ -1120,7 +1120,7 @@ pub fn follow_set_to_boundary_pattern(fs: &FollowSet) -> Pattern {
 fn follow_element_inner_to_pattern(elem: &FollowElement) -> Pattern {
     match elem {
         FollowElement::Literal(bytes) => Pattern::literal_bytes(bytes.clone()),
-        FollowElement::CharClass(cs) => Pattern::char_class(*cs),
+        FollowElement::CharClass(cs) => Pattern::char_class(cs.clone()),
         FollowElement::Rule(name) => Pattern::nt(name.clone()),
         FollowElement::Capture { kind, inner } => {
             Pattern::capture(kind.clone(), follow_element_inner_to_pattern(inner))

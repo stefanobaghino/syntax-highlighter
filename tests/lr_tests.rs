@@ -10,7 +10,7 @@ use syntax_highlighter::pegvm::{Capture, CaptureKind, MatchResult, VM};
 
 fn run(src: &str, input: &[u8]) -> MatchResult {
     let prog = pegc::compile(src).expect("compile failed");
-    VM::new(&prog.code, input).run()
+    VM::new_from_program(&prog, input).run()
 }
 
 fn cap(kinds: &[String], name: &str, start: usize, end: usize) -> Capture {
@@ -34,7 +34,7 @@ fn left_associative_addition() {
         expr <- expr @op{'+'} @num{[0-9]+} / @num{[0-9]+}
     "#;
     let prog = pegc::compile(src).expect("compile");
-    let r = VM::new(&prog.code, b"1+2+3").run();
+    let r = VM::new_from_program(&prog, b"1+2+3").run();
     assert!(r.complete);
     assert_eq!(r.matched, 5);
     let kinds = prog.capture_kinds.clone();
@@ -291,8 +291,10 @@ fn cached_lr_seed_matches_uncached_run() {
         expr <- expr @op{'+'} @num{[0-9]+} / @num{[0-9]+}
     "#;
     let prog = pegc::compile(src).expect("compile");
-    let cached = VM::new(&prog.code, b"1+2+3").with_memo_threshold(0).run();
-    let uncached = VM::new(&prog.code, b"1+2+3")
+    let cached = VM::new_from_program(&prog, b"1+2+3")
+        .with_memo_threshold(0)
+        .run();
+    let uncached = VM::new_from_program(&prog, b"1+2+3")
         .with_memo_threshold(usize::MAX)
         .run();
     assert_eq!(cached, uncached);
@@ -314,7 +316,7 @@ fn lr_seed_caches_below_memo_threshold() {
         expr <- expr @op{'+'} @num{[0-9]+} / @num{[0-9]+}
     "#;
     let prog = pegc::compile(src).expect("compile");
-    let (_, stats) = VM::new(&prog.code, b"1")
+    let (_, stats) = VM::new_from_program(&prog, b"1")
         .with_memo_threshold(1024)
         .run_with_memo_stats();
     assert_eq!(
@@ -334,10 +336,10 @@ fn lr_inside_outer_repetition_matches_uncached_run() {
         expr <- expr @op{'+'} @num{[0-9]+} / @num{[0-9]+}
     "#;
     let prog = pegc::compile(src).expect("compile");
-    let cached = VM::new(&prog.code, b"1+2,3+4,5")
+    let cached = VM::new_from_program(&prog, b"1+2,3+4,5")
         .with_memo_threshold(0)
         .run();
-    let uncached = VM::new(&prog.code, b"1+2,3+4,5")
+    let uncached = VM::new_from_program(&prog, b"1+2,3+4,5")
         .with_memo_threshold(usize::MAX)
         .run();
     assert_eq!(cached, uncached);

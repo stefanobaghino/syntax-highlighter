@@ -41,7 +41,9 @@ fn two_rule_grammar() -> syntax_highlighter::pegvm::Program {
     );
     rules.insert(
         "word".into(),
-        Pattern::repeat_one(Pattern::char_class(CharSet::from_ranges(&[(b'a', b'z')]))),
+        Pattern::repeat_one(Pattern::char_class(
+            CharSet::from_ranges(&[('a', 'z')]).unwrap(),
+        )),
     );
     Grammar::new(rules).compile().unwrap()
 }
@@ -52,7 +54,7 @@ fn second_parse_with_seeded_cache_hits_every_cached_rule() {
 
     // Cold parse populates the cache with entries for every memoized
     // rule invocation.
-    let (cold_result, cold_stats, cache) = VM::new(&prog.code, b"hello world")
+    let (cold_result, cold_stats, cache) = VM::new_from_program(&prog, b"hello world")
         .with_memo_threshold(0)
         .run_with_cache();
     assert!(cold_result.complete);
@@ -64,10 +66,9 @@ fn second_parse_with_seeded_cache_hits_every_cached_rule() {
     // Warm parse with the same input: every RuleEnter for a rule
     // already in the cache should hit. Misses drop to zero when the
     // seeded cache covers every rule invocation.
-    let (warm_result, warm_stats, _warm_cache) =
-        VM::new_with_cache(&prog.code, b"hello world", cache)
-            .with_memo_threshold(0)
-            .run_with_cache();
+    let (warm_result, warm_stats, _warm_cache) = VM::new_with_cache(&prog, b"hello world", cache)
+        .with_memo_threshold(0)
+        .run_with_cache();
     assert_eq!(
         warm_result, cold_result,
         "warm re-parse must produce identical output"
@@ -82,11 +83,11 @@ fn second_parse_with_seeded_cache_hits_every_cached_rule() {
 #[test]
 fn seeded_cache_survives_second_parse() {
     let prog = two_rule_grammar();
-    let (_, _, cache) = VM::new(&prog.code, b"hello world")
+    let (_, _, cache) = VM::new_from_program(&prog, b"hello world")
         .with_memo_threshold(0)
         .run_with_cache();
     let len_before = cache.len();
-    let (_, _, cache_after) = VM::new_with_cache(&prog.code, b"hello world", cache)
+    let (_, _, cache_after) = VM::new_with_cache(&prog, b"hello world", cache)
         .with_memo_threshold(0)
         .run_with_cache();
     assert_eq!(
@@ -100,8 +101,8 @@ fn seeded_cache_survives_second_parse() {
 fn empty_cache_behaves_like_fresh_vm() {
     let prog = two_rule_grammar();
     let input = b"hi there";
-    let fresh: MatchResult = VM::new(&prog.code, input).run();
-    let seeded: MatchResult = VM::new_with_cache(&prog.code, input, MemoCache::new()).run();
+    let fresh: MatchResult = VM::new_from_program(&prog, input).run();
+    let seeded: MatchResult = VM::new_with_cache(&prog, input, MemoCache::new()).run();
     assert_eq!(fresh, seeded);
 }
 
@@ -116,7 +117,7 @@ fn lr_cache_entry_invalidated_by_edit_inside_examined_range() {
     use syntax_highlighter::pegvm::Edit;
     let prog = pegc::compile("root <- expr\n        expr <- expr '+' [0-9]+ / [0-9]+").unwrap();
 
-    let (_, _, mut cache) = VM::new(&prog.code, b"1+2+3")
+    let (_, _, mut cache) = VM::new_from_program(&prog, b"1+2+3")
         .with_memo_threshold(0)
         .run_with_cache();
     let entries_before = cache.len();
@@ -149,15 +150,17 @@ fn lr_cache_round_trip_after_edit_matches_fresh_parse() {
     use syntax_highlighter::pegvm::Edit;
     let prog = pegc::compile("root <- expr\n        expr <- expr '+' [0-9]+ / [0-9]+").unwrap();
 
-    let (_, _, mut cache) = VM::new(&prog.code, b"1+2+3")
+    let (_, _, mut cache) = VM::new_from_program(&prog, b"1+2+3")
         .with_memo_threshold(0)
         .run_with_cache();
     cache.apply_edit(Edit::replacement(0, 1, 1));
 
-    let (incremental, _, _) = VM::new_with_cache(&prog.code, b"9+2+3", cache)
+    let (incremental, _, _) = VM::new_with_cache(&prog, b"9+2+3", cache)
         .with_memo_threshold(0)
         .run_with_cache();
-    let fresh = VM::new(&prog.code, b"9+2+3").with_memo_threshold(0).run();
+    let fresh = VM::new_from_program(&prog, b"9+2+3")
+        .with_memo_threshold(0)
+        .run();
     assert_eq!(incremental, fresh);
 }
 

@@ -158,12 +158,13 @@ fn run_stats(args: &[String]) -> ExitCode {
     kinds_json.push(']');
     let _ = writeln!(
         out,
-        "{{\"path\":{},\"instructions\":{},\"rules\":{},\"capture_kinds_count\":{},\"capture_kinds\":{}}}",
+        "{{\"path\":{},\"instructions\":{},\"rules\":{},\"capture_kinds_count\":{},\"capture_kinds\":{},\"char_set_count\":{}}}",
         json_string(path),
         prog.code.len(),
         prog.rule_count,
         prog.capture_kinds.len(),
         kinds_json,
+        prog.char_sets.len(),
     );
     // Per-rule NDJSON: one record per rule, sorted alphabetically.
     // Every rule appears, including zero-reference ones — the "dead
@@ -303,11 +304,16 @@ fn json_follow_element(out: &mut String, elem: &FollowElement) {
             out.push('}');
         }
         FollowElement::CharClass(cs) => {
-            out.push_str("{\"type\":\"char_class\",\"bitmap\":\"");
-            for b in cs.bitmap() {
-                let _ = write!(out, "{:02x}", b);
+            out.push_str("{\"type\":\"char_class\",\"ranges\":[");
+            let mut first = true;
+            for &(lo, hi) in cs.ranges() {
+                if !first {
+                    out.push(',');
+                }
+                first = false;
+                let _ = write!(out, "[{},{}]", lo as u32, hi as u32);
             }
-            out.push_str("\"}");
+            out.push_str("]}");
         }
         FollowElement::Rule(name) => {
             out.push_str("{\"type\":\"rule\",\"name\":");

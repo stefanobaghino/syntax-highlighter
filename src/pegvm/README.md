@@ -27,7 +27,7 @@ Every other type in the module exists to serve one of these three stages.
 | Variant | PEG notation | Meaning |
 |---|---|---|
 | `Literal(Vec<u8>)` | `"abc"` | Matches a specific sequence of bytes, in order. |
-| `CharClass(CharSet)` | `[0-9a-f]` | Matches any single byte in the set. |
+| `CharClass(CharSet)` | `[0-9a-f]` | Matches any single Unicode scalar in the set (1..=4 bytes via UTF-8 decode). |
 | `AnyChar` | `.` | Matches any single byte (fails only at end of input). |
 | `Sequence(Vec<Pattern>)` | `p1 p2 p3` | Concatenation; every sub-pattern must match in order. |
 | `OrderedChoice(Vec<Pattern>)` | `p1 / p2 / p3` | First-match; unlike regex `\|`, alternation is biased — `p2` is tried only if `p1` fails. |
@@ -44,16 +44,16 @@ A `Pattern` is a plain value. It can be constructed programmatically (see the co
 
 The `Capture` variant is the bridge between parsing (which produces `Pattern`) and highlighting (which consumes tag names). It carries a string that is later interned to an integer id during compilation, and resolved back to a name by the highlighter. See `CaptureKind`.
 
-### `CharSet` — a set of bytes
+### `CharSet` — a set of Unicode scalars
 
-A `CharSet` is *a set of byte values*. Cardinality: the domain is the 256 possible `u8` values, so the value-space of `CharSet` is finite and small. The type appears in two places:
+A `CharSet` is *a set of Unicode scalar values*, stored as an immutable sorted interval list of `(char, char)` ranges. The type appears in two places:
 
-- In a `Pattern`, as the payload of `CharClass` — the parsed representation of `[a-z_]`, `[^"\\]`, etc.
-- In an `Instruction`, as the payload of `Set` and `TestSet` — the compiled, directly-executable form.
+- In a `Pattern`, as the payload of `CharClass` — the parsed representation of `[a-z_]`, `[^"\\]`, `[\p{Greek}]`, etc.
+- In a `Program`'s `char_sets` side table, indexed by `SetId` and dispatched by `Instruction::CharSet(set_id)`.
 
-The representation is a 256-bit bitmap (`[u8; 32]`); `contains(b)` is a constant-time bit test. Operations (`negate`, `union`, range construction) are closed over the type, so building a class like `[^"\\]` as `CharSet::from_bytes(b"\"\\").negate()` returns another `CharSet`. No allocation.
+Membership is a binary search over the interval list; construction merges overlaps and adjacencies. `negate`, `union`, and range construction are closed over the type, so building a class like `[^"\\]` as `CharSet::from_chars(&['"', '\\']).negate()` returns another `CharSet`.
 
-The compiler performs no transformation on a `CharSet` when going from `Pattern::CharClass(s)` to `Instruction::Set(s)` — the same value flows through. This is deliberate: the byte domain of a character class is already the most direct representation of "which input bytes does this class accept?" and there's no benefit to re-encoding it.
+`Instruction::CharSet` dispatch UTF-8-decodes one code point from the input via the WHATWG decoder and tests membership against the `CharSet` indexed by the class id. Invalid UTF-8 emits a `RecoveryOrigin::Utf8` capture and skips the maximal invalid prefix.
 
 ### `Grammar` — named patterns plus a start rule
 
@@ -78,7 +78,7 @@ Each `Pattern` variant maps to a small fixed sequence of `Instruction`s. The ins
 
 | Role | Instructions | What they do |
 |---|---|---|
-| Matching | `Char`, `Set`, `Any`, `TestChar`, `TestSet` | Consume input bytes, or fall through to a label if the current byte doesn't match. |
+| Matching | `Byte`, `CharClass`, `Any` | Consume input (one byte for `Byte`, one code point for `Any` / `CharClass`). `Byte` is byte-faithful for literals; `Any` / `CharClass` UTF-8-decode and recover on invalid sequences. |
 | Control flow | `Jump`, `Choice`, `Commit`, `PartialCommit`, `BackCommit`, `FailTwice`, `Fail` | Express ordered choice, repetition, and predicates in terms of pushing and popping backtrack records. |
 | Calls | `Call`, `Return` | Invoke a named rule and return from it — the `NonTerminal` variant compiles to `Call(address)`. |
 | Rule entry | `RuleEnter` | Carries a `RuleKind` discriminant (`Memo` or `Lr`). The shared cache-hit prologue probes the packrat slot at `(memo_id, sp)`: on a success hit it replays cached captures and jumps to the rule's `Return`; on a cached failure it enters `fail()`. On a miss the kind branches: `Memo` pushes a `StackEntry::Memo` frame (committed by `MemoClose` on success or `fail()` on escape); `Lr` walks the stack for an in-flight `LFrame` (recursive entry replays the seed — `None` ⇒ fail, `Some` ⇒ jump to Return) and pushes a fresh `LFrame` if no match. |
@@ -86,7 +86,7 @@ Each `Pattern` variant maps to a small fixed sequence of `Instruction`s. The ins
 | Captures | `CaptureBegin`, `CaptureEnd` | Bracket a matched span with a kind tag so the VM can record it. |
 | Termination | `End` | Mark the end of a successful match. |
 
-An `Instruction` is a pure value; it carries no pointers or state, only the data (`u8`, `CharSet`, `Label`, `CaptureKind`) its semantics need. The entire compiled grammar is a `Vec<Instruction>` — a blob of data that could in principle be serialized, sent over a wire, or generated by something other than the provided compiler.
+An `Instruction` is a pure value; it carries no pointers or state, only the data (`u8`, `SetId`, `Label`, `CaptureKind`) its semantics need. The entire compiled grammar is a `Vec<Instruction>` — a blob of data that could in principle be serialized, sent over a wire, or generated by something other than the provided compiler.
 
 **Memo-threshold filter.** Successful `RuleKind::Memo` rule bodies are not cached unconditionally: entries whose matched span is shorter than `VM::DEFAULT_MEMO_THRESHOLD` are discarded. Tiny leaf rules pay a lookup cost without a meaningful replay win, so filtering them out is the classic memory-vs-time lever. The policy lives in `VM::cache_success`. `RuleKind::Lr` seed commits at `LRTail` ignore the filter and always cache — the seed-and-grow loop relies on the cache to short-circuit subsequent visits at the same `sp`, and filtering short LR seeds out causes O(2^N) re-descent in deep LR cascades (issue #55). Failure entries in `fail()` are also not filtered (their value is short-circuiting future re-executions). The default can be overridden per-VM via `VM::with_memo_threshold(bytes)`; `0` restores pure packrat behavior across both kinds.
 
@@ -99,7 +99,7 @@ An `Instruction` is a pure value; it carries no pointers or state, only the data
 pub struct Label(pub u32);
 ```
 
-Its purpose is *disambiguation*: a `Jump(label)` instruction can only target something that was deliberately constructed as a code address — a stray `sp` or `len` cannot silently be used where the grammar's structure expects a label. The inner width is `u32` rather than `usize` because every `Instruction` variant carrying a Label pays for that width via enum padding; trimming Label from 8 to 4 bytes shrinks the largest variant (`TestSet(CharSet, Label)`) from 40 to 36 payload bytes and the whole enum from 48 to 40 bytes, ~17% less memory across every Program. The cap of 4 G instructions is well beyond what `pegc` produces — sqlite, the largest grammar in this repo, compiles to ~6 K instructions.
+Its purpose is *disambiguation*: a `Jump(label)` instruction can only target something that was deliberately constructed as a code address — a stray `sp` or `len` cannot silently be used where the grammar's structure expects a label. The inner width is `u32` rather than `usize` because every `Instruction` variant carrying a Label pays for that width via enum padding; trimming Label from 8 to 4 bytes shrinks the per-instruction footprint accordingly. The cap of 4 G instructions is well beyond what `pegc` produces — sqlite, the largest grammar in this repo, compiles to ~6 K instructions.
 
 Labels appear only in `Instruction` payloads. The VM widens to `usize` at the boundary where a Label flows into the instruction pointer or onto the backtrack stack via `Label::as_index` (`self.ip = label.as_index()`); the newtype's job is to keep the *data* of the program well-typed and compact.
 
@@ -219,7 +219,7 @@ Some properties the module relies on can't be encoded in the Rust type system. T
 1. **`PartialCommit` must target the body of a repetition, not the `Choice` that starts it.** `PartialCommit` updates the existing top backtrack frame rather than pushing a new one; jumping back to the `Choice` would push a fresh frame every iteration, exhausting memory and — worse — corrupting the stack so that an enclosing `Return` pops the wrong kind of entry. This is the first thing to check when extending the compiler.
 2. **Captures are truncated on backtrack.** Any instruction that enters the fail protocol routes through `VM::fail`, which restores the capture buffer length from the backtrack frame. New backtracking instructions must reuse this helper rather than re-implement it.
 3. **`VM::fail` and `BackCommit` are the only sites where `sp` retreats.** Both must route through `VM::maybe_snapshot` so the farthest-failure bookkeeping sees every retreat. Between retreats `sp` is monotone non-decreasing, which is why snapshots at those two sites capture the true deepest point reached. Any new instruction that rewinds `sp` must update this invariant.
-4. **Byte-oriented.** `CharSet` is a set of `u8` values; UTF-8 is never decoded. This is a deliberate simplification appropriate for the MVP and will need to be revisited before serious Unicode-aware grammars.
+4. **UTF-8-aware classes; byte-faithful literals.** `Instruction::Byte` consumes one input byte (with no decode); `Instruction::CharSet` and `Instruction::Any` UTF-8-decode one code point. Invalid UTF-8 inside a `CharClass` / `Any` dispatch emits a `RecoveryOrigin::Utf8` capture and skips the maximal invalid prefix. This closes the JSON / TOML spec gap (both formats mandate UTF-8) without making literal byte matching pay decode overhead.
 5. **Memo replay is absolute-sp.** Cached captures carry the original `start`/`end` byte offsets; a `RuleEnter` hit only fires when `sp == start_sp`, so the stored values are replayed verbatim. Entries are inserted as already-closed `OpenCapture`s so the enclosing `CaptureEnd`'s innermost-still-open search (`rposition(c.end.is_none())`) binds to the caller's open capture rather than a replayed one.
 6. **`VM::fail` records every `Memo` frame it traverses.** When unwinding to find a `Backtrack`, each `Memo` frame encountered is committed as a failure entry before being discarded. Silently dropping a frame would leak re-executions on future calls at the same sp. The loop is an exhaustive `match` over `StackEntry` specifically to make omissions a compiler error.
 7. **`RuleEnter` calls `maybe_snapshot` after applying a success hit.** The hit advances `sp` past code that didn't execute; without the snapshot call the farthest-failure bookkeeping would miss the advance and `MatchResult.complete == false` would report a stale deepest point.
@@ -227,7 +227,7 @@ Some properties the module relies on can't be encoded in the Rust type system. T
 9. **`LRTail`'s `Label` payload targets the instruction after `RuleEnter`, not `RuleEnter` itself.** The seed-and-grow loop must re-execute the body, not re-push the `LFrame` — re-pushing would lose the prior seed and turn growth into an infinite loop. See `compile_rules`' LR-rule branch in `src/pegc/compiler.rs`.
 10. **`fail()`'s `LFrame` arm pops `memo_examined` before any rescue branch.** The watermark stack and `LFrame` push/pop in lockstep; if the rescue path took the early `return true` without popping, the next `MemoClose` / `LRTail` would underflow `memo_examined`. See `VM::fail`'s `StackEntry::LFrame` arm.
 11. **`DiagState::current_rule_stack` push/pop pairs with rule-frame push/pop on the backtrack stack, *when the diagnostic is enabled*.** Pushed in `RuleEnter`'s `Memo`-kind miss path *and* the first-entry case of the `Lr`-kind miss path; popped in `MemoClose`, `LRTail`'s commit branch, `fail()`'s `Memo` arm, and `fail()`'s `LFrame` arm. The mirror feeds the `RecoveryDiagnostic.rule_stack` field that `pegdb recoveries dump` emits — drift between this mirror and the live `StackEntry::Memo` / `StackEntry::LFrame` frames silently corrupts the diagnostic. Every site is gated on `self.diag.is_some()` so the highlighter hot path (knob off, the default) does nothing extra; the gate must be set in lockstep across all six sites or the mirror desyncs. Like `memo_examined`, the symmetry is invariant under the gate: when on, every rule-frame push twins with one mirror push, every pop with one mirror pop.
-12. **`recovery_diagnostics` is finalize-filtered.** `RecoverToScopedMax` pushes one diagnostic per call, *before* the recovery body's `CaptureBegin` / body / `CaptureEnd` triple runs. If the recovery body later fails (e.g. the EOF-exit iteration of a `*^` loop where the recovery `Any(1)` can't advance, or any `^label` catch whose recovery body fails wholesale), the enclosing `Choice` / `Backtrack` pair rewinds the capture buffer to before the recovery's first `CaptureBegin` — leaving a phantom diagnostic with no surviving capture. `finalize_recovery_diagnostics` (in `src/pegvm/vm.rs`) drops phantoms by checking that the capture at each diagnostic's `capture_index` starts at the diagnostic's `pos`. The check is position-only (not width-also) because recovery bodies post-#92 / #97 emit multi-byte captures (`*^[cs]`'s `(![cs] .)* [cs]` body, any `^label` catch with author-written multi-byte recovery), and the earlier width=1 form was tuned for plain `*^`'s `Any(1)` body and silently dropped diagnostics for the newer surfaces. Future changes to any recovery lowering must keep the "diagnostic position == surviving capture's start" invariant or update the filter.
+12. **`recovery_diagnostics` is finalize-filtered.** `RecoverToScopedMax` pushes one diagnostic per call, *before* the recovery body's `CaptureBegin` / body / `CaptureEnd` triple runs. If the recovery body later fails (e.g. the EOF-exit iteration of a `*^` loop where the recovery `Any` can't advance, or any `^label` catch whose recovery body fails wholesale), the enclosing `Choice` / `Backtrack` pair rewinds the capture buffer to before the recovery's first `CaptureBegin` — leaving a phantom diagnostic with no surviving capture. `finalize_recovery_diagnostics` (in `src/pegvm/vm.rs`) drops phantoms by checking that the capture at each diagnostic's `capture_index` starts at the diagnostic's `pos`. The check is position-only (not width-also) because recovery bodies post-#92 / #97 emit multi-byte captures (`*^[cs]`'s `(![cs] .)* [cs]` body, any `^label` catch with author-written multi-byte recovery), and the earlier width=1 form was tuned for plain `*^`'s `Any` body and silently dropped diagnostics for the newer surfaces. Future changes to any recovery lowering must keep the "diagnostic position == surviving capture's start" invariant or update the filter.
 
 ## References
 

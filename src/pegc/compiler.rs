@@ -90,6 +90,7 @@ struct Compiler {
     capture_names: Vec<String>,
     label_kinds: HashMap<String, LabelId>,
     label_names: Vec<String>,
+    char_sets: Vec<crate::pegvm::CharSet>,
 }
 
 impl Compiler {
@@ -101,7 +102,21 @@ impl Compiler {
             capture_names: Vec::new(),
             label_kinds: HashMap::new(),
             label_names: Vec::new(),
+            char_sets: Vec::new(),
         }
+    }
+
+    /// Intern a character set. Returns a fresh `SetId` referring to
+    /// the new entry in `char_sets`. Sets are not deduped at the
+    /// compiler level — the same `CharSet` constructed twice would
+    /// yield two entries. Deduplication is cheap to add later if it
+    /// shows up in `pegc stats`.
+    fn intern_char_set(&mut self, set: crate::pegvm::CharSet) -> crate::pegvm::SetId {
+        let id = crate::pegvm::SetId(
+            u16::try_from(self.char_sets.len()).expect("char_sets count exceeds u16::MAX"),
+        );
+        self.char_sets.push(set);
+        id
     }
 
     fn pos(&self) -> usize {
@@ -134,8 +149,6 @@ impl Compiler {
             Instruction::Commit(_) => Instruction::Commit(target),
             Instruction::PartialCommit(_) => Instruction::PartialCommit(target),
             Instruction::BackCommit(_) => Instruction::BackCommit(target),
-            Instruction::TestChar(b, _) => Instruction::TestChar(*b, target),
-            Instruction::TestSet(s, _) => Instruction::TestSet(*s, target),
             Instruction::Call(_) => Instruction::Call(target),
             Instruction::RuleEnter(id, kind, _) => Instruction::RuleEnter(*id, *kind, target),
             Instruction::LRTail(id, _) => Instruction::LRTail(*id, target),
@@ -168,14 +181,21 @@ impl Compiler {
         match p {
             Pattern::Literal { bytes, .. } => {
                 for &b in bytes {
-                    self.emit(Instruction::Char(b));
+                    self.emit(Instruction::Byte(b));
                 }
             }
             Pattern::CharClass { set, .. } => {
-                self.emit(Instruction::Set(*set));
+                // Intern "recovery" so the VM has a capture kind to tag
+                // UTF-8 recovery spans with at dispatch time. Without
+                // this the runtime falls back to silent-skip on bad
+                // bytes — the compiler is the right layer to guarantee
+                // the invariant.
+                self.intern_capture("recovery");
+                let set_id = self.intern_char_set(set.clone());
+                self.emit(Instruction::CharSet(set_id));
             }
             Pattern::AnyChar { .. } => {
-                self.emit(Instruction::Any(1));
+                self.emit(Instruction::Any);
             }
             Pattern::Sequence { items, .. } => {
                 for it in items {
@@ -340,6 +360,7 @@ pub fn compile_pattern(pat: &Pattern) -> Program {
         rule_names: Vec::new(),
         label_kinds: c.label_names,
         rule_is_trivia: Vec::new(),
+        char_sets: c.char_sets,
     }
 }
 
@@ -446,6 +467,7 @@ pub(crate) fn compile_rules(rules: &HashMap<String, Pattern>) -> Result<Program,
         rule_names,
         label_kinds: c.label_names,
         rule_is_trivia,
+        char_sets: c.char_sets,
     })
 }
 

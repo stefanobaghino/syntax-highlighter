@@ -21,7 +21,7 @@ fn sqlite_select_registers_memo_hits() {
     let prog = pegc::compile(SQLITE_GRAMMAR).unwrap();
 
     let input = "SELECT id, name FROM users WHERE active AND id > 10;";
-    let (result, stats) = VM::new(&prog.code, input.as_bytes())
+    let (result, stats) = VM::new_from_program(&prog, input.as_bytes())
         .with_memo_threshold(0)
         .run_with_memo_stats();
 
@@ -47,7 +47,7 @@ fn default_threshold_still_fires_on_realistic_sql() {
     let input = include_str!("../benches/fixtures/medium.sql");
     let prog = pegc::compile(SQLITE_GRAMMAR).unwrap();
 
-    let (result, stats) = VM::new(&prog.code, input.as_bytes()).run_with_memo_stats();
+    let (result, stats) = VM::new_from_program(&prog, input.as_bytes()).run_with_memo_stats();
 
     assert!(result.complete, "medium.sql must parse to completion");
     assert!(
@@ -68,7 +68,7 @@ fn json_run_records_memo_entries() {
     let prog = pegc::compile(JSON_GRAMMAR).unwrap();
 
     let input = br#"{"a": 1, "b": [true, null, "x"]}"#;
-    let (result, stats) = VM::new(&prog.code, input)
+    let (result, stats) = VM::new_from_program(&prog, input)
         .with_memo_threshold(0)
         .run_with_memo_stats();
 

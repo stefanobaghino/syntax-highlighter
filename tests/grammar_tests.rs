@@ -91,7 +91,7 @@ fn postfix_repeat_count_multiple() {
 #[test]
 fn postfix_repeat_count_on_backslash_atom() {
     let g = parse("r <- \\d{4}");
-    let digit = Pattern::char_class(CharSet::from_ranges(&[(b'0', b'9')]));
+    let digit = Pattern::char_class(CharSet::from_ranges(&[('0', '9')]).unwrap());
     assert_eq!(
         g.rules["r"],
         Pattern::seq(vec![digit.clone(), digit.clone(), digit.clone(), digit])
@@ -253,10 +253,10 @@ fn recover_repeat_postfix_plus_caret_lowers_to_seq() {
 #[test]
 fn sync_set_postfix_star_caret_charset() {
     // `p*^[;]` desugars to `(p ^recovery @recovery{(![;] .)* [;]})*`.
-    let semi = CharSet::from_bytes(b";");
+    let semi = CharSet::from_chars(&[';']);
     let g = parse("r <- 'x'*^[;]");
     let skip_loop = Pattern::repeat(Pattern::seq(vec![
-        Pattern::not_predicate(Pattern::char_class(semi)),
+        Pattern::not_predicate(Pattern::char_class(semi.clone())),
         Pattern::any_char(),
     ]));
     let recovery_body = Pattern::seq(vec![skip_loop, Pattern::char_class(semi)]);
@@ -269,10 +269,10 @@ fn sync_set_postfix_star_caret_charset() {
 #[test]
 fn sync_set_postfix_plus_caret_charset() {
     // `p+^[;]` lowers to `p (p*^[;])`.
-    let semi = CharSet::from_bytes(b";");
+    let semi = CharSet::from_chars(&[';']);
     let g = parse("r <- 'x'+^[;]");
     let skip_loop = Pattern::repeat(Pattern::seq(vec![
-        Pattern::not_predicate(Pattern::char_class(semi)),
+        Pattern::not_predicate(Pattern::char_class(semi.clone())),
         Pattern::any_char(),
     ]));
     let recovery_body = Pattern::seq(vec![skip_loop, Pattern::char_class(semi)]);
@@ -291,7 +291,7 @@ fn sync_set_requires_no_whitespace_before_bracket() {
     // the enclosing sequence, NOT a sync set. The whitespace breaks
     // the postfix glue.
     let g = parse("r <- 'x'*^ [;]");
-    let semi = CharSet::from_bytes(b";");
+    let semi = CharSet::from_chars(&[';']);
     assert_eq!(
         g.rules["r"],
         Pattern::seq(vec![
@@ -307,11 +307,10 @@ fn sync_set_accepts_negated_and_ranges() {
     // normal `[...]` atom — ranges (`a-z`) and negation (`[^...]`)
     // are both supported.
     let g = parse("r <- 'x'*^[^a-z]");
-    let mut alpha = CharSet::empty();
-    alpha.add_range(b'a', b'z');
+    let alpha = CharSet::single_range('a', 'z').unwrap();
     let neg_alpha = alpha.negate();
     let skip_loop = Pattern::repeat(Pattern::seq(vec![
-        Pattern::not_predicate(Pattern::char_class(neg_alpha)),
+        Pattern::not_predicate(Pattern::char_class(neg_alpha.clone())),
         Pattern::any_char(),
     ]));
     let recovery_body = Pattern::seq(vec![skip_loop, Pattern::char_class(neg_alpha)]);
@@ -350,10 +349,10 @@ fn recover_repeat_postfix_plus_caret_with_label() {
 fn sync_set_postfix_star_caret_charset_with_label() {
     // `p*^[;]:bad_stmt` interns label "bad_stmt"; recovery body
     // (sync-set skip) is unchanged.
-    let semi = CharSet::from_bytes(b";");
+    let semi = CharSet::from_chars(&[';']);
     let g = parse("r <- 'x'*^[;]:bad_stmt");
     let skip_loop = Pattern::repeat(Pattern::seq(vec![
-        Pattern::not_predicate(Pattern::char_class(semi)),
+        Pattern::not_predicate(Pattern::char_class(semi.clone())),
         Pattern::any_char(),
     ]));
     let recovery_body = Pattern::seq(vec![skip_loop, Pattern::char_class(semi)]);
@@ -366,10 +365,10 @@ fn sync_set_postfix_star_caret_charset_with_label() {
 #[test]
 fn sync_set_postfix_plus_caret_charset_with_label() {
     // `p+^[;]:bad_stmt` lowers to `p (p*^[;]:bad_stmt)`.
-    let semi = CharSet::from_bytes(b";");
+    let semi = CharSet::from_chars(&[';']);
     let g = parse("r <- 'x'+^[;]:bad_stmt");
     let skip_loop = Pattern::repeat(Pattern::seq(vec![
-        Pattern::not_predicate(Pattern::char_class(semi)),
+        Pattern::not_predicate(Pattern::char_class(semi.clone())),
         Pattern::any_char(),
     ]));
     let recovery_body = Pattern::seq(vec![skip_loop, Pattern::char_class(semi)]);
@@ -659,10 +658,7 @@ fn boundary_catch_with_rule_boundary() {
 #[test]
 fn boundary_catch_with_charset_boundary() {
     let g = parse("r <- 'a' ^^lbl [,;)]");
-    let mut delim = CharSet::empty();
-    delim.add(b',');
-    delim.add(b';');
-    delim.add(b')');
+    let delim = CharSet::from_chars(&[',', ';', ')']);
     assert_eq!(
         g.rules["r"],
         lowered_boundary_catch(Pattern::literal("a"), "lbl", Pattern::char_class(delim)),
@@ -866,30 +862,21 @@ fn char_class_with_range() {
     let g = parse("d <- [0-9]");
     assert_eq!(
         g.rules["d"],
-        Pattern::char_class(CharSet::from_ranges(&[(b'0', b'9')]))
+        Pattern::char_class(CharSet::from_ranges(&[('0', '9')]).unwrap())
     );
 }
 
 #[test]
 fn char_class_negated() {
     let g = parse("nq <- [^\"\\\\]");
-    let mut excluded = CharSet::empty();
-    excluded.add(b'"');
-    excluded.add(b'\\');
+    let excluded = CharSet::from_chars(&['"', '\\']);
     assert_eq!(g.rules["nq"], Pattern::char_class(excluded.negate()));
 }
 
 #[test]
 fn char_class_mixed_chars_and_ranges() {
     let g = parse("alnum <- [a-zA-Z0-9_]");
-    let expected = {
-        let mut s = CharSet::empty();
-        s.add_range(b'a', b'z');
-        s.add_range(b'A', b'Z');
-        s.add_range(b'0', b'9');
-        s.add(b'_');
-        s
-    };
+    let expected = CharSet::from_ranges(&[('a', 'z'), ('A', 'Z'), ('0', '9'), ('_', '_')]).unwrap();
     assert_eq!(g.rules["alnum"], Pattern::char_class(expected));
 }
 
@@ -948,9 +935,7 @@ fn escape_sequences_in_string() {
 #[test]
 fn dash_in_class_at_end_is_literal() {
     let g = parse("r <- [+\\-]");
-    let mut s = CharSet::empty();
-    s.add(b'+');
-    s.add(b'-');
+    let s = CharSet::from_chars(&['+', '-']);
     assert_eq!(g.rules["r"], Pattern::char_class(s));
 }
 
@@ -959,7 +944,7 @@ fn backslash_d_atom() {
     let g = parse("r <- \\d");
     assert_eq!(
         g.rules["r"],
-        Pattern::char_class(CharSet::from_ranges(&[(b'0', b'9')]))
+        Pattern::char_class(CharSet::from_ranges(&[('0', '9')]).unwrap())
     );
 }
 
@@ -968,7 +953,7 @@ fn backslash_d_negated_atom() {
     let g = parse("r <- \\D");
     assert_eq!(
         g.rules["r"],
-        Pattern::char_class(CharSet::from_ranges(&[(b'0', b'9')]).negate())
+        Pattern::char_class(CharSet::from_ranges(&[('0', '9')]).unwrap().negate())
     );
 }
 
@@ -977,7 +962,7 @@ fn backslash_s_atom() {
     let g = parse("r <- \\s");
     assert_eq!(
         g.rules["r"],
-        Pattern::char_class(CharSet::from_bytes(b" \t\n\r"))
+        Pattern::char_class(CharSet::from_chars(&[' ', '\t', '\n', '\r']))
     );
 }
 
@@ -986,7 +971,7 @@ fn backslash_s_negated_atom() {
     let g = parse("r <- \\S");
     assert_eq!(
         g.rules["r"],
-        Pattern::char_class(CharSet::from_bytes(b" \t\n\r").negate())
+        Pattern::char_class(CharSet::from_chars(&[' ', '\t', '\n', '\r']).negate())
     );
 }
 
@@ -995,7 +980,7 @@ fn backslash_h_atom() {
     let g = parse("r <- \\h");
     assert_eq!(
         g.rules["r"],
-        Pattern::char_class(CharSet::from_bytes(b" \t"))
+        Pattern::char_class(CharSet::from_chars(&[' ', '\t']))
     );
 }
 
@@ -1004,7 +989,7 @@ fn backslash_h_negated_atom() {
     let g = parse("r <- \\H");
     assert_eq!(
         g.rules["r"],
-        Pattern::char_class(CharSet::from_bytes(b" \t").negate())
+        Pattern::char_class(CharSet::from_chars(&[' ', '\t']).negate())
     );
 }
 
@@ -1024,8 +1009,7 @@ fn backslash_cap_r_linebreak_atom() {
 #[test]
 fn backslash_d_in_class_unions_digits() {
     let g = parse("r <- [\\d_]");
-    let mut s = CharSet::from_ranges(&[(b'0', b'9')]);
-    s.add(b'_');
+    let s = CharSet::from_ranges(&[('0', '9'), ('_', '_')]).unwrap();
     assert_eq!(g.rules["r"], Pattern::char_class(s));
 }
 
@@ -1033,17 +1017,14 @@ fn backslash_d_in_class_unions_digits() {
 fn backslash_d_in_class_with_range_neighbor() {
     // Mixed class: `[\da-fA-F]` is the hex-digit set.
     let g = parse("r <- [\\da-fA-F]");
-    let mut s = CharSet::from_ranges(&[(b'0', b'9')]);
-    s.add_range(b'a', b'f');
-    s.add_range(b'A', b'F');
+    let s = CharSet::from_ranges(&[('0', '9'), ('a', 'f'), ('A', 'F')]).unwrap();
     assert_eq!(g.rules["r"], Pattern::char_class(s));
 }
 
 #[test]
 fn backslash_s_in_class_unions_whitespace() {
     let g = parse("r <- [\\sX]");
-    let mut s = CharSet::from_bytes(b" \t\n\r");
-    s.add(b'X');
+    let s = CharSet::from_chars(&[' ', '\t', '\n', '\r', 'X']);
     assert_eq!(g.rules["r"], Pattern::char_class(s));
 }
 
@@ -1053,7 +1034,7 @@ fn backslash_d_in_negated_class() {
     let g = parse("r <- [^\\d]");
     assert_eq!(
         g.rules["r"],
-        Pattern::char_class(CharSet::from_ranges(&[(b'0', b'9')]).negate())
+        Pattern::char_class(CharSet::from_ranges(&[('0', '9')]).unwrap().negate())
     );
 }
 
@@ -1105,7 +1086,7 @@ fn end_to_end_grammar_compile_run() {
     use syntax_highlighter::pegvm::VM;
     let g = parse("root <- number\nnumber <- [0-9]+");
     let prog = g.compile().unwrap();
-    let r = VM::new(&prog.code, b"42abc").run();
+    let r = VM::new_from_program(&prog, b"42abc").run();
     // `root`'s implicit `!.` rejects the trailing 'a'; the parse no
     // longer succeeds on the prefix.
     assert!(!r.complete);
@@ -1119,7 +1100,7 @@ fn end_to_end_recover_repeat_compile_run() {
     // completes at EOF, with one "recovery"-tagged capture per skipped byte.
     let g = parse("root <- doc\ndoc <- @kw{\"foo\"}*^");
     let prog = g.compile().unwrap();
-    let r = VM::new(&prog.code, b"fooXXfoo").run();
+    let r = VM::new_from_program(&prog, b"fooXXfoo").run();
     assert!(r.complete);
     assert_eq!(r.matched, 8);
     // Capture-kind interning order in the bytecode: "kw" first (the
@@ -1174,7 +1155,7 @@ fn end_to_end_inferred_catch_fires_on_partial_match() {
     let prog = parse("root <- list\nlist <- aliased (',' aliased)*\naliased <- 'x' ^^bad")
         .compile()
         .unwrap();
-    let r = VM::new(&prog.code, b"xy,x").run();
+    let r = VM::new_from_program(&prog, b"xy,x").run();
     assert!(r.complete, "catch should let parse complete; got {:?}", r);
 }
 
@@ -1184,7 +1165,7 @@ fn end_to_end_inferred_catch_clean_input_no_recovery() {
     let prog = parse("root <- list\nlist <- aliased (',' aliased)*\naliased <- 'x' ^^bad")
         .compile()
         .unwrap();
-    let r = VM::new(&prog.code, b"x,x").run();
+    let r = VM::new_from_program(&prog, b"x,x").run();
     assert!(r.complete);
     let recovery_captures = r
         .captures
@@ -1216,7 +1197,7 @@ fn end_to_end_recover_repeat_with_label_intern() {
     let g = parse("root <- doc\ndoc <- @kw{\"foo\"}*^:bad_doc");
     let prog = g.compile().unwrap();
     assert_eq!(prog.label_kinds, vec!["bad_doc"]);
-    let r = VM::new(&prog.code, b"fooXXfoo").run();
+    let r = VM::new_from_program(&prog, b"fooXXfoo").run();
     assert!(r.complete);
     assert_eq!(r.matched, 8);
     assert_eq!(prog.capture_kinds, vec!["kw", "recovery"]);
@@ -1233,7 +1214,7 @@ fn end_to_end_catch_compile_run() {
         "root <- stmt\nstmt <- (@kw{'SELECT'} ' ' @kw{'FROM'} ' ' 'x' ';') ^bad_select @err{(!';' .)*} ';'",
     );
     let prog = g.compile().unwrap();
-    let r = VM::new(&prog.code, b"SELECT bogus;").run();
+    let r = VM::new_from_program(&prog, b"SELECT bogus;").run();
     assert!(
         r.complete,
         "catch should let parse complete on malformed input"
@@ -1352,11 +1333,7 @@ fn skip_until_whitespace_after_operator_ok() {
 #[test]
 fn skip_until_with_charclass_stop() {
     let g = parse("r <- .. [;]");
-    let stop = Pattern::char_class({
-        let mut s = CharSet::empty();
-        s.add(b';');
-        s
-    });
+    let stop = Pattern::char_class(CharSet::from_chars(&[';']));
     assert_eq!(g.rules["r"], desugared_until_exclusive(stop));
 }
 

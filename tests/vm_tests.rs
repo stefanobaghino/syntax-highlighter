@@ -1,9 +1,13 @@
 use syntax_highlighter::pegvm::{
-    Capture, CaptureKind, CharSet, Instruction, Label, MatchResult, MemoId, RuleKind, VM,
+    Capture, CaptureKind, CharSet, Instruction, Label, MatchResult, MemoId, RuleKind, SetId, VM,
 };
 
 fn run(program: &[Instruction], input: &[u8]) -> MatchResult {
     VM::new(program, input).run()
+}
+
+fn run_with_classes(program: &[Instruction], classes: &[CharSet], input: &[u8]) -> MatchResult {
+    VM::new(program, input).with_char_sets(classes).run()
 }
 
 /// Construct a `Capture` succinctly for test assertions.
@@ -18,9 +22,9 @@ fn cap(kind: u16, start: usize, end: usize) -> Capture {
 #[test]
 fn match_literal_abc() {
     let prog = [
-        Instruction::Char(b'a'),
-        Instruction::Char(b'b'),
-        Instruction::Char(b'c'),
+        Instruction::Byte(b'a'),
+        Instruction::Byte(b'b'),
+        Instruction::Byte(b'c'),
         Instruction::End,
     ];
     assert_eq!(
@@ -63,10 +67,11 @@ fn match_literal_abc() {
 
 #[test]
 fn match_charset() {
-    let digits = CharSet::from_ranges(&[(b'0', b'9')]);
-    let prog = [Instruction::Set(digits), Instruction::End];
+    let digits = CharSet::from_ranges(&[('0', '9')]).unwrap();
+    let classes = [digits];
+    let prog = [Instruction::CharSet(SetId(0)), Instruction::End];
     assert_eq!(
-        run(&prog, b"7"),
+        run_with_classes(&prog, &classes, b"7"),
         MatchResult {
             matched: 1,
             captures: vec![],
@@ -75,7 +80,7 @@ fn match_charset() {
         }
     );
     assert_eq!(
-        run(&prog, b"a"),
+        run_with_classes(&prog, &classes, b"a"),
         MatchResult {
             matched: 0,
             captures: vec![],
@@ -84,7 +89,7 @@ fn match_charset() {
         }
     );
     assert_eq!(
-        run(&prog, b""),
+        run_with_classes(&prog, &classes, b""),
         MatchResult {
             matched: 0,
             captures: vec![],
@@ -95,10 +100,21 @@ fn match_charset() {
 }
 
 #[test]
-fn any_skips_n_bytes() {
-    let prog = [Instruction::Any(3), Instruction::End];
+fn any_consumes_one_codepoint() {
+    let prog = [Instruction::Any, Instruction::Any, Instruction::End];
+    // ASCII: two single-byte code points.
     assert_eq!(
-        run(&prog, b"xyz"),
+        run(&prog, b"xy"),
+        MatchResult {
+            matched: 2,
+            captures: vec![],
+            complete: true,
+            recovery_diagnostics: vec![],
+        }
+    );
+    // "éx": 'é' is 0xC3 0xA9 (two bytes), 'x' is one — three bytes total.
+    assert_eq!(
+        run(&prog, "éx".as_bytes()),
         MatchResult {
             matched: 3,
             captures: vec![],
@@ -106,15 +122,9 @@ fn any_skips_n_bytes() {
             recovery_diagnostics: vec![],
         }
     );
-    assert_eq!(
-        run(&prog, b"xy"),
-        MatchResult {
-            matched: 0,
-            captures: vec![],
-            complete: false,
-            recovery_diagnostics: vec![],
-        }
-    );
+    // Single byte → second Any fails at EOF.
+    let r = run(&prog, b"x");
+    assert!(!r.complete);
 }
 
 #[test]
@@ -123,11 +133,11 @@ fn ordered_choice_first_alternative() {
     // Choice L1 ; Char a ; Char b ; Commit L2 ; L1: Char a ; Char x ; L2: End
     let prog = [
         Instruction::Choice(Label(4)),
-        Instruction::Char(b'a'),
-        Instruction::Char(b'b'),
+        Instruction::Byte(b'a'),
+        Instruction::Byte(b'b'),
         Instruction::Commit(Label(6)),
-        Instruction::Char(b'a'),
-        Instruction::Char(b'x'),
+        Instruction::Byte(b'a'),
+        Instruction::Byte(b'x'),
         Instruction::End,
     ];
     assert_eq!(
@@ -159,7 +169,7 @@ fn repetition_zero_or_more() {
     // PartialCommit re-uses the existing backtrack entry rather than pushing a new one.
     let prog = [
         Instruction::Choice(Label(3)),
-        Instruction::Char(b'a'),
+        Instruction::Byte(b'a'),
         Instruction::PartialCommit(Label(1)),
         Instruction::End,
     ];
@@ -207,9 +217,9 @@ fn not_predicate() {
     // Choice L1 ; Char a ; FailTwice ; L1: Any 1 ; End
     let prog = [
         Instruction::Choice(Label(3)),
-        Instruction::Char(b'a'),
+        Instruction::Byte(b'a'),
         Instruction::FailTwice,
-        Instruction::Any(1),
+        Instruction::Any,
         Instruction::End,
     ];
     assert_eq!(
@@ -241,7 +251,7 @@ fn call_and_return() {
         Instruction::Call(Label(4)),
         Instruction::End,
         Instruction::Fail,
-        Instruction::Char(b'a'),
+        Instruction::Byte(b'a'),
         Instruction::Return,
     ];
     assert_eq!(
@@ -268,8 +278,8 @@ fn captures_recorded_on_success() {
     // 4: End
     let prog = [
         Instruction::CaptureBegin(CaptureKind(7)),
-        Instruction::Char(b'a'),
-        Instruction::Char(b'b'),
+        Instruction::Byte(b'a'),
+        Instruction::Byte(b'b'),
         Instruction::CaptureEnd,
         Instruction::End,
     ];
@@ -302,12 +312,12 @@ fn captures_truncated_on_backtrack() {
     let prog = [
         Instruction::Choice(Label(6)),
         Instruction::CaptureBegin(CaptureKind(9)),
-        Instruction::Char(b'a'),
-        Instruction::Char(b'b'),
+        Instruction::Byte(b'a'),
+        Instruction::Byte(b'b'),
         Instruction::CaptureEnd,
         Instruction::Commit(Label(8)),
-        Instruction::Char(b'a'),
-        Instruction::Char(b'x'),
+        Instruction::Byte(b'a'),
+        Instruction::Byte(b'x'),
         Instruction::End,
     ];
     assert_eq!(
@@ -336,10 +346,10 @@ fn nested_captures_kept_in_order() {
     let prog = [
         Instruction::CaptureBegin(CaptureKind(1)),
         Instruction::CaptureBegin(CaptureKind(2)),
-        Instruction::Char(b'a'),
+        Instruction::Byte(b'a'),
         Instruction::CaptureEnd,
         Instruction::CaptureBegin(CaptureKind(2)),
-        Instruction::Char(b'b'),
+        Instruction::Byte(b'b'),
         Instruction::CaptureEnd,
         Instruction::CaptureEnd,
         Instruction::End,
@@ -361,13 +371,13 @@ fn nested_captures_kept_in_order() {
 
 #[test]
 fn charset_negate_and_union() {
-    let vowels = CharSet::from_bytes(b"aeiou");
+    let vowels = CharSet::from_chars(&['a', 'e', 'i', 'o', 'u']);
     let consonants = vowels.negate();
-    assert!(!consonants.contains(b'a'));
-    assert!(consonants.contains(b'b'));
-    let merged = vowels.union(&CharSet::from_bytes(b"y"));
-    assert!(merged.contains(b'y'));
-    assert!(merged.contains(b'a'));
+    assert!(!consonants.contains_char('a'));
+    assert!(consonants.contains_char('b'));
+    let merged = vowels.union(&CharSet::from_chars(&['y']));
+    assert!(merged.contains_char('y'));
+    assert!(merged.contains_char('a'));
 }
 
 #[test]
@@ -385,11 +395,11 @@ fn partial_match_on_failure_returns_max_sp_and_open_captures() {
     // on 'd' vs 'X'. Expect complete:false, matched=3, and one capture
     // still open at the failure point closed at sp=3 (start=2).
     let prog = [
-        Instruction::Char(b'a'),
-        Instruction::Char(b'b'),
+        Instruction::Byte(b'a'),
+        Instruction::Byte(b'b'),
         Instruction::CaptureBegin(CaptureKind(0)),
-        Instruction::Char(b'c'),
-        Instruction::Char(b'd'),
+        Instruction::Byte(b'c'),
+        Instruction::Byte(b'd'),
         Instruction::CaptureEnd,
         Instruction::End,
     ];
@@ -401,7 +411,7 @@ fn partial_match_on_failure_returns_max_sp_and_open_captures() {
 
 #[test]
 fn partial_match_fail_before_any_progress() {
-    let prog = [Instruction::Char(b'a'), Instruction::End];
+    let prog = [Instruction::Byte(b'a'), Instruction::End];
     let r = run(&prog, b"z");
     assert!(!r.complete);
     assert_eq!(r.matched, 0);
@@ -425,13 +435,13 @@ fn partial_match_prefers_deepest_point_across_backtracks() {
     //  8: End      (L2)
     let prog = [
         Instruction::Choice(Label(5)),
-        Instruction::Char(b'a'),
-        Instruction::Char(b'a'),
-        Instruction::Char(b'a'),
+        Instruction::Byte(b'a'),
+        Instruction::Byte(b'a'),
+        Instruction::Byte(b'a'),
         Instruction::Commit(Label(8)),
-        Instruction::Char(b'a'),
-        Instruction::Char(b'a'),
-        Instruction::Char(b'b'),
+        Instruction::Byte(b'a'),
+        Instruction::Byte(b'a'),
+        Instruction::Byte(b'b'),
         Instruction::End,
     ];
     let r = run(&prog, b"aaX");
@@ -467,14 +477,14 @@ fn partial_match_captures_survive_backtrack_below_watermark() {
     let prog = [
         Instruction::Choice(Label(7)),
         Instruction::CaptureBegin(CaptureKind(0)),
-        Instruction::Char(b'a'),
-        Instruction::Char(b'b'),
-        Instruction::Char(b'c'),
+        Instruction::Byte(b'a'),
+        Instruction::Byte(b'b'),
+        Instruction::Byte(b'c'),
         Instruction::CaptureEnd,
         Instruction::Commit(Label(10)),
-        Instruction::Char(b'a'),
-        Instruction::Char(b'b'),
-        Instruction::Char(b'x'),
+        Instruction::Byte(b'a'),
+        Instruction::Byte(b'b'),
+        Instruction::Byte(b'x'),
         Instruction::End,
     ];
     let r = run(&prog, b"abdX");
@@ -524,11 +534,11 @@ fn lr_expr_program() -> Vec<Instruction> {
         // 4: Call(expr)  -- recursive
         Instruction::Call(Label(2)),
         // 5: '+'
-        Instruction::Char(b'+'),
+        Instruction::Byte(b'+'),
         // 6: CaptureBegin
         Instruction::CaptureBegin(CaptureKind(0)),
         // 7: 'n'
-        Instruction::Char(b'n'),
+        Instruction::Byte(b'n'),
         // 8: CaptureEnd
         Instruction::CaptureEnd,
         // 9: Commit → 13 (LRTail)
@@ -536,7 +546,7 @@ fn lr_expr_program() -> Vec<Instruction> {
         // 10: second alt — CaptureBegin
         Instruction::CaptureBegin(CaptureKind(0)),
         // 11: 'n'
-        Instruction::Char(b'n'),
+        Instruction::Byte(b'n'),
         // 12: CaptureEnd
         Instruction::CaptureEnd,
         // 13: LRTail (body_start = 3)

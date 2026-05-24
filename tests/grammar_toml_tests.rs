@@ -30,7 +30,7 @@ fn grammar_compiles() {
 
 fn run(input: &str) -> (usize, Vec<Capture>, Vec<String>, bool) {
     let prog = toml_program();
-    let r = VM::new(&prog.code, input.as_bytes()).run();
+    let r = VM::new_from_program(prog, input.as_bytes()).run();
     (
         r.matched,
         r.captures,
@@ -83,6 +83,7 @@ fn capture_kinds_are_only_theme_kinds() {
         "number",
         "constant",
         "punctuation",
+        "recovery",
     ]
     .into_iter()
     .collect();

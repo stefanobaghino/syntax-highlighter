@@ -48,8 +48,8 @@ fn assert_roundtrip(grammar: &str, sample: &[u8], tag: &str) {
 
     // End-to-end via VM: running both Programs against the same input
     // must produce identical match results.
-    let r1 = VM::new(&p1.code, sample).run();
-    let r2 = VM::new(&p2.code, sample).run();
+    let r1 = VM::new_from_program(&p1, sample).run();
+    let r2 = VM::new_from_program(&p2, sample).run();
     assert_eq!(r1.matched, r2.matched, "{tag}: matched differs");
     assert_eq!(r1.complete, r2.complete, "{tag}: complete flag differs");
     assert_eq!(r1.captures, r2.captures, "{tag}: captures differ");

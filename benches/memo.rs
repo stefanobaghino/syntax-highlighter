@@ -100,7 +100,7 @@ fn sweep_cell(
     let mut stats = (0, 0, 0);
     for _ in 0..runs {
         let t0 = Instant::now();
-        let (result, s) = VM::new(&program.code, input)
+        let (result, s) = VM::new_from_program(program, input)
             .with_memo_threshold(threshold)
             .run_with_memo_stats();
         let dt = t0.elapsed().as_nanos();
