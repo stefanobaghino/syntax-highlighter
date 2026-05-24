@@ -1,6 +1,8 @@
+pub mod charset;
 pub mod incremental;
 pub mod instruction;
 pub mod program;
+pub mod utf8;
 pub mod vm;
 
 pub use incremental::{Edit, MemoCache};
