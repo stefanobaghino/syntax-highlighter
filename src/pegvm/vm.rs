@@ -161,12 +161,13 @@ pub struct MatchResult {
     pub recovery_diagnostics: Vec<RecoveryDiagnostic>,
 }
 
-/// Diagnostic record attached to a single `recovery`-kind capture emitted
-/// inside `p*^`'s recovery branch. Reports the farthest input position
-/// reached during the failed iteration that produced this recovery byte,
-/// plus the rule-call stack at the moment that farthest reach was
-/// recorded. Aggregated across an adjacent recovery span by consumers
-/// (`pegdb recoveries dump` / `pegdb recoveries explain`).
+/// Diagnostic record attached to a single `recovery`-kind capture.
+/// Recovery captures come from two distinct sources: grammar-level
+/// recovery (`p*^` / `^^label` catches firing on a mid-rule failure) and
+/// encoding-level recovery (a code-point opcode hitting malformed UTF-8).
+/// The [`origin`](Self::origin) field distinguishes them so `pegdb
+/// recoveries dump` / `recoveries explain` and other consumers can
+/// render or filter accordingly.
 ///
 /// Only produced when the VM is built with
 /// [`VM::with_track_recovery_diagnostics(true)`]; the default path emits
@@ -176,20 +177,75 @@ pub struct RecoveryDiagnostic {
     /// Index into [`MatchResult::captures`] of the recovery-kind capture
     /// this diagnostic describes.
     pub capture_index: usize,
-    /// `scoped_max_sp` at the moment `RecoverToScopedMax` fired — the
-    /// deepest input position the failed iteration reached.
+    /// Byte position in the input where the recovery begins. For
+    /// grammar-level recoveries this is `scoped_max_sp` at the moment
+    /// `RecoverToScopedMax` fired (the deepest reach of the failed
+    /// iteration). For UTF-8 recoveries this is the start of the maximal
+    /// invalid byte prefix.
     pub pos: usize,
-    /// Rule-call stack at the moment `scoped_max_sp` was last bumped
-    /// during the failed iteration. Indexed values can be resolved to
-    /// names via [`crate::pegvm::Program::rule_names`].
-    pub rule_stack: Vec<MemoId>,
-    /// Diagnostic label attached to the enclosing `RecoverScope`.
-    /// Resolvable via [`crate::pegvm::Program::label_kinds`]. Set from
-    /// the `RecoverScopeBegin` instruction's payload — every recovery
-    /// firing carries one (labeled catches use the author's label;
-    /// `*^` desugars to a catch labeled `"recovery"`). Lets `pegdb
-    /// recoveries explain` cluster recoveries by `(rule_stack, label)`.
-    pub label: LabelId,
+    /// Variant-specific detail.
+    pub origin: RecoveryOrigin,
+}
+
+/// Source of a [`RecoveryDiagnostic`]. Discriminates grammar-level from
+/// encoding-level recoveries. New variants are allowed when additional
+/// recovery sources appear; consumers pattern-matching should treat any
+/// future variants as a less-detailed grammar-level recovery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecoveryOrigin {
+    /// Grammar-level recovery: a `p*^` or `^^label` catch fired because
+    /// a rule body failed before reaching its sync point. Carries the
+    /// rule-call stack at the failure point and the catch's label.
+    Grammar {
+        /// Rule-call stack at the moment `scoped_max_sp` was last bumped
+        /// during the failed iteration. Indexed values can be resolved
+        /// to names via [`crate::pegvm::Program::rule_names`].
+        rule_stack: Vec<MemoId>,
+        /// Label attached to the enclosing `RecoverScope`. Resolvable
+        /// via [`crate::pegvm::Program::label_kinds`]. `*^` desugars to
+        /// a catch labeled `"recovery"`; labeled catches use the
+        /// author's label. Lets `pegdb recoveries explain` cluster
+        /// recoveries by `(rule_stack, label)`.
+        label: LabelId,
+    },
+    /// Encoding-level recovery: a code-point opcode (e.g.
+    /// `Instruction::CharSet`) hit a byte run that is not valid
+    /// UTF-8. The capture spans the maximal invalid prefix; subsequent
+    /// adjacent invalid bytes coalesce into the same capture.
+    Utf8,
+}
+
+impl RecoveryOrigin {
+    /// Short tag identifying the variant for diagnostic output. Stable
+    /// across consumers — `pegdb` JSONL emission and any future
+    /// LSP-style export should use these tags verbatim.
+    pub fn tag(&self) -> &'static str {
+        match self {
+            RecoveryOrigin::Grammar { .. } => "grammar",
+            RecoveryOrigin::Utf8 => "utf8",
+        }
+    }
+}
+
+impl RecoveryDiagnostic {
+    /// Rule-call stack at the failure point. Empty for UTF-8 recoveries
+    /// (encoding errors don't have an associated rule trace).
+    pub fn rule_stack(&self) -> &[MemoId] {
+        match &self.origin {
+            RecoveryOrigin::Grammar { rule_stack, .. } => rule_stack,
+            RecoveryOrigin::Utf8 => &[],
+        }
+    }
+
+    /// Label of the enclosing recovery scope, if any. `None` for UTF-8
+    /// recoveries — they're emitted directly by the opcode without a
+    /// `RecoverScope` frame, so no grammar-defined label applies.
+    pub fn label_id(&self) -> Option<LabelId> {
+        match &self.origin {
+            RecoveryOrigin::Grammar { label, .. } => Some(*label),
+            RecoveryOrigin::Utf8 => None,
+        }
+    }
 }
 
 /// Diagnostic counters for the memoization cache, exposed via
@@ -217,6 +273,26 @@ pub struct MemoStats {
 
 pub struct VM<'p, 'i> {
     program: &'p [Instruction],
+    /// Code-point classes referenced by [`Instruction::CharSet`]
+    /// opcodes. Empty slice if the program never reaches for code-point
+    /// syntax (every grammar pre-#141 compiled to this); a non-empty
+    /// table is wired in via [`VM::with_char_sets`] or
+    /// [`VM::new_from_program`].
+    char_sets: &'p [super::charset::CharSet],
+    /// Capture kind to tag UTF-8-origin recovery captures with. Set
+    /// only when the program has interned a `"recovery"` capture name
+    /// (any grammar that uses `*^` or a code-point opcode). When
+    /// `None` and a code-point opcode hits invalid UTF-8, the opcode
+    /// falls back to a plain match failure — exercised only by
+    /// hand-crafted unit-test programs that bypass the compiler.
+    recovery_capture_kind: Option<CaptureKind>,
+    /// Capture index of the most recently emitted UTF-8 recovery
+    /// capture. Used to coalesce contiguous runs of invalid bytes into
+    /// a single recovery span without requiring a per-capture origin
+    /// tag. Only valid if it's the topmost entry in `self.captures`;
+    /// any subsequent capture (or backtracking truncation) invalidates
+    /// the coalescing window.
+    last_utf8_recovery_capture_idx: Option<usize>,
     input: &'i [u8],
     ip: usize,
     sp: usize,
@@ -369,6 +445,9 @@ impl<'p, 'i> VM<'p, 'i> {
     pub fn new(program: &'p [Instruction], input: &'i [u8]) -> Self {
         VM {
             program,
+            char_sets: &[],
+            recovery_capture_kind: None,
+            last_utf8_recovery_capture_idx: None,
             input,
             ip: 0,
             sp: 0,
@@ -386,6 +465,39 @@ impl<'p, 'i> VM<'p, 'i> {
             recover_scope_indices: Vec::new(),
             diag: None,
         }
+    }
+
+    /// Wire the program's `char_sets` side table to this VM. Required
+    /// for any program whose code contains
+    /// [`Instruction::CharSet`]; ignored otherwise. Use
+    /// [`VM::new_from_program`] for the common case of "I have a
+    /// `&Program`".
+    pub fn with_char_sets(mut self, sets: &'p [super::charset::CharSet]) -> Self {
+        self.char_sets = sets;
+        self
+    }
+
+    /// Set the capture kind to tag UTF-8 recovery spans with. Without
+    /// this, `Instruction::CharSet` dispatch on invalid UTF-8
+    /// falls back to a silent skip. [`VM::new_from_program`] derives
+    /// the kind automatically.
+    pub fn with_recovery_capture_kind(mut self, kind: Option<CaptureKind>) -> Self {
+        self.recovery_capture_kind = kind;
+        self
+    }
+
+    /// Construct a VM with everything it needs from a `Program`:
+    /// instruction slice, the `char_sets` side table, and the
+    /// "recovery" capture kind index used to tag UTF-8 recovery spans.
+    pub fn new_from_program(program: &'p super::Program, input: &'i [u8]) -> Self {
+        let recovery_kind = program
+            .capture_kinds
+            .iter()
+            .position(|k| k == "recovery")
+            .map(|i| CaptureKind(u16::try_from(i).expect("capture_kinds index fits u16")));
+        let mut vm = VM::new(&program.code, input).with_char_sets(&program.char_sets);
+        vm.recovery_capture_kind = recovery_kind;
+        vm
     }
 
     /// Override the default memo threshold. `bytes = 0` disables the
@@ -427,11 +539,11 @@ impl<'p, 'i> VM<'p, 'i> {
     /// either this same input or a prior input plus a correctly applied
     /// [`MemoCache::apply_edit`](super::incremental::MemoCache::apply_edit).
     pub fn new_with_cache(
-        program: &'p [Instruction],
+        program: &'p super::Program,
         input: &'i [u8],
         mut cache: super::incremental::MemoCache,
     ) -> Self {
-        let mut vm = Self::new(program, input);
+        let mut vm = Self::new_from_program(program, input);
         vm.memo = cache.take();
         vm
     }
@@ -470,7 +582,7 @@ impl<'p, 'i> VM<'p, 'i> {
                 None => return self.finalize_partial(),
             };
             match instr {
-                Instruction::Char(b) => {
+                Instruction::Byte(b) => {
                     self.track_read(1);
                     if self.input.get(self.sp) == Some(b) {
                         self.sp += 1;
@@ -479,48 +591,59 @@ impl<'p, 'i> VM<'p, 'i> {
                         return self.finalize_partial();
                     }
                 }
-                Instruction::Set(set) => {
-                    self.track_read(1);
-                    match self.input.get(self.sp) {
-                        Some(b) if set.contains(*b) => {
-                            self.sp += 1;
-                            self.ip += 1;
+                Instruction::Any => match super::utf8::decode_at(self.input, self.sp) {
+                    super::utf8::Utf8DecodeResult::Valid { scalar: _, bytes } => {
+                        self.track_read(bytes);
+                        self.sp += bytes;
+                        self.ip += 1;
+                    }
+                    super::utf8::Utf8DecodeResult::Invalid { bytes } => {
+                        let start = self.sp;
+                        let end = start + bytes;
+                        self.track_read(bytes);
+                        self.emit_utf8_recovery_capture(start, end);
+                        self.sp = end;
+                        self.ip += 1;
+                    }
+                    super::utf8::Utf8DecodeResult::Eof => {
+                        self.track_read(1);
+                        if !self.fail() {
+                            return self.finalize_partial();
                         }
-                        _ => {
-                            if !self.fail() {
+                    }
+                },
+                Instruction::CharSet(set_id) => {
+                    let set_idx = set_id.0 as usize;
+                    let set = self
+                        .char_sets
+                        .get(set_idx)
+                        .expect("CharSet references missing char_sets table entry");
+                    match super::utf8::decode_at(self.input, self.sp) {
+                        super::utf8::Utf8DecodeResult::Valid { scalar, bytes } => {
+                            self.track_read(bytes);
+                            if set.contains_char(scalar) {
+                                self.sp += bytes;
+                                self.ip += 1;
+                            } else if !self.fail() {
                                 return self.finalize_partial();
                             }
                         }
-                    }
-                }
-                Instruction::Any(n) => {
-                    let n = *n as usize;
-                    self.track_read(n);
-                    if self.sp + n <= self.input.len() {
-                        self.sp += n;
-                        self.ip += 1;
-                    } else if !self.fail() {
-                        return self.finalize_partial();
-                    }
-                }
-                Instruction::TestChar(b, label) => {
-                    self.track_read(1);
-                    if self.input.get(self.sp) == Some(b) {
-                        self.sp += 1;
-                        self.ip += 1;
-                    } else {
-                        self.ip = label.as_index();
-                    }
-                }
-                Instruction::TestSet(set, label) => {
-                    self.track_read(1);
-                    match self.input.get(self.sp) {
-                        Some(b) if set.contains(*b) => {
-                            self.sp += 1;
+                        super::utf8::Utf8DecodeResult::Invalid { bytes } => {
+                            // Succeed-by-recovery: emit (or extend) a
+                            // utf8-origin recovery capture, advance past
+                            // the bad bytes, proceed.
+                            let start = self.sp;
+                            let end = start + bytes;
+                            self.track_read(bytes);
+                            self.emit_utf8_recovery_capture(start, end);
+                            self.sp = end;
                             self.ip += 1;
                         }
-                        _ => {
-                            self.ip = label.as_index();
+                        super::utf8::Utf8DecodeResult::Eof => {
+                            self.track_read(1);
+                            if !self.fail() {
+                                return self.finalize_partial();
+                            }
                         }
                     }
                 }
@@ -978,7 +1101,7 @@ impl<'p, 'i> VM<'p, 'i> {
                     // captures still open at `scoped_max_sp`, mirroring
                     // `close_captures` and `LRTail`'s seed replay), then
                     // jump `sp` forward to `scoped_max_sp` so the recovery
-                    // branch's `Any(1)` covers only the byte where parsing
+                    // branch's `Any` covers only the code point where parsing
                     // actually broke, not the iteration's whole baseline-
                     // to-failure span.
                     let scope_idx = self
@@ -1076,8 +1199,8 @@ impl<'p, 'i> VM<'p, 'i> {
 
                     // Emit a per-recovery diagnostic when tracking is
                     // on. The next instructions emitted by the compiler
-                    // are CaptureBegin / Any(1) / CaptureEnd for the
-                    // recovery byte, so `self.captures.len()` here is
+                    // are CaptureBegin / Any / CaptureEnd for the
+                    // recovery code point, so `self.captures.len()` here is
                     // the index where the recovery capture will land
                     // after CaptureBegin pushes it.
                     let capture_index = self.captures.len();
@@ -1085,8 +1208,10 @@ impl<'p, 'i> VM<'p, 'i> {
                         diag.recovery_diagnostics.push(RecoveryDiagnostic {
                             capture_index,
                             pos: scoped_max_sp,
-                            rule_stack: rule_stack_for_diag,
-                            label: scope_label,
+                            origin: RecoveryOrigin::Grammar {
+                                rule_stack: rule_stack_for_diag,
+                                label: scope_label,
+                            },
                         });
                     }
 
@@ -1128,6 +1253,39 @@ impl<'p, 'i> VM<'p, 'i> {
                         self.memo,
                     );
                 }
+            }
+        }
+    }
+
+    /// Emit (or extend) a UTF-8 recovery capture spanning `[start, end)`.
+    /// Coalesces with the immediately-preceding capture iff it was the
+    /// last UTF-8 recovery this VM emitted and it ends exactly at
+    /// `start`; that conservatively protects against merging with a
+    /// grammar-level recovery emitted through a different path.
+    fn emit_utf8_recovery_capture(&mut self, start: usize, end: usize) {
+        let Some(kind) = self.recovery_capture_kind else {
+            return;
+        };
+        let can_coalesce = self.last_utf8_recovery_capture_idx.is_some_and(|idx| {
+            idx + 1 == self.captures.len() && self.captures[idx].end == Some(start)
+        });
+        if can_coalesce {
+            let idx = self.captures.len() - 1;
+            self.captures[idx].end = Some(end);
+        } else {
+            let capture_index = self.captures.len();
+            self.captures.push(OpenCapture {
+                kind,
+                start,
+                end: Some(end),
+            });
+            self.last_utf8_recovery_capture_idx = Some(capture_index);
+            if let Some(diag) = &mut self.diag {
+                diag.recovery_diagnostics.push(RecoveryDiagnostic {
+                    capture_index,
+                    pos: start,
+                    origin: RecoveryOrigin::Utf8,
+                });
             }
         }
     }
@@ -1336,7 +1494,7 @@ impl<'p, 'i> VM<'p, 'i> {
     }
 
     /// Bump the in-flight rule's examined watermark to at least `pos`.
-    /// Invoked from every read site (Char/Set/Any/TestChar/TestSet) and
+    /// Invoked from every read site (Byte/CharSet/Any) and
     /// from memo-hit propagation, so a rule's `MemoEntry.examined_max`
     /// reflects lookahead and failed reads past `end_sp`. A no-op when no
     /// `Memo` frame is live (top-level program reads don't feed any
@@ -1353,7 +1511,8 @@ impl<'p, 'i> VM<'p, 'i> {
     /// `self.sp`. The probe happens at the current `sp` whether the read
     /// succeeds (consume) or fails (EOF or mismatch) — in both cases the
     /// outcome depends on bytes up to `sp + n`, so the watermark must
-    /// advance there. `n = 1` for Char/Set/TestChar/TestSet; `n` for Any.
+    /// advance there. `n = 1` for Byte; `n` for Any/CharClass
+    /// (the UTF-8 byte width of the decoded code point).
     fn track_read(&mut self, n: usize) {
         self.bump_top_memo_examined(self.sp + n);
     }
@@ -1622,7 +1781,9 @@ mod examined_max_tests {
         );
         rule(&mut rules, "consumer", Pattern::literal("x"));
         let prog = Grammar::new(rules).compile().unwrap();
-        let (result, _stats, memo) = VM::new(&prog.code, b"xy").with_memo_threshold(0).run_core();
+        let (result, _stats, memo) = VM::new_from_program(&prog, b"xy")
+            .with_memo_threshold(0)
+            .run_core();
         // The `root` wrap supplies `!.` at the tail: trailing 'y' leaves
         // 1 byte unconsumed, so the overall parse fails. The memo
         // entries it built before failing are still observable.
@@ -1651,7 +1812,9 @@ mod examined_max_tests {
             ]),
         );
         let prog = Grammar::new(rules).compile().unwrap();
-        let (result, _stats, memo) = VM::new(&prog.code, b"xy").with_memo_threshold(0).run_core();
+        let (result, _stats, memo) = VM::new_from_program(&prog, b"xy")
+            .with_memo_threshold(0)
+            .run_core();
         assert!(!result.complete, "overall parse must fail");
         let entry = memo
             .get(&(MemoId(0), 0))
@@ -1681,7 +1844,9 @@ mod examined_max_tests {
         );
         rule(&mut rules, "inner", Pattern::literal("x"));
         let prog = Grammar::new(rules).compile().unwrap();
-        let (result, _stats, memo) = VM::new(&prog.code, b"xy").with_memo_threshold(0).run_core();
+        let (result, _stats, memo) = VM::new_from_program(&prog, b"xy")
+            .with_memo_threshold(0)
+            .run_core();
         assert!(result.complete);
         assert_eq!(result.matched, 2);
         // root is start → MemoId(0); inner is the other → MemoId(1).
@@ -1724,7 +1889,7 @@ mod examined_max_tests {
         );
         rule(&mut rules, "X", Pattern::literal("a"));
         let prog = Grammar::new(rules).compile().unwrap();
-        let (result, stats, memo) = VM::new(&prog.code, b"abb")
+        let (result, stats, memo) = VM::new_from_program(&prog, b"abb")
             .with_memo_threshold(0)
             .run_core();
         assert!(result.complete);
@@ -1750,8 +1915,8 @@ mod examined_max_tests {
         //
         // The recovery loop runs entirely inside start's memo entry.
         // Across iterations the loop reads positions 0, 1 (success),
-        // 2 (Char 'a' fails on 'x'), 2 (Any(1) consumes 'x' → sp=3),
-        // 3, 4 (success), 5 (Char 'a' at EOF). Whether the failed
+        // 2 (Byte 'a' fails on 'x'), 2 (Any consumes 'x' → sp=3),
+        // 3, 4 (success), 5 (Byte 'a' at EOF). Whether the failed
         // EOF read at sp=5 contributes depends on track_read's call
         // discipline, so the assertion is a lower bound: every
         // position the loop *successfully* read must appear in
@@ -1770,7 +1935,7 @@ mod examined_max_tests {
             }),
         );
         let prog = Grammar::new(rules).compile().unwrap();
-        let (result, _stats, memo) = VM::new(&prog.code, b"abxab")
+        let (result, _stats, memo) = VM::new_from_program(&prog, b"abxab")
             .with_memo_threshold(0)
             .run_core();
         assert!(result.complete);
@@ -1801,7 +1966,7 @@ mod recovery_diagnostic_tests {
     fn diagnostics_empty_when_knob_off() {
         // Grammar that triggers recovery but no opt-in to diagnostics.
         let prog = pegc::compile("root <- ([a-z]+)*^").unwrap();
-        let result = VM::new(&prog.code, b"abc!!def").run();
+        let result = VM::new_from_program(&prog, b"abc!!def").run();
         assert!(result.complete);
         assert!(
             result
@@ -1821,7 +1986,7 @@ mod recovery_diagnostic_tests {
     #[test]
     fn diagnostics_one_per_recovery_byte_when_knob_on() {
         let prog = pegc::compile("root <- ([a-z]+)*^").unwrap();
-        let result = VM::new(&prog.code, b"abc!!def")
+        let result = VM::new_from_program(&prog, b"abc!!def")
             .with_track_recovery_diagnostics(true)
             .run();
         assert!(result.complete);
@@ -1868,7 +2033,7 @@ mod recovery_diagnostic_tests {
             item <- inner\n\
             inner <- [a-z]+\n";
         let prog = pegc::compile(src).unwrap();
-        let result = VM::new(&prog.code, b"abc!!def")
+        let result = VM::new_from_program(&prog, b"abc!!def")
             .with_track_recovery_diagnostics(true)
             .run();
         assert!(result.complete);
@@ -1887,7 +2052,7 @@ mod recovery_diagnostic_tests {
         let stacks: Vec<Vec<String>> = result
             .recovery_diagnostics
             .iter()
-            .map(|d| names_for(&d.rule_stack))
+            .map(|d| names_for(d.rule_stack()))
             .collect();
         assert!(
             stacks.iter().any(|s| s.contains(&"root".to_string())),

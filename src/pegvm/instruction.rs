@@ -46,6 +46,15 @@ pub struct CaptureKind(pub u16);
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
 pub struct MemoId(pub u32);
 
+/// Opaque tag identifying a character set. Assigned by the compiler
+/// when it interns a [`super::CharSet`] into
+/// [`super::Program::char_sets`]. The VM uses it as an index into that
+/// table when dispatching [`Instruction::CharSet`]. Distinct namespace
+/// from [`CaptureKind`] and [`LabelId`].
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+pub struct SetId(pub u16);
+
 /// Opaque tag identifying a recovery-scope label. Assigned by
 /// `Compiler::intern_label` and threaded through each
 /// `RecoverScopeBegin` instruction. The label is a diagnostic tag
@@ -76,137 +85,31 @@ pub enum RuleKind {
     Lr,
 }
 
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-pub struct CharSet([u8; 32]);
-
-impl CharSet {
-    pub const fn empty() -> Self {
-        CharSet([0; 32])
-    }
-
-    pub fn full() -> Self {
-        CharSet([0xFF; 32])
-    }
-
-    pub fn contains(&self, byte: u8) -> bool {
-        self.0[(byte / 8) as usize] & (1 << (byte % 8)) != 0
-    }
-
-    pub fn add(&mut self, byte: u8) {
-        self.0[(byte / 8) as usize] |= 1 << (byte % 8);
-    }
-
-    /// Adds every byte value in the inclusive range `lo..=hi` to the set.
-    ///
-    /// Callers are expected to pass `lo <= hi`. An inverted range would silently
-    /// be a no-op (because `lo..=hi` is empty in that case), which would hide a
-    /// caller bug — hence the debug-build assertion. In release builds, inverted
-    /// input still does nothing. For a single byte, prefer `add(b)`.
-    pub fn add_range(&mut self, lo: u8, hi: u8) {
-        debug_assert!(
-            lo <= hi,
-            "CharSet::add_range: inverted range lo=0x{:02x} hi=0x{:02x} (use add() for a single byte)",
-            lo,
-            hi
-        );
-        for b in lo..=hi {
-            self.add(b);
-        }
-    }
-
-    pub fn from_bytes(bytes: &[u8]) -> Self {
-        let mut s = CharSet::empty();
-        for &b in bytes {
-            s.add(b);
-        }
-        s
-    }
-
-    pub fn from_ranges(ranges: &[(u8, u8)]) -> Self {
-        let mut s = CharSet::empty();
-        for &(lo, hi) in ranges {
-            s.add_range(lo, hi);
-        }
-        s
-    }
-
-    pub fn negate(&self) -> Self {
-        let mut out = CharSet::empty();
-        for i in 0..32 {
-            out.0[i] = !self.0[i];
-        }
-        out
-    }
-
-    pub fn union(&self, other: &CharSet) -> Self {
-        let mut out = CharSet::empty();
-        for i in 0..32 {
-            out.0[i] = self.0[i] | other.0[i];
-        }
-        out
-    }
-
-    /// Borrow the raw 256-bit bitmap. The set encodes which of the 256
-    /// possible `u8` values it contains; bit `b % 8` of byte `b / 8` is
-    /// set iff `contains(b)`. Used by `pegb` to round-trip a `CharSet`
-    /// through bytes; not generally useful otherwise.
-    pub const fn bitmap(&self) -> &[u8; 32] {
-        &self.0
-    }
-
-    /// Construct a `CharSet` from a raw 256-bit bitmap. Inverse of
-    /// `bitmap()`. Distinct from `from_bytes(&[u8])`, which takes a list
-    /// of byte *values* to insert; this takes the bitmap directly.
-    pub const fn from_bitmap(bytes: [u8; 32]) -> Self {
-        CharSet(bytes)
-    }
-}
-
-impl std::fmt::Debug for CharSet {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CharSet[")?;
-        let mut first = true;
-        let mut i = 0u16;
-        while i < 256 {
-            if self.contains(i as u8) {
-                let lo = i;
-                while i < 256 && self.contains(i as u8) {
-                    i += 1;
-                }
-                let hi = i - 1;
-                if !first {
-                    write!(f, ",")?;
-                }
-                first = false;
-                if lo == hi {
-                    write!(f, "{}", fmt_byte(lo as u8))?;
-                } else {
-                    write!(f, "{}-{}", fmt_byte(lo as u8), fmt_byte(hi as u8))?;
-                }
-            } else {
-                i += 1;
-            }
-        }
-        write!(f, "]")
-    }
-}
-
-fn fmt_byte(b: u8) -> String {
-    if b.is_ascii_graphic() || b == b' ' {
-        format!("'{}'", b as char)
-    } else {
-        format!("0x{:02x}", b)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Instruction {
-    Char(u8),
-    Set(CharSet),
-    Any(u8),
-    TestChar(u8, Label),
-    TestSet(CharSet, Label),
+    /// Consume one input byte exactly equal to the payload. Byte-faithful
+    /// for literal matching (each byte of a UTF-8-encoded literal compiles
+    /// to one of these); the code-point-aware opcodes are `CharSet` and
+    /// `Any`.
+    Byte(u8),
+    /// Consume one Unicode scalar at the current input pointer
+    /// (1..=4 bytes via WHATWG UTF-8 decode). On invalid UTF-8
+    /// emits a `RecoveryOrigin::Utf8` capture and skips the maximal
+    /// invalid prefix; failure at EOF routes through `fail()`.
+    Any,
+    /// Match one Unicode scalar against the set at
+    /// [`super::Program::char_sets`]`[id.0]`.
+    ///
+    /// Decodes UTF-8 at the current input pointer (1..=4 bytes,
+    /// WHATWG-style). On a valid decode whose scalar is in the set,
+    /// advances by the decoded byte width. On a valid decode whose
+    /// scalar is not in the set, fails like any other match opcode.
+    /// On invalid UTF-8 the opcode **succeeds-by-recovery**: emits a
+    /// `recovery`-kind capture with [`super::RecoveryOrigin::Utf8`]
+    /// over the maximal invalid prefix (coalesced with an immediately
+    /// preceding UTF-8 recovery span), advances past the bad bytes,
+    /// and proceeds as if a code point had matched.
+    CharSet(SetId),
 
     Jump(Label),
     Choice(Label),
@@ -268,7 +171,7 @@ pub enum Instruction {
     /// captures into the live capture buffer past the iteration's
     /// `baseline_capture_len`, and advance `sp` to `scoped_max_sp`.
     /// Emitted at the head of `p*^`'s recovery branch so the following
-    /// `Any(1)` emits a recovery span starting *after* the partially
+    /// `Any` emits a recovery span starting *after* the partially
     /// matched prefix instead of swallowing it. Does not pop the scope.
     RecoverToScopedMax,
     /// Pop the topmost `RecoverScope` frame. Emitted on every edge that

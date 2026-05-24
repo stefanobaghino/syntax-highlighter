@@ -1,3 +1,4 @@
+use super::charset::CharSet;
 use super::instruction::Instruction;
 
 /// Runnable bytecode produced by the grammar compiler. A `Program` is
@@ -40,4 +41,11 @@ pub struct Program {
     /// frames from the rule_stack when picking the displayed leaf of
     /// a recovery cluster or span. Length is exactly `rule_count`.
     pub rule_is_trivia: Vec<bool>,
+    /// Character sets interned by the compiler. Indexed by
+    /// [`crate::pegvm::SetId`]; each
+    /// [`crate::pegvm::Instruction::CharSet`] payload is the index of
+    /// one entry here. Empty for grammars that don't use any character
+    /// class. The VM dispatch arm pays a single slice-index lookup per
+    /// `CharSet` instruction.
+    pub char_sets: Vec<CharSet>,
 }

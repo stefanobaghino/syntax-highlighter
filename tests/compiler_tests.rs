@@ -10,7 +10,7 @@ use syntax_highlighter::pegvm::{
 
 fn run_pattern(pat: &Pattern, input: &[u8]) -> MatchResult {
     let prog = compile_pattern(pat);
-    VM::new(&prog.code, input).run()
+    VM::new_from_program(&prog, input).run()
 }
 
 /// Construct a `Capture` succinctly for test assertions.
@@ -39,7 +39,7 @@ fn literal_pattern() {
 
 #[test]
 fn char_class_pattern() {
-    let p = Pattern::char_class(CharSet::from_ranges(&[(b'0', b'9')]));
+    let p = Pattern::char_class(CharSet::from_ranges(&[('0', '9')]).unwrap());
     assert_eq!(
         run_pattern(&p, b"5"),
         MatchResult {
@@ -460,7 +460,7 @@ fn recover_repeat_inside_called_rule_returns_cleanly() {
     );
     rules.insert("loop".into(), recover(Pattern::literal("a"), "recovery"));
     let prog = Grammar::new(rules).compile().unwrap();
-    let r = VM::new(&prog.code, b"PREaxa").run();
+    let r = VM::new_from_program(&prog, b"PREaxa").run();
     assert!(
         r.complete,
         "Return after *^ loop must not panic on stack shape"
@@ -591,10 +591,10 @@ fn catch_emits_recover_scope_skeleton() {
         vec![
             Instruction::RecoverScopeBegin(LabelId(0)),
             Instruction::Choice(Label(4)),
-            Instruction::Char(b'a'),
+            Instruction::Byte(b'a'),
             Instruction::Commit(Label(6)),
             Instruction::RecoverToScopedMax,
-            Instruction::Char(b'b'),
+            Instruction::Byte(b'b'),
             Instruction::RecoverScopeEnd,
             Instruction::End,
         ]
@@ -741,7 +741,7 @@ fn capture_records_kind_and_span() {
     let prog = compile_pattern(&p);
     assert_eq!(prog.capture_kinds, vec!["number".to_string()]);
     assert_eq!(
-        VM::new(&prog.code, b"42").run(),
+        VM::new_from_program(&prog, b"42").run(),
         MatchResult {
             matched: 2,
             captures: vec![cap(0, 0, 2)],
@@ -768,7 +768,7 @@ fn nested_captures_flow_through_compile() {
         vec!["outer".to_string(), "inner".to_string()]
     );
     assert_eq!(
-        VM::new(&prog.code, b"ab").run(),
+        VM::new_from_program(&prog, b"ab").run(),
         MatchResult {
             matched: 2,
             captures: vec![
@@ -794,11 +794,11 @@ fn grammar_with_nonterminals() {
     rules.insert("root".into(), Pattern::repeat_one(Pattern::nt("digit")));
     rules.insert(
         "digit".into(),
-        Pattern::char_class(CharSet::from_ranges(&[(b'0', b'9')])),
+        Pattern::char_class(CharSet::from_ranges(&[('0', '9')]).unwrap()),
     );
     let prog = Grammar::new(rules).compile().unwrap();
     assert_eq!(
-        VM::new(&prog.code, b"123abc").run(),
+        VM::new_from_program(&prog, b"123abc").run(),
         MatchResult {
             matched: 4,
             captures: vec![],
@@ -806,7 +806,7 @@ fn grammar_with_nonterminals() {
             recovery_diagnostics: vec![],
         }
     );
-    assert!(!VM::new(&prog.code, b"abc").run().complete);
+    assert!(!VM::new_from_program(&prog, b"abc").run().complete);
 }
 
 #[test]
@@ -832,9 +832,9 @@ fn ordered_choice_emits_expected_skeleton() {
         prog.code,
         vec![
             Instruction::Choice(Label(3)),
-            Instruction::Char(b'a'),
+            Instruction::Byte(b'a'),
             Instruction::Commit(Label(4)),
-            Instruction::Char(b'b'),
+            Instruction::Byte(b'b'),
             Instruction::End,
         ]
     );
@@ -850,7 +850,7 @@ fn repeat_emits_partial_commit() {
         prog.code,
         vec![
             Instruction::Choice(Label(3)),
-            Instruction::Char(b'a'),
+            Instruction::Byte(b'a'),
             Instruction::PartialCommit(Label(1)),
             Instruction::End,
         ]
@@ -890,11 +890,11 @@ fn recover_repeat_emits_choice_commit_skeleton() {
             Instruction::Choice(Label(11)),             // → exit
             Instruction::RecoverScopeBegin(LabelId(0)), // body: Catch start
             Instruction::Choice(Label(5)),              // → rec
-            Instruction::Char(b'a'),
+            Instruction::Byte(b'a'),
             Instruction::Commit(Label(9)),   // → done
             Instruction::RecoverToScopedMax, // rec:
             Instruction::CaptureBegin(CaptureKind(0)),
-            Instruction::Any(1),
+            Instruction::Any,
             Instruction::CaptureEnd,
             Instruction::RecoverScopeEnd,         // done:
             Instruction::PartialCommit(Label(1)), // → body
@@ -921,7 +921,7 @@ fn recover_repeat_labeled_interns_author_label() {
 /// `build_recover_repeat` in `src/pegc/parser.rs`.
 fn sync_set_recover(inner: Pattern, charset: CharSet) -> Pattern {
     let skip_loop = Pattern::repeat(Pattern::seq(vec![
-        Pattern::not_predicate(Pattern::char_class(charset)),
+        Pattern::not_predicate(Pattern::char_class(charset.clone())),
         Pattern::any_char(),
     ]));
     let recovery_body = Pattern::seq(vec![skip_loop, Pattern::char_class(charset)]);
@@ -941,14 +941,17 @@ fn sync_set_emits_skip_to_delim_loop() {
     // the structural pieces are present rather than nailing exact
     // Label values (which would entangle the test with the host
     // Catch/Repeat emit shape).
-    let semi = CharSet::from_bytes(b";");
+    let semi = CharSet::from_chars(&[';']);
     let p = sync_set_recover(Pattern::literal("a"), semi);
     let prog = compile_pattern(&p);
     let has = |needle: &Instruction| prog.code.iter().any(|i| i == needle);
     assert!(has(&Instruction::RecoverScopeBegin(LabelId(0))));
     assert!(has(&Instruction::RecoverToScopedMax));
     assert!(has(&Instruction::CaptureBegin(CaptureKind(0))));
-    assert!(has(&Instruction::Set(semi)));
+    assert!(prog
+        .code
+        .iter()
+        .any(|i| matches!(i, Instruction::CharSet(_))));
     assert!(prog
         .code
         .iter()
@@ -962,10 +965,10 @@ fn sync_set_one_recovery_capture_per_region() {
     // Input `aXY;c` with `('a'/'c')*^[;]`: iter 1 matches 'a', iter 2
     // fails on 'X', recovery skips "XY" then consumes ";" — one big
     // recovery capture covering [1, 4]. Iter 3 matches 'c'.
-    let semi = CharSet::from_bytes(b";");
+    let semi = CharSet::from_chars(&[';']);
     let p = sync_set_recover(
         Pattern::choice(vec![Pattern::literal("a"), Pattern::literal("c")]),
-        semi,
+        semi.clone(),
     );
     let r = run_pattern(&p, b"aXY;c");
     assert!(r.complete);
@@ -984,7 +987,7 @@ fn sync_set_terminates_cleanly_at_eof_without_delim() {
     // The catch fails, the outer `*` terminates. The parse is
     // structurally complete (the `End` after `*` always succeeds),
     // but `matched` reports only the bytes the loop committed: 'a'.
-    let semi = CharSet::from_bytes(b";");
+    let semi = CharSet::from_chars(&[';']);
     let p = sync_set_recover(Pattern::literal("a"), semi);
     let r = run_pattern(&p, b"aXY");
     assert!(r.complete);
@@ -1026,14 +1029,14 @@ fn grammar_rules_are_wrapped_in_memo_open_close() {
             Instruction::Call(Label(2)),
             Instruction::End,
             Instruction::RuleEnter(MemoId(0), RuleKind::Memo, Label(8)),
-            Instruction::Char(b'a'),
+            Instruction::Byte(b'a'),
             Instruction::Choice(Label(7)),
-            Instruction::Any(1),
+            Instruction::Any,
             Instruction::FailTwice,
             Instruction::MemoClose(MemoId(0)),
             Instruction::Return,
             Instruction::RuleEnter(MemoId(1), RuleKind::Memo, Label(12)),
-            Instruction::Char(b'b'),
+            Instruction::Byte(b'b'),
             Instruction::MemoClose(MemoId(1)),
             Instruction::Return,
         ]
@@ -1836,7 +1839,7 @@ fn bracketed_close_catch_runs_recovery_path() {
     )
     .expect("parse");
     let prog = g.compile().expect("compile");
-    let r = VM::new(&prog.code, b"{garbage}").run();
+    let r = VM::new_from_program(&prog, b"{garbage}").run();
     assert!(r.complete, "recovery should let the parse complete");
     assert_eq!(r.matched, 9);
     let kinds: Vec<&str> = r
@@ -1979,7 +1982,7 @@ fn auto_trivia_handles_inter_repeat_whitespace() {
     .expect("parse")
     .compile()
     .expect("compile");
-    let r = VM::new(&prog.code, b"x , x , x").run();
+    let r = VM::new_from_program(&prog, b"x , x , x").run();
     assert!(r.complete, "expected full match on ' '-separated items");
     assert_eq!(r.matched, 9);
 }
@@ -1990,15 +1993,15 @@ fn backslash_cap_r_matches_crlf_atomically() {
     // two-byte unit, not two separate line breaks.
     let g = parse("root <- \\R").expect("parse");
     let prog = g.compile().expect("compile");
-    let r = VM::new(&prog.code, b"\r\n").run();
+    let r = VM::new_from_program(&prog, b"\r\n").run();
     assert!(r.complete, "\\R should match CRLF");
     assert_eq!(r.matched, 2, "\\R should consume both CR and LF atomically");
 
-    let r = VM::new(&prog.code, b"\n").run();
+    let r = VM::new_from_program(&prog, b"\n").run();
     assert!(r.complete, "\\R should match bare LF");
     assert_eq!(r.matched, 1);
 
-    let r = VM::new(&prog.code, b"\r").run();
+    let r = VM::new_from_program(&prog, b"\r").run();
     assert!(r.complete, "\\R should match bare CR");
     assert_eq!(r.matched, 1);
 }
@@ -2009,11 +2012,11 @@ fn not_any_matches_eof() {
     // at end-of-input and fails otherwise.
     let g = parse("root <- !.").expect("parse");
     let prog = g.compile().expect("compile");
-    let r = VM::new(&prog.code, b"").run();
+    let r = VM::new_from_program(&prog, b"").run();
     assert!(r.complete, "!. should match empty input");
     assert_eq!(r.matched, 0);
 
-    let r = VM::new(&prog.code, b"x").run();
+    let r = VM::new_from_program(&prog, b"x").run();
     assert!(!r.complete, "!. should fail when bytes remain");
 }
 
@@ -2026,14 +2029,14 @@ fn repeat_count_matches_exact_length() {
     let g = parse("root <- \\d{4}").expect("parse");
     let prog = g.compile().expect("compile");
 
-    let r = VM::new(&prog.code, b"1234").run();
+    let r = VM::new_from_program(&prog, b"1234").run();
     assert!(r.complete, "\\d{{4}} should match exactly four digits");
     assert_eq!(r.matched, 4);
 
-    let r = VM::new(&prog.code, b"123").run();
+    let r = VM::new_from_program(&prog, b"123").run();
     assert!(!r.complete, "\\d{{4}} should fail on three digits");
 
-    let r = VM::new(&prog.code, b"12345").run();
+    let r = VM::new_from_program(&prog, b"12345").run();
     assert!(
         !r.complete,
         "root's implicit end-of-input must fail when a fifth byte remains"

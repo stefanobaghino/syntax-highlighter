@@ -291,8 +291,13 @@ float_suffix  <- [fFlL]
 
 # --- Identifiers ----------------------------------------------------
 
-*ident        <- !reserved [A-Za-z_] ident_body*
-ident_body    <- [A-Za-z\d_]
+# Per C11 §6.4.2.1: identifier = identifier-nondigit (identifier-nondigit
+# | digit)*; nondigit = `_ A-Z a-z` | universal-character-name (UCN);
+# UCNs are `\uHHHH` (4 hex) or `\UHHHHHHHH` (8 hex). C23 §6.4.3 also
+# admits raw non-ASCII letters (General_Category=L) directly.
+*ident        <- !reserved ([\p{L}_] / ucn) ident_body*
+ident_body    <- [\p{L}\p{Nd}_] / ucn
+ucn           <- '\\u' [0-9A-Fa-f]{4} / '\\U' [0-9A-Fa-f]{8}
 
 # Reserved keywords that must not be matched as identifiers.
 *reserved     <- reserved_word !ident_body

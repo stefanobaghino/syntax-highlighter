@@ -44,21 +44,24 @@
 //!
 //! `Label` and `MemoId` go on the wire as LEB128 unsigned varints (1–5
 //! bytes for a `u32` value); every program `pegc` produces today fits in
-//! 2 varint bytes per Label/MemoId. `CaptureKind` stays `u16`.
-//! `CharSet` payloads are 32 raw bytes (bitmaps don't compress under
-//! varint).
+//! 2 varint bytes per Label/MemoId. `CaptureKind` stays `u16`. The
+//! per-instruction `CharSet` payload is just a `SetId` (`u16`); the
+//! `CharSet` interval data lives in a side table written before the
+//! code stream.
 //!
 //! # No zero-copy
 //!
 //! `decode` allocates a `Vec<Instruction>` and walks the input. We don't
 //! attempt `&[u8] → &[Instruction]` zero-copy: `Instruction` is a Rust
-//! enum with a `CharSet([u8;32])` payload, so the in-memory layout
-//! requires a parallel `repr(C)` opcode struct, padded strings, and an
-//! aligned input buffer to support that. None of the bundled grammars
-//! is large enough for the load-time allocation to matter — sqlite at
-//! 5,622 instructions decodes in sub-millisecond time.
+//! enum with variant-specific payloads, so the in-memory layout requires
+//! a parallel `repr(C)` opcode struct, padded strings, and an aligned
+//! input buffer to support that. None of the bundled grammars is large
+//! enough for the load-time allocation to matter — sqlite at 5,622
+//! instructions decodes in sub-millisecond time.
 
-use crate::pegvm::{CaptureKind, CharSet, Instruction, Label, LabelId, MemoId, Program, RuleKind};
+use crate::pegvm::{
+    CaptureKind, CharSet, Instruction, Label, LabelId, MemoId, Program, RuleKind, SetId,
+};
 
 /// Failure modes for [`decode`]. [`encode`] is infallible for any
 /// well-formed `Program` (`pegc::compile` always produces one).
@@ -136,44 +139,34 @@ impl std::error::Error for Error {}
 
 // ─── Opcode tags ──────────────────────────────────────────────────────
 //
-// Stable u8 values keyed off the variant. Numbering leaves gaps between
-// groups so a future variant can slot in alphabetically without
-// renumbering everything.
+// Dense contiguous block. The wire format is pre-1.0 and has no
+// stability contract, so we don't reserve slots between groups —
+// every variant gets the next available value.
 
-const TAG_CHAR: u8 = 0x01;
-const TAG_SET: u8 = 0x02;
-const TAG_ANY: u8 = 0x03;
-const TAG_TEST_CHAR: u8 = 0x04;
-const TAG_TEST_SET: u8 = 0x05;
+const TAG_BYTE: u8 = 0x01;
+const TAG_ANY: u8 = 0x02;
+const TAG_CHAR_SET: u8 = 0x03;
+const TAG_JUMP: u8 = 0x04;
+const TAG_CHOICE: u8 = 0x05;
+const TAG_COMMIT: u8 = 0x06;
+const TAG_PARTIAL_COMMIT: u8 = 0x07;
+const TAG_BACK_COMMIT: u8 = 0x08;
+const TAG_FAIL_TWICE: u8 = 0x09;
+const TAG_FAIL: u8 = 0x0A;
+const TAG_CALL: u8 = 0x0B;
+const TAG_RETURN: u8 = 0x0C;
+const TAG_RULE_ENTER: u8 = 0x0D;
+const TAG_MEMO_CLOSE: u8 = 0x0E;
+const TAG_LR_TAIL: u8 = 0x0F;
+const TAG_CAPTURE_BEGIN: u8 = 0x10;
+const TAG_CAPTURE_END: u8 = 0x11;
+const TAG_RECOVER_SCOPE_BEGIN: u8 = 0x12;
+const TAG_RECOVER_TO_SCOPED_MAX: u8 = 0x13;
+const TAG_RECOVER_SCOPE_END: u8 = 0x14;
 
-const TAG_JUMP: u8 = 0x10;
-const TAG_CHOICE: u8 = 0x11;
-const TAG_COMMIT: u8 = 0x12;
-const TAG_PARTIAL_COMMIT: u8 = 0x13;
-const TAG_BACK_COMMIT: u8 = 0x14;
-const TAG_FAIL_TWICE: u8 = 0x15;
-const TAG_FAIL: u8 = 0x16;
-
-const TAG_CALL: u8 = 0x20;
-const TAG_RETURN: u8 = 0x21;
-const TAG_RULE_ENTER: u8 = 0x22;
-const TAG_MEMO_CLOSE: u8 = 0x23;
-const TAG_LR_TAIL: u8 = 0x24;
-
-const TAG_CAPTURE_BEGIN: u8 = 0x30;
-const TAG_CAPTURE_END: u8 = 0x31;
-
-// Per-iteration recovery-scope opcodes for `p*^`. See `Instruction`
-// docs and `src/pegc/compiler.rs` for usage. No payload: all state is
-// on the VM stack.
-const TAG_RECOVER_SCOPE_BEGIN: u8 = 0x40;
-const TAG_RECOVER_TO_SCOPED_MAX: u8 = 0x41;
-const TAG_RECOVER_SCOPE_END: u8 = 0x42;
-
-// `End` is the program-termination sentinel; placing it at the top of the
-// `u8` range (rather than in a grouped sub-range) keeps the
-// "I'm done, no more instructions" tag visually distinct from the
-// matching / control-flow / call / capture groups above.
+// `End` is the program-termination sentinel; placed at the top of the
+// `u8` range to keep it visually distinct from the matching /
+// control-flow / call / capture / recovery opcodes above.
 const TAG_END: u8 = 0xFF;
 
 const RULE_KIND_MEMO: u8 = 0;
@@ -198,8 +191,31 @@ pub fn encode(program: &Program) -> Vec<u8> {
     write_name_table(&mut out, &program.rule_names, "rule");
     write_bit_vec(&mut out, &program.rule_is_trivia);
     write_name_table(&mut out, &program.label_kinds, "label");
+    write_char_sets(&mut out, &program.char_sets);
     write_instructions(&mut out, &program.code);
     out
+}
+
+fn write_char_sets(out: &mut Vec<u8>, classes: &[CharSet]) {
+    debug_assert!(
+        classes.len() <= u16::MAX as usize,
+        "char_sets count ({}) exceeds u16::MAX",
+        classes.len()
+    );
+    out.extend_from_slice(&(classes.len() as u16).to_le_bytes());
+    for class in classes {
+        let ranges = class.ranges();
+        debug_assert!(
+            ranges.len() <= u32::MAX as usize,
+            "code-point-class range count ({}) exceeds u32::MAX",
+            ranges.len()
+        );
+        out.extend_from_slice(&(ranges.len() as u32).to_le_bytes());
+        for &(lo, hi) in ranges {
+            write_varint_u32(out, lo as u32);
+            write_varint_u32(out, hi as u32);
+        }
+    }
 }
 
 fn write_bit_vec(out: &mut Vec<u8>, bits: &[bool]) {
@@ -250,27 +266,16 @@ fn write_instructions(out: &mut Vec<u8>, code: &[Instruction]) {
 
 fn write_instruction(out: &mut Vec<u8>, ins: &Instruction) {
     match ins {
-        Instruction::Char(b) => {
-            out.push(TAG_CHAR);
+        Instruction::Byte(b) => {
+            out.push(TAG_BYTE);
             out.push(*b);
         }
-        Instruction::Set(set) => {
-            out.push(TAG_SET);
-            out.extend_from_slice(set.bitmap());
-        }
-        Instruction::Any(n) => {
+        Instruction::Any => {
             out.push(TAG_ANY);
-            out.push(*n);
         }
-        Instruction::TestChar(b, label) => {
-            out.push(TAG_TEST_CHAR);
-            out.push(*b);
-            write_varint_u32(out, label.0);
-        }
-        Instruction::TestSet(set, label) => {
-            out.push(TAG_TEST_SET);
-            out.extend_from_slice(set.bitmap());
-            write_varint_u32(out, label.0);
+        Instruction::CharSet(class_id) => {
+            out.push(TAG_CHAR_SET);
+            out.extend_from_slice(&class_id.0.to_le_bytes());
         }
         Instruction::Jump(label) => {
             out.push(TAG_JUMP);
@@ -351,6 +356,7 @@ pub fn decode(bytes: &[u8]) -> Result<Program, Error> {
     let rule_names = read_name_table(&mut cur, Error::InvalidRuleName)?;
     let rule_is_trivia = read_bit_vec(&mut cur, rule_names.len())?;
     let label_kinds = read_name_table(&mut cur, Error::InvalidLabelName)?;
+    let char_sets = read_char_sets(&mut cur)?;
     let code = read_instructions(&mut cur)?;
     if cur.pos != bytes.len() {
         return Err(Error::TrailingBytes {
@@ -365,7 +371,36 @@ pub fn decode(bytes: &[u8]) -> Result<Program, Error> {
         rule_names,
         label_kinds,
         rule_is_trivia,
+        char_sets,
     })
+}
+
+fn read_char_sets(cur: &mut Cursor<'_>) -> Result<Vec<CharSet>, Error> {
+    let n = cur.read_u16_le()? as usize;
+    let mut classes = Vec::with_capacity(n);
+    for _ in 0..n {
+        let range_count = cur.read_u32_le()? as usize;
+        let mut ranges: Vec<(char, char)> = Vec::with_capacity(range_count);
+        for _ in 0..range_count {
+            let lo = cur.read_varint_u32()?;
+            let hi = cur.read_varint_u32()?;
+            let lo_c = char::from_u32(lo).ok_or(Error::InvalidOpcode {
+                tag: TAG_CHAR_SET,
+                position: cur.pos,
+            })?;
+            let hi_c = char::from_u32(hi).ok_or(Error::InvalidOpcode {
+                tag: TAG_CHAR_SET,
+                position: cur.pos,
+            })?;
+            ranges.push((lo_c, hi_c));
+        }
+        let class = CharSet::from_ranges(&ranges).map_err(|_| Error::InvalidOpcode {
+            tag: TAG_CHAR_SET,
+            position: cur.pos,
+        })?;
+        classes.push(class);
+    }
+    Ok(classes)
 }
 
 fn read_bit_vec(cur: &mut Cursor<'_>, n_bits: usize) -> Result<Vec<bool>, Error> {
@@ -414,18 +449,11 @@ fn read_instruction(cur: &mut Cursor<'_>) -> Result<Instruction, Error> {
     let tag_pos = cur.pos;
     let tag = cur.read_u8()?;
     Ok(match tag {
-        TAG_CHAR => Instruction::Char(cur.read_u8()?),
-        TAG_SET => Instruction::Set(CharSet::from_bitmap(cur.read_array::<32>()?)),
-        TAG_ANY => Instruction::Any(cur.read_u8()?),
-        TAG_TEST_CHAR => {
-            let b = cur.read_u8()?;
-            let label = Label(cur.read_varint_u32()?);
-            Instruction::TestChar(b, label)
-        }
-        TAG_TEST_SET => {
-            let set = CharSet::from_bitmap(cur.read_array::<32>()?);
-            let label = Label(cur.read_varint_u32()?);
-            Instruction::TestSet(set, label)
+        TAG_BYTE => Instruction::Byte(cur.read_u8()?),
+        TAG_ANY => Instruction::Any,
+        TAG_CHAR_SET => {
+            let class_id = SetId(u16::from_le_bytes(cur.read_array::<2>()?));
+            Instruction::CharSet(class_id)
         }
         TAG_JUMP => Instruction::Jump(Label(cur.read_varint_u32()?)),
         TAG_CHOICE => Instruction::Choice(Label(cur.read_varint_u32()?)),
@@ -691,13 +719,13 @@ mod tests {
         // variant. Validity at the VM level isn't required — we only
         // care that encode/decode preserves the bytes. capture_kinds
         // covers the CaptureBegin reference.
+        let class_a = CharSet::single_range('a', 'c').unwrap();
+        let class_b = CharSet::single_range('x', 'z').unwrap();
         let p = Program {
             code: vec![
-                Instruction::Char(b'a'),
-                Instruction::Set(CharSet::from_bytes(b"abc")),
-                Instruction::Any(1),
-                Instruction::TestChar(b'b', Label(7)),
-                Instruction::TestSet(CharSet::from_bytes(b"xyz"), Label(11)),
+                Instruction::Byte(b'a'),
+                Instruction::CharSet(SetId(0)),
+                Instruction::Any,
                 Instruction::Jump(Label(13)),
                 Instruction::Choice(Label(17)),
                 Instruction::Commit(Label(19)),
@@ -716,6 +744,7 @@ mod tests {
                 Instruction::RecoverScopeBegin(LabelId(0)),
                 Instruction::RecoverToScopedMax,
                 Instruction::RecoverScopeEnd,
+                Instruction::CharSet(SetId(1)),
                 Instruction::End,
             ],
             capture_kinds: vec!["alpha".to_string()],
@@ -723,6 +752,7 @@ mod tests {
             rule_names: vec!["start".to_string(), "other".to_string()],
             label_kinds: vec!["missing_then".to_string()],
             rule_is_trivia: vec![false, true],
+            char_sets: vec![class_a, class_b],
         };
         assert_roundtrip(&p);
     }
@@ -740,6 +770,7 @@ mod tests {
             rule_names,
             label_kinds: vec![],
             rule_is_trivia: bits,
+            char_sets: vec![],
         };
         let bytes = encode(&p);
         let decoded = decode(&bytes).expect("decode succeeds");
@@ -785,11 +816,13 @@ mod tests {
 
     #[test]
     fn invalid_opcode_errors() {
-        // Empty capture table + empty rule table + empty label table + one instruction with a bogus tag.
+        // Empty capture table + empty rule table + empty label table +
+        // empty char_sets table + one instruction with a bogus tag.
         let buf = [
             0x00u8, 0x00, // capture count = 0
             0x00, 0x00, // rule count = 0
             0x00, 0x00, // label count = 0
+            0x00, 0x00, // char_sets count = 0
             0x01, 0x00, 0x00, 0x00, // instruction count = 1
             0x77, // unknown opcode
         ];
@@ -807,6 +840,8 @@ mod tests {
             0x00, // rule count = 0
             0x00,
             0x00, // label count = 0
+            0x00,
+            0x00, // char_sets count = 0
             0x01,
             0x00,
             0x00,
@@ -864,9 +899,9 @@ mod tests {
     #[test]
     fn instruction_count_above_cap_errors() {
         let count = MAX_INSTRUCTION_COUNT + 1;
-        // empty capture + rule + label tables (6 zero bytes), then a
-        // declared instruction count above the cap.
-        let mut buf = vec![0x00u8; 6];
+        // empty capture + rule + label + char_sets tables (8 zero
+        // bytes), then a declared instruction count above the cap.
+        let mut buf = vec![0x00u8; 8];
         buf.extend_from_slice(&count.to_le_bytes());
         let err = decode(&buf).unwrap_err();
         assert!(
@@ -884,6 +919,7 @@ mod tests {
             rule_names: vec![],
             label_kinds: vec![],
             rule_is_trivia: vec![],
+            char_sets: vec![],
         };
         assert_roundtrip(&p);
     }
@@ -906,6 +942,7 @@ mod tests {
             rule_names: vec![],
             label_kinds: vec![],
             rule_is_trivia: vec![],
+            char_sets: vec![],
         };
         let bytes = encode(&p);
         let decoded = decode(&bytes).expect("decode succeeds");

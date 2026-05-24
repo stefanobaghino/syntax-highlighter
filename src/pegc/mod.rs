@@ -30,6 +30,7 @@ pub mod analysis;
 pub mod compiler;
 pub mod parser;
 pub mod pattern;
+pub mod unicode_properties;
 
 pub use analysis::{tally_non_terminal_refs, LintFinding, LintKind};
 pub use compiler::{compile_pattern, CompileError};

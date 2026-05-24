@@ -31,7 +31,7 @@ fn grammar_compiles() {
 
 fn run(input: &str) -> (usize, Vec<Capture>, Vec<String>, bool) {
     let prog = sqlite_program();
-    let r = VM::new(&prog.code, input.as_bytes()).run();
+    let r = VM::new_from_program(prog, input.as_bytes()).run();
     (
         r.matched,
         r.captures,
@@ -1315,4 +1315,92 @@ fn where_clause_catch_recovers_at_clause_boundary() {
         var_spans.contains(&"isprim"),
         "expected `isprim` to parse normally after recovery; got {var_spans:?}"
     );
+}
+
+// --- Stage 1 UTF-8 tests ----------------------------------------------
+
+#[test]
+fn select_with_non_ascii_identifier() {
+    // Per sqlite.org/draft/tokenreq.html H41130 + ALPHABETIC: any code
+    // point >= U+0080 is admitted in identifier start/continuation.
+    let input = "SELECT 名前 FROM users;";
+    let (caps, kinds) = assert_complete_full(input);
+    let vars = spans_for(&caps, &kinds, "variable", input);
+    assert!(
+        vars.contains(&"名前"),
+        "expected non-ASCII identifier to capture as variable; got {vars:?}"
+    );
+}
+
+#[test]
+fn ident_continuation_admits_dollar() {
+    let input = "SELECT a$b FROM t;";
+    let (caps, kinds) = assert_complete_full(input);
+    let vars = spans_for(&caps, &kinds, "variable", input);
+    assert!(
+        vars.contains(&"a$b"),
+        "expected `a$b` identifier; got {vars:?}"
+    );
+}
+
+#[test]
+fn bad_utf8_in_identifier_position_emits_recovery() {
+    // Latin-1 `é` (0xE9) in a UTF-8 stream is an invalid lead byte.
+    // Per the UTF-8 recovery contract, the CharClass dispatch emits a
+    // recovery span over the bad bytes and continues.
+    let prog = sqlite_program();
+    let input: &[u8] = b"SELECT clich\xE9_value FROM t;";
+    let r = VM::new_from_program(prog, input).run();
+    let recovery_idx = prog
+        .capture_kinds
+        .iter()
+        .position(|k| k == "recovery")
+        .expect("sqlite grammar interns 'recovery' via CharClass");
+    let recoveries: Vec<_> = r
+        .captures
+        .iter()
+        .filter(|c| c.kind.0 as usize == recovery_idx)
+        .collect();
+    assert!(
+        !recoveries.is_empty(),
+        "expected at least one recovery span for bad UTF-8"
+    );
+    let bad_byte_pos = input.iter().position(|&b| b == 0xE9).unwrap();
+    assert!(
+        recoveries
+            .iter()
+            .any(|c| c.start == bad_byte_pos && c.end == bad_byte_pos + 1),
+        "expected recovery span over byte 0xE9 at position {bad_byte_pos}; got {:?}",
+        recoveries
+    );
+}
+
+#[test]
+fn consecutive_bad_utf8_bytes_coalesce_into_one_recovery() {
+    // Three contiguous never-valid lead bytes. Each is a 1-byte
+    // maximal invalid prefix; the opcode's coalescing logic should
+    // merge them into one span.
+    let prog = sqlite_program();
+    let input: &[u8] = b"SELECT a\xC0\xC1\xF5 FROM t;";
+    let r = VM::new_from_program(prog, input).run();
+    let recovery_idx = prog
+        .capture_kinds
+        .iter()
+        .position(|k| k == "recovery")
+        .unwrap();
+    // Look at recovery spans whose origin is utf8 by virtue of byte
+    // range: they fall inside the bad-byte run [8..11).
+    let bad_byte_recoveries: Vec<_> = r
+        .captures
+        .iter()
+        .filter(|c| c.kind.0 as usize == recovery_idx && c.start >= 8 && c.end <= 11)
+        .collect();
+    assert_eq!(
+        bad_byte_recoveries.len(),
+        1,
+        "expected one coalesced span over the 3 bad bytes; got {:?}",
+        bad_byte_recoveries
+    );
+    assert_eq!(bad_byte_recoveries[0].start, 8);
+    assert_eq!(bad_byte_recoveries[0].end, 11);
 }

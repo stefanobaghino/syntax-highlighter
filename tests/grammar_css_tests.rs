@@ -30,7 +30,7 @@ fn grammar_compiles() {
 
 fn run(input: &str) -> (usize, Vec<Capture>, Vec<String>, bool) {
     let prog = css_program();
-    let r = VM::new(&prog.code, input.as_bytes()).run();
+    let r = VM::new_from_program(prog, input.as_bytes()).run();
     (
         r.matched,
         r.captures,
@@ -277,5 +277,42 @@ fn recovery_absorbs_malformed_block_body() {
         k.contains(&"recovery"),
         "expected a @recovery capture inside the block, got: {:?}",
         k
+    );
+}
+
+// --- Stage 1 UTF-8 tests ----------------------------------------------
+
+#[test]
+fn non_ascii_identifier_in_class_selector() {
+    // Per CSS Syntax Module L3 §4.6, non-ASCII code points are
+    // ident-start code points.
+    let input = ".café { color: red; }";
+    let (_, caps, kinds, complete) = run(input);
+    assert!(complete, "expected complete parse for {input:?}");
+    let props: Vec<&str> = caps
+        .iter()
+        .filter(|c| kinds[c.kind.0 as usize] == "property")
+        .map(|c| &input[c.start..c.end])
+        .collect();
+    assert!(
+        props.contains(&".café"),
+        "expected `.café` to capture as a property selector; got {props:?}"
+    );
+}
+
+#[test]
+fn hex_escape_in_class_selector() {
+    // CSS Syntax Module L3 §4.6 admits `\\HHHHHH` escapes in identifiers.
+    // The broader `\\` + any-non-newline form covers this case.
+    let input = ".cl\\61ss { color: red; }";
+    let (caps, kinds) = assert_complete_full(input);
+    let props: Vec<&str> = caps
+        .iter()
+        .filter(|c| kinds[c.kind.0 as usize] == "property")
+        .map(|c| &input[c.start..c.end])
+        .collect();
+    assert!(
+        props.iter().any(|p| p.contains("\\61")),
+        "expected hex-escaped selector to capture as property; got {props:?}"
     );
 }

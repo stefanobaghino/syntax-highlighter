@@ -30,7 +30,7 @@ fn grammar_compiles() {
 
 fn run(input: &str) -> (usize, Vec<Capture>, Vec<String>, bool) {
     let prog = c_program();
-    let r = VM::new(&prog.code, input.as_bytes()).run();
+    let r = VM::new_from_program(prog, input.as_bytes()).run();
     (
         r.matched,
         r.captures,
@@ -360,5 +360,24 @@ fn recovery_absorbs_malformed_block_body() {
         k.contains(&"recovery"),
         "expected a @recovery capture inside the block, got: {:?}",
         k
+    );
+}
+
+// --- Stage 3 UCN tests ------------------------------------------------
+
+#[test]
+fn ucn_in_identifier() {
+    // C11 §6.4.2.1 / Annex D admits universal-character-names
+    // (`\uHHHH` / `\UHHHHHHHH`) in identifier positions.
+    let input = "int foo\\u4E16 = 1;\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let var_spans: Vec<&str> = caps
+        .iter()
+        .filter(|c| kinds[c.kind.0 as usize] == "variable")
+        .map(|c| &input[c.start..c.end])
+        .collect();
+    assert!(
+        var_spans.contains(&"foo\\u4E16"),
+        "expected UCN-bearing identifier to capture; got {var_spans:?}"
     );
 }

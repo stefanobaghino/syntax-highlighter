@@ -7,6 +7,15 @@ use super::compiler::{compile_rules, CompileError};
 use super::pattern::{Pattern, Span};
 use crate::pegvm::{CharSet, Program};
 
+/// Append `c` as UTF-8 to `out`. ASCII chars produce one byte; non-ASCII
+/// up to four. Used by the parser to fold every form of escape (byte
+/// escapes like `\n`, the code-point escape `\u{HHHH}`, and bare source
+/// chars) through one path into the literal byte buffer.
+fn append_char_utf8(c: char, out: &mut Vec<u8>) {
+    let mut buf = [0u8; 4];
+    out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+}
+
 /// Reserved rule name for the grammar's start rule. Every grammar must
 /// define exactly one rule named [`ROOT_RULE`]; the compiler wraps its
 /// body to assert end-of-input and to splice optional leading / trailing
@@ -746,8 +755,30 @@ impl<'a> Parser<'a> {
                     span,
                 })
             }
+            Some(b'p') if self.peek_at(1) == Some(b'{') => {
+                self.pos += 2;
+                let set = self.parse_braced_property_escape(false)?;
+                Ok(Pattern::CharClass { set, span })
+            }
+            Some(b'P') if self.peek_at(1) == Some(b'{') => {
+                self.pos += 2;
+                let set = self.parse_braced_property_escape(true)?;
+                Ok(Pattern::CharClass { set, span })
+            }
+            Some(b'u') if self.peek_at(1) == Some(b'{') => {
+                // `\u{HHHH}` at atom position: emit a literal byte
+                // sequence (the UTF-8 encoding of the code point). For
+                // matching against well-formed input this is byte-by-
+                // byte identical to a `CharSet` match; the `CharSet`
+                // opcode is reserved for character classes.
+                self.pos += 2;
+                let c = self.parse_braced_codepoint_escape()?;
+                let mut bytes = Vec::new();
+                append_char_utf8(c, &mut bytes);
+                Ok(Pattern::Literal { bytes, span })
+            }
             Some(c) => Err(self.err(format!(
-                "unknown atom '\\{}' (valid: \\d \\D \\s \\S \\h \\H \\R)",
+                "unknown atom '\\{}' (valid: \\d \\D \\s \\S \\h \\H \\R \\p{{NAME}} \\P{{NAME}} \\u{{HHHH}})",
                 c as char
             ))),
             None => Err(self.err("unterminated escape at top level".into())),
@@ -782,7 +813,8 @@ impl<'a> Parser<'a> {
                 None => return Err(self.err("unterminated string literal".into())),
                 Some(b'\\') => {
                     self.pos += 1;
-                    bytes.push(self.parse_escape()?);
+                    let c = self.parse_escape()?;
+                    append_char_utf8(c, &mut bytes);
                 }
                 Some(c) if c == quote => {
                     self.pos += 1;
@@ -806,14 +838,22 @@ impl<'a> Parser<'a> {
         } else {
             false
         };
-        let mut set = CharSet::empty();
+        // Collect entries as code-point ranges. Every class lowers to
+        // `Pattern::CharClass` carrying a `CharSet` (interval list over
+        // `(char, char)`); the legacy ASCII-byte-bitmap fast path was
+        // removed when the runtime collapsed to a single class opcode.
+        let mut entries: Vec<(u32, u32)> = Vec::new();
+        let mut shortcut_set = CharSet::empty();
+        let mut has_shortcut = false;
+        let mut property_set = CharSet::empty();
+        let mut has_property = false;
         while self.peek().is_some() && self.peek() != Some(b']') {
             // Class-shortcut path: `\d`, `\D`, `\s`, `\S`, `\h`, `\H`
             // expand into the surrounding set instead of contributing
             // a single byte. `\R` is multi-byte and doesn't fit inside
             // `[...]` — reject with a pointer back to the top-level
-            // form. Other escapes fall through to the existing
-            // per-byte `parse_class_char`.
+            // form. Other escapes fall through to the per-codepoint
+            // `parse_class_codepoint`.
             if self.peek() == Some(b'\\') {
                 if let Some(c) = self.peek_at(1) {
                     if let Some(shortcut) = class_for_shortcut(c) {
@@ -829,7 +869,8 @@ impl<'a> Parser<'a> {
                                 c as char
                             )));
                         }
-                        set = set.union(&shortcut);
+                        shortcut_set = shortcut_set.union(&shortcut);
+                        has_shortcut = true;
                         continue;
                     }
                     if c == b'R' {
@@ -837,94 +878,212 @@ impl<'a> Parser<'a> {
                             "'\\R' is a multi-byte sequence and can't appear in a character class — use \\R as a standalone atom".into(),
                         ));
                     }
+                    if (c == b'p' || c == b'P') && self.peek_at(2) == Some(b'{') {
+                        let negate = c == b'P';
+                        self.pos += 3;
+                        let class = self.parse_braced_property_escape(negate)?;
+                        // Property class can't form a range, same
+                        // rationale as the byte-shortcut path.
+                        if self.peek() == Some(b'-') && self.peek_at(1) != Some(b']') {
+                            return Err(self.err(format!(
+                                "character-class range can't start with a property class '\\{}{{...}}'",
+                                c as char
+                            )));
+                        }
+                        property_set = property_set.union(&class);
+                        has_property = true;
+                        continue;
+                    }
                 }
             }
-            let lo = self.parse_class_char()?;
+            let lo = self.parse_class_codepoint()?;
             // Range form `lo-hi` (but `-` at end is literal; require non-`]` after `-`)
             if self.peek() == Some(b'-') && self.peek_at(1) != Some(b']') {
                 self.pos += 1;
-                let hi = self.parse_class_char()?;
+                let hi = self.parse_class_codepoint()?;
                 if hi < lo {
                     return Err(self.err(format!(
-                        "char class range out of order: 0x{:02x}-0x{:02x}",
+                        "char class range out of order: U+{:04X}-U+{:04X}",
                         lo, hi
                     )));
                 }
-                set.add_range(lo, hi);
+                entries.push((lo, hi));
             } else {
-                set.add(lo);
+                entries.push((lo, lo));
             }
         }
         self.expect(b']')?;
-        let final_set = if negate { set.negate() } else { set };
+        // Build a `CharSet`: union of explicit `(lo, hi)` ranges, the
+        // shortcut set, the property set, then negate if `[^...]`.
+        // Every `(lo, hi)` already passed `\u{...}` validation, so
+        // `char::from_u32` can't fail here.
+        let mut char_ranges: Vec<(char, char)> = Vec::new();
+        for &(lo, hi) in &entries {
+            let lo_c = char::from_u32(lo)
+                .ok_or_else(|| self.err(format!("invalid scalar value U+{:04X}", lo)))?;
+            let hi_c = char::from_u32(hi)
+                .ok_or_else(|| self.err(format!("invalid scalar value U+{:04X}", hi)))?;
+            char_ranges.push((lo_c, hi_c));
+        }
+        let explicit = CharSet::from_ranges(&char_ranges)
+            .map_err(|e| self.err(format!("invalid character class: {}", e)))?;
+        let _ = has_shortcut; // shortcut_set always unioned in; flag retained for symmetry
+        let _ = has_property;
+        let combined = explicit.union(&shortcut_set).union(&property_set);
+        let final_set = if negate { combined.negate() } else { combined };
         Ok(Pattern::CharClass {
             set: final_set,
             span,
         })
     }
 
-    fn parse_class_char(&mut self) -> Result<u8, ParseError> {
+    /// Parse one entry of a character class as a code point. Handles
+    /// three shapes:
+    ///
+    /// 1. A `\\`-prefixed escape (delegates to [`parse_escape`]).
+    /// 2. A plain ASCII byte from source.
+    /// 3. A non-ASCII byte from source — UTF-8-decoded into one code
+    ///    point. Flows into the unified `Pattern::CharClass`.
+    fn parse_class_codepoint(&mut self) -> Result<u32, ParseError> {
         match self.peek() {
             Some(b'\\') => {
                 self.pos += 1;
-                self.parse_escape()
+                Ok(self.parse_escape()? as u32)
             }
-            Some(c) => {
+            Some(c) if c < 0x80 => {
                 self.pos += 1;
-                Ok(c)
+                Ok(c as u32)
+            }
+            Some(_) => {
+                // Non-ASCII source byte: decode the UTF-8 sequence
+                // starting here and treat it as a single code-point
+                // class entry.
+                match crate::pegvm::utf8::decode_at(self.src, self.pos) {
+                    crate::pegvm::utf8::Utf8DecodeResult::Valid { scalar, bytes } => {
+                        self.pos += bytes;
+                        Ok(scalar as u32)
+                    }
+                    crate::pegvm::utf8::Utf8DecodeResult::Invalid { .. } => Err(self.err(
+                        "invalid UTF-8 byte sequence in grammar source character class".into(),
+                    )),
+                    crate::pegvm::utf8::Utf8DecodeResult::Eof => {
+                        Err(self.err("unterminated character class".into()))
+                    }
+                }
             }
             None => Err(self.err("unterminated character class".into())),
         }
     }
 
-    fn parse_escape(&mut self) -> Result<u8, ParseError> {
-        match self.peek() {
-            Some(b'n') => {
-                self.pos += 1;
-                Ok(b'\n')
+    fn parse_escape(&mut self) -> Result<char, ParseError> {
+        let c = match self.peek() {
+            Some(b'n') => '\n',
+            Some(b'r') => '\r',
+            Some(b't') => '\t',
+            Some(b'0') => '\0',
+            Some(b'\\') => '\\',
+            Some(b'\'') => '\'',
+            Some(b'"') => '"',
+            Some(b']') => ']',
+            Some(b'[') => '[',
+            Some(b'-') => '-',
+            Some(b'/') => '/',
+            Some(b'u') if self.peek_at(1) == Some(b'{') => {
+                self.pos += 2;
+                return self.parse_braced_codepoint_escape();
             }
-            Some(b'r') => {
-                self.pos += 1;
-                Ok(b'\r')
+            Some(c) => return Err(self.err(format!("unknown escape '\\{}'", c as char))),
+            None => return Err(self.err("unterminated escape sequence".into())),
+        };
+        self.pos += 1;
+        Ok(c)
+    }
+
+    /// Parse the body of a `\p{NAME}` or `\P{NAME}` escape. The caller
+    /// has already consumed the opening `\p{` or `\P{`; this consumes
+    /// the property name and the closing `}`, looks the name up in
+    /// [`crate::pegc::unicode_properties`], and returns the resulting
+    /// [`CharSet`] (negated for `\P{...}`).
+    fn parse_braced_property_escape(&mut self, negate: bool) -> Result<CharSet, ParseError> {
+        let start_pos = self.pos;
+        loop {
+            match self.peek() {
+                Some(b'}') => {
+                    if self.pos == start_pos {
+                        return Err(self.err("\\p{} is empty: expected a property name".into()));
+                    }
+                    let name = std::str::from_utf8(&self.src[start_pos..self.pos])
+                        .map_err(|_| self.err("invalid UTF-8 in \\p{...} property name".into()))?;
+                    self.pos += 1;
+                    let set = crate::pegc::unicode_properties::lookup(name)
+                        .ok_or_else(|| self.err(format!("unknown Unicode property '{}'", name)))?;
+                    return Ok(if negate { set.negate() } else { set.clone() });
+                }
+                Some(c) if c.is_ascii_alphanumeric() || c == b'_' || c == b'=' || c == b'-' => {
+                    self.pos += 1;
+                }
+                Some(c) => {
+                    return Err(self.err(format!(
+                        "unexpected '{}' in \\p{{...}} property name",
+                        c as char
+                    )));
+                }
+                None => return Err(self.err("unterminated \\p{...} escape".into())),
             }
-            Some(b't') => {
-                self.pos += 1;
-                Ok(b'\t')
+        }
+    }
+
+    /// Parse the body of a `\u{...}` escape: 1–6 hex digits followed by
+    /// `}`. The caller has already consumed `\u{`. Rejects values >
+    /// U+10FFFF, surrogates (U+D800..=U+DFFF), and empty braces.
+    fn parse_braced_codepoint_escape(&mut self) -> Result<char, ParseError> {
+        let start_pos = self.pos;
+        let mut value: u32 = 0;
+        let mut digits = 0usize;
+        loop {
+            match self.peek() {
+                Some(c) if c.is_ascii_hexdigit() => {
+                    if digits == 6 {
+                        return Err(self.err("\\u{...} accepts at most 6 hex digits".into()));
+                    }
+                    let nibble = match c {
+                        b'0'..=b'9' => c - b'0',
+                        b'a'..=b'f' => c - b'a' + 10,
+                        b'A'..=b'F' => c - b'A' + 10,
+                        _ => unreachable!(),
+                    };
+                    value = (value << 4) | (nibble as u32);
+                    digits += 1;
+                    self.pos += 1;
+                }
+                Some(b'}') => {
+                    self.pos += 1;
+                    if digits == 0 {
+                        return Err(self.err("\\u{} is empty: expected 1-6 hex digits".into()));
+                    }
+                    if value > 0x10_FFFF {
+                        return Err(self.err(format!("\\u{{{:X}}} exceeds U+10FFFF", value)));
+                    }
+                    if (0xD800..=0xDFFF).contains(&value) {
+                        return Err(self.err(format!(
+                            "\\u{{{:04X}}} is a surrogate (U+D800..=U+DFFF) and not a Unicode scalar value",
+                            value
+                        )));
+                    }
+                    return Ok(char::from_u32(value).expect("validated bounds"));
+                }
+                Some(c) => {
+                    return Err(self.err(format!(
+                        "expected hex digit or '}}' in \\u{{...}}, found '{}'",
+                        c as char
+                    )));
+                }
+                None => {
+                    // Restore for diagnostic-position purposes.
+                    self.pos = start_pos;
+                    return Err(self.err("unterminated \\u{...} escape".into()));
+                }
             }
-            Some(b'0') => {
-                self.pos += 1;
-                Ok(0)
-            }
-            Some(b'\\') => {
-                self.pos += 1;
-                Ok(b'\\')
-            }
-            Some(b'\'') => {
-                self.pos += 1;
-                Ok(b'\'')
-            }
-            Some(b'"') => {
-                self.pos += 1;
-                Ok(b'"')
-            }
-            Some(b']') => {
-                self.pos += 1;
-                Ok(b']')
-            }
-            Some(b'[') => {
-                self.pos += 1;
-                Ok(b'[')
-            }
-            Some(b'-') => {
-                self.pos += 1;
-                Ok(b'-')
-            }
-            Some(b'/') => {
-                self.pos += 1;
-                Ok(b'/')
-            }
-            Some(c) => Err(self.err(format!("unknown escape '\\{}'", c as char))),
-            None => Err(self.err("unterminated escape sequence".into())),
         }
     }
 
@@ -1021,18 +1180,18 @@ fn is_atom_start(c: u8) -> bool {
     ) || is_ident_start(c)
 }
 
-/// Map a backslash-letter shortcut to its byte set. Returns `None` for
-/// any byte that isn't one of the byte-set shortcuts (`d`, `D`, `s`,
-/// `S`, `h`, `H`). The multi-byte (`R`) and zero-width (`z`) shortcuts
-/// are handled separately by their respective parse arms.
+/// Map a backslash-letter shortcut to its character set. Returns `None`
+/// for any byte that isn't one of the character-set shortcuts (`d`, `D`,
+/// `s`, `S`, `h`, `H`). The multi-byte (`R`) and zero-width (`z`)
+/// shortcuts are handled separately by their respective parse arms.
 fn class_for_shortcut(c: u8) -> Option<CharSet> {
     match c {
-        b'd' => Some(CharSet::from_ranges(&[(b'0', b'9')])),
-        b'D' => Some(CharSet::from_ranges(&[(b'0', b'9')]).negate()),
-        b's' => Some(CharSet::from_bytes(b" \t\n\r")),
-        b'S' => Some(CharSet::from_bytes(b" \t\n\r").negate()),
-        b'h' => Some(CharSet::from_bytes(b" \t")),
-        b'H' => Some(CharSet::from_bytes(b" \t").negate()),
+        b'd' => Some(CharSet::single_range('0', '9').unwrap()),
+        b'D' => Some(CharSet::single_range('0', '9').unwrap().negate()),
+        b's' => Some(CharSet::from_chars(&[' ', '\t', '\n', '\r'])),
+        b'S' => Some(CharSet::from_chars(&[' ', '\t', '\n', '\r']).negate()),
+        b'h' => Some(CharSet::from_chars(&[' ', '\t'])),
+        b'H' => Some(CharSet::from_chars(&[' ', '\t']).negate()),
         _ => None,
     }
 }
@@ -1187,7 +1346,10 @@ fn build_recover_repeat(
                     inner: Box::new(Pattern::Sequence {
                         items: vec![
                             Pattern::NotPredicate {
-                                inner: Box::new(Pattern::CharClass { set: cs, span }),
+                                inner: Box::new(Pattern::CharClass {
+                                    set: cs.clone(),
+                                    span,
+                                }),
                                 span,
                             },
                             Pattern::AnyChar { span },

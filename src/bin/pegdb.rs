@@ -13,7 +13,7 @@ use std::io::{Read, Write};
 use std::process::ExitCode;
 
 use syntax_highlighter::parser::Parser;
-use syntax_highlighter::pegvm::{Capture, MemoId, RecoveryDiagnostic};
+use syntax_highlighter::pegvm::{Capture, MemoId, RecoveryDiagnostic, RecoveryOrigin};
 
 const TOP_HELP: &str = "\
 pegdb — grammar-developer debug surface for syntax-highlighter
@@ -314,31 +314,35 @@ fn run_recoveries_dump(args: &[String]) -> ExitCode {
         let span_start = captures[span_start_idx].start;
         let span_end = captures[span_end_idx - 1].end;
 
-        let trimmed = trim_trivia_tail(&reach.rule_stack, rule_is_trivia);
+        let trimmed = trim_trivia_tail(reach.rule_stack(), rule_is_trivia);
         let stack_names: Vec<&str> = trimmed
             .iter()
             .filter_map(|id| rule_names.get(id.0 as usize).map(String::as_str))
             .collect();
-        let label = label_names
-            .get(reach.label.0 as usize)
-            .map(String::as_str)
-            .unwrap_or("");
+        let label = reach
+            .label_id()
+            .and_then(|l| label_names.get(l.0 as usize).map(String::as_str))
+            .unwrap_or(match &reach.origin {
+                RecoveryOrigin::Utf8 => "utf8",
+                RecoveryOrigin::Grammar { .. } => "",
+            });
         let kind = kinds
             .get(captures[span_start_idx].kind.0 as usize)
             .map(String::as_str)
             .unwrap_or("recovery");
-        let raw = &view[span_start..span_end];
+        let lossy = String::from_utf8_lossy(&view_bytes[span_start..span_end]);
         let literal: Cow<'_, str> = match max_literal {
-            Some(n) => truncate_with_ellipsis(raw, n),
-            None => Cow::Borrowed(raw),
+            Some(n) => Cow::Owned(truncate_with_ellipsis(&lossy, n).into_owned()),
+            None => lossy,
         };
 
         let _ = writeln!(
             out,
-            "{{\"start\":{},\"end\":{},\"kind\":{},\"label\":{},\"pos\":{},\"rule_stack\":{},\"literal\":{}}}",
+            "{{\"start\":{},\"end\":{},\"kind\":{},\"origin\":{},\"label\":{},\"pos\":{},\"rule_stack\":{},\"literal\":{}}}",
             span_start,
             span_end,
             json_string(kind),
+            json_string(reach.origin.tag()),
             json_string(label),
             reach.pos,
             json_string_array(&stack_names),
@@ -370,19 +374,23 @@ fn run_recoveries_dump(args: &[String]) -> ExitCode {
     }
     for idx in &orphan_diagnostics {
         let diag = &diagnostics[*idx];
-        let trimmed = trim_trivia_tail(&diag.rule_stack, rule_is_trivia);
+        let trimmed = trim_trivia_tail(diag.rule_stack(), rule_is_trivia);
         let stack_names: Vec<&str> = trimmed
             .iter()
             .filter_map(|id| rule_names.get(id.0 as usize).map(String::as_str))
             .collect();
-        let label = label_names
-            .get(diag.label.0 as usize)
-            .map(String::as_str)
-            .unwrap_or("");
+        let label = diag
+            .label_id()
+            .and_then(|l| label_names.get(l.0 as usize).map(String::as_str))
+            .unwrap_or(match &diag.origin {
+                RecoveryOrigin::Utf8 => "utf8",
+                RecoveryOrigin::Grammar { .. } => "",
+            });
         let _ = writeln!(
             out,
-            "{{\"sanity\":\"orphan_diagnostic\",\"pos\":{},\"label\":{},\"rule_stack\":{}}}",
+            "{{\"sanity\":\"orphan_diagnostic\",\"pos\":{},\"origin\":{},\"label\":{},\"rule_stack\":{}}}",
             diag.pos,
+            json_string(diag.origin.tag()),
             json_string(label),
             json_string_array(&stack_names),
         );
@@ -451,15 +459,18 @@ fn run_recoveries_explain(args: &[String]) -> ExitCode {
         let Some(reach) = slot else {
             continue;
         };
-        let trimmed_stack = trim_trivia_tail(&reach.rule_stack, rule_is_trivia);
+        let trimmed_stack = trim_trivia_tail(reach.rule_stack(), rule_is_trivia);
         let stack: Vec<String> = trimmed_stack
             .iter()
             .filter_map(|id| rule_names.get(id.0 as usize).cloned())
             .collect();
-        let label = label_names
-            .get(reach.label.0 as usize)
-            .cloned()
-            .unwrap_or_default();
+        let label = reach
+            .label_id()
+            .and_then(|l| label_names.get(l.0 as usize).cloned())
+            .unwrap_or_else(|| match &reach.origin {
+                RecoveryOrigin::Utf8 => "utf8".to_string(),
+                RecoveryOrigin::Grammar { .. } => String::new(),
+            });
         *clusters.entry((stack, label)).or_insert(0) += 1;
     }
 
@@ -499,16 +510,19 @@ fn run_recoveries_explain(args: &[String]) -> ExitCode {
     if !orphan_diagnostics.is_empty() {
         for &idx in &orphan_diagnostics {
             let diag = &diagnostics[idx];
-            let trimmed = trim_trivia_tail(&diag.rule_stack, rule_is_trivia);
+            let trimmed = trim_trivia_tail(diag.rule_stack(), rule_is_trivia);
             let leaf = trimmed
                 .last()
                 .and_then(|id| rule_names.get(id.0 as usize))
                 .map(String::as_str)
                 .unwrap_or("<empty>");
-            let label = label_names
-                .get(diag.label.0 as usize)
-                .map(String::as_str)
-                .unwrap_or("");
+            let label = diag
+                .label_id()
+                .and_then(|l| label_names.get(l.0 as usize).map(String::as_str))
+                .unwrap_or(match &diag.origin {
+                    RecoveryOrigin::Utf8 => "utf8",
+                    RecoveryOrigin::Grammar { .. } => "",
+                });
             let _ = writeln!(
                 out,
                 "[sanity] orphan diagnostic (no surviving capture): pos={} rule={} label={}",
@@ -889,8 +903,10 @@ mod tests {
         RecoveryDiagnostic {
             capture_index,
             pos,
-            rule_stack: Vec::new(),
-            label: LabelId(label),
+            origin: RecoveryOrigin::Grammar {
+                rule_stack: Vec::new(),
+                label: LabelId(label),
+            },
         }
     }
 

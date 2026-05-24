@@ -545,9 +545,12 @@ literal     <- blob_lit / string_lit / @number{number_body} / null_lit / bool_li
 *quoted_ident      <- double_quoted_id / backtick_id / bracket_id
 
 *bare_raw          <- ident_start ident_cont*
-*ident_start       <- [a-zA-Z_]
-*ident_cont        <- [a-zA-Z\d_]
-*ident_char        <- [a-zA-Z\d_]
+# Per sqlite.org/draft/tokenreq.html ALPHABETIC + ALPHANUMERIC: the
+# ASCII letter/underscore range, the ASCII digits (continuation only),
+# `$` (continuation only), plus any code point above U+007F.
+*ident_start       <- [a-zA-Z_\u{80}-\u{10FFFF}]
+*ident_cont        <- [a-zA-Z\d_$\u{80}-\u{10FFFF}]
+*ident_char        <- [a-zA-Z\d_$]
 
 *double_quoted_id  <- '"' ('""' / !'"' !\R .)* '"'
 *backtick_id       <- '`' ('``' / !'`' !\R .)* '`'

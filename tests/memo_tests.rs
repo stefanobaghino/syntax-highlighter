@@ -38,10 +38,10 @@ fn second_alternative_reuses_memoized_x() {
     );
     rules.insert(
         "X".into(),
-        Pattern::char_class(CharSet::from_ranges(&[(b'a', b'z')])),
+        Pattern::char_class(CharSet::from_ranges(&[('a', 'z')]).unwrap()),
     );
     let prog = Grammar::new(rules).compile().unwrap();
-    let (result, stats) = VM::new(&prog.code, b"abb")
+    let (result, stats) = VM::new_from_program(&prog, b"abb")
         .with_memo_threshold(0)
         .run_with_memo_stats();
     assert_eq!(
@@ -67,10 +67,10 @@ fn memo_table_populates_on_success() {
     );
     rules.insert(
         "X".into(),
-        Pattern::char_class(CharSet::from_ranges(&[(b'a', b'z')])),
+        Pattern::char_class(CharSet::from_ranges(&[('a', 'z')]).unwrap()),
     );
     let prog = Grammar::new(rules).compile().unwrap();
-    let (_, stats) = VM::new(&prog.code, b"ab")
+    let (_, stats) = VM::new_from_program(&prog, b"ab")
         .with_memo_threshold(0)
         .run_with_memo_stats();
     // start at sp=0, X at sp=0, X at sp=1 — three distinct entries.
@@ -121,7 +121,7 @@ fn memo_hit_inside_outer_capture_preserves_nesting() {
         "Inner".into(),
         Pattern::capture(
             "inner",
-            Pattern::char_class(CharSet::from_ranges(&[(b'a', b'z')])),
+            Pattern::char_class(CharSet::from_ranges(&[('a', 'z')]).unwrap()),
         ),
     );
     let prog = Grammar::new(rules).compile().unwrap();
@@ -137,7 +137,7 @@ fn memo_hit_inside_outer_capture_preserves_nesting() {
         .position(|n| n == "inner")
         .unwrap() as u16;
 
-    let (result, stats) = VM::new(&prog.code, b"ay")
+    let (result, stats) = VM::new_from_program(&prog, b"ay")
         .with_memo_threshold(0)
         .run_with_memo_stats();
     assert!(result.complete);
@@ -184,7 +184,7 @@ fn cached_failure_short_circuits_not_predicate() {
     );
     rules.insert("A".into(), Pattern::literal("a"));
     let prog = Grammar::new(rules).compile().unwrap();
-    let (result, stats) = VM::new(&prog.code, b"c")
+    let (result, stats) = VM::new_from_program(&prog, b"c")
         .with_memo_threshold(0)
         .run_with_memo_stats();
     assert!(result.complete);
@@ -214,10 +214,10 @@ fn nested_memoized_rule_failures_both_cached() {
     rules.insert("inner".into(), Pattern::literal("a"));
     rules.insert(
         "fallback".into(),
-        Pattern::char_class(CharSet::from_ranges(&[(b'a', b'z')])),
+        Pattern::char_class(CharSet::from_ranges(&[('a', 'z')]).unwrap()),
     );
     let prog = Grammar::new(rules).compile().unwrap();
-    let (result, stats) = VM::new(&prog.code, b"x")
+    let (result, stats) = VM::new_from_program(&prog, b"x")
         .with_memo_threshold(0)
         .run_with_memo_stats();
     assert!(result.complete);
@@ -253,10 +253,10 @@ fn and_predicate_with_memoized_rule() {
     );
     rules.insert(
         "A".into(),
-        Pattern::char_class(CharSet::from_ranges(&[(b'a', b'z')])),
+        Pattern::char_class(CharSet::from_ranges(&[('a', 'z')]).unwrap()),
     );
     let prog = Grammar::new(rules).compile().unwrap();
-    let (result, stats) = VM::new(&prog.code, b"y")
+    let (result, stats) = VM::new_from_program(&prog, b"y")
         .with_memo_threshold(0)
         .run_with_memo_stats();
     assert!(result.complete);
@@ -279,7 +279,7 @@ fn lr_converged_seed_persists_across_parses() {
     let input = b"1+2+3";
 
     // Cold parse populates the memo with the LR rule's converged seed.
-    let (cold, cold_stats, memo) = VM::new(&prog.code, input)
+    let (cold, cold_stats, memo) = VM::new_from_program(&prog, input)
         .with_memo_threshold(0)
         .run_with_cache();
     assert!(cold.complete);
@@ -292,7 +292,7 @@ fn lr_converged_seed_persists_across_parses() {
     );
 
     // Warm parse with the same input: RuleEnter at sp=0 must hit the cache.
-    let (warm, warm_stats, _) = VM::new_with_cache(&prog.code, input, memo)
+    let (warm, warm_stats, _) = VM::new_with_cache(&prog, input, memo)
         .with_memo_threshold(0)
         .run_with_cache();
     assert_eq!(warm, cold);
@@ -304,7 +304,7 @@ fn lr_converged_seed_persists_across_parses() {
 
     // Sanity check: an empty cache reproduces the cold-run misses,
     // confirming the warm hit came from the seeded cache.
-    let (_, fresh_stats, _) = VM::new_with_cache(&prog.code, input, MemoCache::new())
+    let (_, fresh_stats, _) = VM::new_with_cache(&prog, input, MemoCache::new())
         .with_memo_threshold(0)
         .run_with_cache();
     assert_eq!(fresh_stats.hits, 0);
@@ -319,10 +319,10 @@ fn memoization_does_not_change_results_on_linear_parse() {
     rules.insert("root".into(), Pattern::repeat_one(Pattern::nt("digit")));
     rules.insert(
         "digit".into(),
-        Pattern::char_class(CharSet::from_ranges(&[(b'0', b'9')])),
+        Pattern::char_class(CharSet::from_ranges(&[('0', '9')]).unwrap()),
     );
     let prog = Grammar::new(rules).compile().unwrap();
-    let result = VM::new(&prog.code, b"12345").run();
+    let result = VM::new_from_program(&prog, b"12345").run();
     assert_eq!(
         result,
         MatchResult {

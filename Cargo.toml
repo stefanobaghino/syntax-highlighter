@@ -14,6 +14,14 @@ categories = ["command-line-utilities", "parser-implementations", "text-processi
 publish = false
 exclude = [".github"]
 
+[dependencies]
+
+[build-dependencies]
+# Build-script-only dep: feeds `build.rs` the UAX #31 predicates used to
+# bake property interval tables into `$OUT_DIR/unicode_properties.rs`.
+# The runtime closure does not link this crate.
+unicode-ident = "1"
+
 [lib]
 path = "src/lib.rs"
 

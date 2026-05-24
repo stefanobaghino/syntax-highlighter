@@ -44,7 +44,7 @@ fn count_recoveries(grammar_src: &str, input: &[u8]) -> usize {
     let Some(recovery_idx) = prog.capture_kinds.iter().position(|k| k == "recovery") else {
         return 0;
     };
-    let r = VM::new(&prog.code, input).run();
+    let r = VM::new_from_program(&prog, input).run();
     r.captures
         .iter()
         .filter(|c| c.kind.0 as usize == recovery_idx)

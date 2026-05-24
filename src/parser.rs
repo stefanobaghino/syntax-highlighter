@@ -213,10 +213,18 @@ impl Parser {
 
     fn reparse(&mut self) {
         let seeded = std::mem::take(&mut self.cache);
-        let (result, stats, cache_after) =
-            VM::new_with_cache(&self.program.code, &self.input, seeded)
-                .with_track_recovery_diagnostics(self.track_recovery_diagnostics)
-                .run_with_cache();
+        let recovery_kind = self
+            .program
+            .capture_kinds
+            .iter()
+            .position(|k| k == "recovery")
+            .map(|i| {
+                crate::pegvm::CaptureKind(u16::try_from(i).expect("capture_kinds index fits u16"))
+            });
+        let (result, stats, cache_after) = VM::new_with_cache(&self.program, &self.input, seeded)
+            .with_recovery_capture_kind(recovery_kind)
+            .with_track_recovery_diagnostics(self.track_recovery_diagnostics)
+            .run_with_cache();
         self.cache = cache_after;
         self.matched = result.matched;
         self.complete = result.complete;
