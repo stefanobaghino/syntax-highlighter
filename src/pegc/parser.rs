@@ -16,6 +16,20 @@ fn append_char_utf8(c: char, out: &mut Vec<u8>) {
     out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
 }
 
+/// Fold a single code point into the [`CharSet`] used by the `i"…"`
+/// desugar. ASCII letters expand to the two-element set containing both
+/// cases; every other code point becomes a singleton. Non-ASCII letters
+/// are matched literally — the grammars we ship only need ASCII case
+/// folding, and Unicode case mapping would pull in a full mapping table
+/// for no current caller.
+fn case_fold_codepoint(c: char) -> CharSet {
+    if c.is_ascii_alphabetic() {
+        CharSet::from_chars(&[c.to_ascii_lowercase(), c.to_ascii_uppercase()])
+    } else {
+        CharSet::singleton(c)
+    }
+}
+
 /// Reserved rule name for the grammar's start rule. Every grammar must
 /// define exactly one rule named [`ROOT_RULE`]; the compiler wraps its
 /// body to assert end-of-input and to splice optional leading / trailing
@@ -669,6 +683,14 @@ impl<'a> Parser<'a> {
                 Ok(inner)
             }
             Some(b'"') | Some(b'\'') => self.parse_string(),
+            // `i"…"` / `i'…'` — case-insensitive literal sugar. The `i`
+            // is only consumed when the next byte is a quote, so plain
+            // identifiers starting with `i` (e.g. `ident_char`) still
+            // parse as `NonTerminal` through the `is_ident_start` arm.
+            Some(b'i') if matches!(self.peek_at(1), Some(b'"') | Some(b'\'')) => {
+                self.pos += 1;
+                self.parse_string_case_insensitive()
+            }
             Some(b'[') => self.parse_charclass(),
             Some(b'.') => {
                 // Three-byte lookahead disambiguates the dot family:
@@ -823,6 +845,81 @@ impl<'a> Parser<'a> {
                 Some(c) => {
                     bytes.push(c);
                     self.pos += 1;
+                }
+            }
+        }
+    }
+
+    /// Parse the body of an `i"…"` / `i'…'` literal — the case-
+    /// insensitive sugar. The caller has consumed the `i` prefix; this
+    /// reads the quoted body with the same escape handling as
+    /// [`parse_string`] and lowers it to a `Sequence` of `CharClass`
+    /// nodes, one per code point. ASCII letters fold to the two-element
+    /// set `{lower, upper}`; every other code point becomes a singleton
+    /// set, matching only itself. The result is byte-equivalent to the
+    /// hand-written `[xX][yY]…` form that previously had to be spelled
+    /// out per keyword.
+    ///
+    /// Synthesized child nodes share the outer literal's span so any
+    /// diagnostic firing inside the desugar still points at the `i"…"`
+    /// site — same convention as `parse_backslash_atom`.
+    fn parse_string_case_insensitive(&mut self) -> Result<Pattern, ParseError> {
+        let span = self.span();
+        let quote = self.peek().unwrap();
+        self.pos += 1;
+        let mut chars: Vec<char> = Vec::new();
+        let mut buf = [0u8; 4];
+        loop {
+            match self.peek() {
+                None => return Err(self.err("unterminated string literal".into())),
+                Some(b'\\') => {
+                    self.pos += 1;
+                    let c = self.parse_escape()?;
+                    chars.push(c);
+                }
+                Some(c) if c == quote => {
+                    self.pos += 1;
+                    return Ok(match chars.len() {
+                        // Empty literal: matches the empty string,
+                        // same as `parse_string`'s treatment of `""`.
+                        0 => Pattern::Literal {
+                            bytes: Vec::new(),
+                            span,
+                        },
+                        // Single code point: emit the bare `CharClass`
+                        // so `i"a"*` composes the same as `[aA]*`
+                        // (`Pattern::seq` unwraps single-item sequences
+                        // for the same reason).
+                        1 => Pattern::CharClass {
+                            set: case_fold_codepoint(chars[0]),
+                            span,
+                        },
+                        _ => {
+                            let items = chars
+                                .into_iter()
+                                .map(|c| Pattern::CharClass {
+                                    set: case_fold_codepoint(c),
+                                    span,
+                                })
+                                .collect();
+                            Pattern::Sequence { items, span }
+                        }
+                    });
+                }
+                Some(_) => {
+                    // Decode one UTF-8 code point from the input. The
+                    // grammar source is validated UTF-8 elsewhere; this
+                    // walks `char_indices` of the remainder to find the
+                    // next scalar value.
+                    let rest = &self.src[self.pos..];
+                    let s = std::str::from_utf8(rest)
+                        .map_err(|_| self.err("invalid UTF-8 inside i\"…\" literal".into()))?;
+                    let ch = s
+                        .chars()
+                        .next()
+                        .expect("non-empty after peek matched a byte");
+                    chars.push(ch);
+                    self.pos += ch.encode_utf8(&mut buf).len();
                 }
             }
         }
