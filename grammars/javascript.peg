@@ -33,6 +33,59 @@ root           <- (stmt)*^
 
 trivia         <- (comment / \s)*
 
+# --- Keyword tokens ---------------------------------------------------
+#
+# Each keyword is an atomic rule with the literal and its `!ident_body`
+# word boundary inside the capture, so a keyword can't fire on a longer
+# identifier that merely starts with it. This matters most for the
+# contextual keywords (`async`, `as`, `of`, `from`, `get`, `set`,
+# `static`, `yield`) deliberately kept out of `reserved` so they remain
+# usable as identifiers: `{ asyncFoo() {} }` must stay one method name.
+# Atomicity keeps the boundary adjacent to the literal (no auto-trivia);
+# inside-capture placement means a rejected keyword leaves no stray
+# capture for recovery to surface.
+*kw_import     <- @keyword{'import' !ident_body}
+*kw_from       <- @keyword{'from' !ident_body}
+*kw_as         <- @keyword{'as' !ident_body}
+*kw_export     <- @keyword{'export' !ident_body}
+*kw_default    <- @keyword{'default' !ident_body}
+*kw_async      <- @keyword{'async' !ident_body}
+*kw_function   <- @keyword{'function' !ident_body}
+*kw_class      <- @keyword{'class' !ident_body}
+*kw_extends    <- @keyword{'extends' !ident_body}
+*kw_static     <- @keyword{'static' !ident_body}
+*kw_get        <- @keyword{'get' !ident_body}
+*kw_set        <- @keyword{'set' !ident_body}
+*kw_var        <- @keyword{'var' !ident_body}
+*kw_let        <- @keyword{'let' !ident_body}
+*kw_const      <- @keyword{'const' !ident_body}
+*kw_if         <- @keyword{'if' !ident_body}
+*kw_else       <- @keyword{'else' !ident_body}
+*kw_for        <- @keyword{'for' !ident_body}
+*kw_await      <- @keyword{'await' !ident_body}
+*kw_in         <- @keyword{'in' !ident_body}
+*kw_of         <- @keyword{'of' !ident_body}
+*kw_while      <- @keyword{'while' !ident_body}
+*kw_do         <- @keyword{'do' !ident_body}
+*kw_switch     <- @keyword{'switch' !ident_body}
+*kw_case       <- @keyword{'case' !ident_body}
+*kw_try        <- @keyword{'try' !ident_body}
+*kw_catch      <- @keyword{'catch' !ident_body}
+*kw_finally    <- @keyword{'finally' !ident_body}
+*kw_throw      <- @keyword{'throw' !ident_body}
+*kw_return     <- @keyword{'return' !ident_body}
+*kw_break      <- @keyword{'break' !ident_body}
+*kw_continue   <- @keyword{'continue' !ident_body}
+*kw_debugger   <- @keyword{'debugger' !ident_body}
+*kw_yield      <- @keyword{'yield' !ident_body}
+*kw_instanceof <- @keyword{'instanceof' !ident_body}
+*kw_typeof     <- @keyword{'typeof' !ident_body}
+*kw_void       <- @keyword{'void' !ident_body}
+*kw_delete     <- @keyword{'delete' !ident_body}
+*kw_new        <- @keyword{'new' !ident_body}
+*kw_this       <- @keyword{'this' !ident_body}
+*kw_super      <- @keyword{'super' !ident_body}
+
 # --- Statements -------------------------------------------------------
 #
 # Order matters (PEG first-match). Declaration-shaped items precede
@@ -69,49 +122,49 @@ empty_stmt     <- @punctuation{';'}
 
 # --- Imports / exports ------------------------------------------------
 
-import_decl    <- @keyword{'import'} import_body opt_semi
-import_body    <- import_clause @keyword{'from'} string_lit
+import_decl    <- kw_import import_body opt_semi
+import_body    <- import_clause kw_from string_lit
                 / string_lit
 import_clause  <- import_default @punctuation{','} import_ns_or_named
                 / import_default
                 / import_ns_or_named
 import_default <- @variable{ident}
 import_ns_or_named <- import_namespace / import_named
-import_namespace <- @operator{'*'} @keyword{'as'} @variable{ident}
+import_namespace <- @operator{'*'} kw_as @variable{ident}
 import_named   <- @punctuation{'{'} import_specifier_list? @punctuation{'}'}
 import_specifier_list <- import_specifier (@punctuation{','} import_specifier)* (@punctuation{','})?
-import_specifier <- @variable{ident_name} @keyword{'as'} @variable{ident}
+import_specifier <- @variable{ident_name} kw_as @variable{ident}
                   / @variable{ident}
 
-export_decl    <- @keyword{'export'} @keyword{'default'} export_default_body
-                / @keyword{'export'} @operator{'*'} (@keyword{'as'} @variable{ident_name})? @keyword{'from'} string_lit opt_semi
-                / @keyword{'export'} export_named
-                / @keyword{'export'} fn_decl
-                / @keyword{'export'} class_decl
-                / @keyword{'export'} var_decl opt_semi
+export_decl    <- kw_export kw_default export_default_body
+                / kw_export @operator{'*'} (kw_as @variable{ident_name})? kw_from string_lit opt_semi
+                / kw_export export_named
+                / kw_export fn_decl
+                / kw_export class_decl
+                / kw_export var_decl opt_semi
 export_default_body <- fn_decl
                      / class_decl
                      / expr opt_semi
 # Trailing `opt_semi` on `~export_named` is absorbed by stmt-level recovery.
-~export_named  <- @punctuation{'{'} export_specifier_list? @punctuation{'}'} (@keyword{'from'} string_lit)? opt_semi
+~export_named  <- @punctuation{'{'} export_specifier_list? @punctuation{'}'} (kw_from string_lit)? opt_semi
 export_specifier_list <- export_specifier (@punctuation{','} export_specifier)* (@punctuation{','})?
-export_specifier <- @variable{ident_name} @keyword{'as'} @variable{ident_name}
+export_specifier <- @variable{ident_name} kw_as @variable{ident_name}
                   / @variable{ident}
 
 # --- Function / class declarations ------------------------------------
 
-fn_decl        <- @keyword{'async'} fn_decl_core
+fn_decl        <- kw_async fn_decl_core
                 / fn_decl_core
-fn_decl_core   <- @keyword{'function'} @operator{'*'}? @function{ident} fn_params block
+fn_decl_core   <- kw_function @operator{'*'}? @function{ident} fn_params block
 
-class_decl     <- @keyword{'class'} @type{ident} class_heritage? class_body
-class_heritage <- @keyword{'extends'} expr_lhs
+class_decl     <- kw_class @type{ident} class_heritage? class_body
+class_heritage <- kw_extends expr_lhs
 class_body     <- @punctuation{'{'} class_member* @punctuation{'}'}
 class_member   <- @punctuation{';'}
                 / class_method_or_field
-class_method_or_field <- @keyword{'static'}? (class_method / class_field)
-class_method   <- @keyword{'async'}? @operator{'*'}? method_head fn_params block
-                / (@keyword{'get'} / @keyword{'set'}) method_head fn_params block
+class_method_or_field <- kw_static? (class_method / class_field)
+class_method   <- kw_async? @operator{'*'}? method_head fn_params block
+                / (kw_get / kw_set) method_head fn_params block
 method_head    <- computed_prop
                 / @function{ident_name}
                 / string_lit
@@ -120,7 +173,7 @@ class_field    <- (computed_prop / @property{ident_name}) (@operator{'='} expr_n
 
 # --- Variable declarations -------------------------------------------
 
-var_decl       <- (@keyword{'var'} / @keyword{'let'} / @keyword{'const'}) var_declarator_list
+var_decl       <- (kw_var / kw_let / kw_const) var_declarator_list
 var_declarator_list <- var_declarator (@punctuation{','} var_declarator)*
 # Trailing `(= expr)?` absorbed by enclosing stmt recovery.
 ~var_declarator <- pattern (@operator{'='} expr_no_comma)?
@@ -128,35 +181,35 @@ var_declarator_list <- var_declarator (@punctuation{','} var_declarator)*
 # --- Control flow -----------------------------------------------------
 
 # Trailing `(else stmt)?` leniency absorbed by stmt-level recovery.
-~if_stmt       <- @keyword{'if'} @punctuation{'('} expr @punctuation{')'} stmt
-                  (@keyword{'else'} stmt)?
-for_stmt       <- @keyword{'for'} @keyword{'await'}? @punctuation{'('} for_head @punctuation{')'} stmt
+~if_stmt       <- kw_if @punctuation{'('} expr @punctuation{')'} stmt
+                  (kw_else stmt)?
+for_stmt       <- kw_for kw_await? @punctuation{'('} for_head @punctuation{')'} stmt
 for_head       <- for_c_style
                 / for_in_of
 for_c_style    <- for_init? @punctuation{';'} expr? @punctuation{';'} expr?
-for_in_of      <- for_binding (@keyword{'in'} / @keyword{'of'}) expr
+for_in_of      <- for_binding (kw_in / kw_of) expr
 for_init       <- var_decl
                 / expr
-for_binding    <- (@keyword{'var'} / @keyword{'let'} / @keyword{'const'}) pattern
+for_binding    <- (kw_var / kw_let / kw_const) pattern
                 / pattern
 
-while_stmt     <- @keyword{'while'} @punctuation{'('} expr @punctuation{')'} stmt
-do_while_stmt  <- @keyword{'do'} stmt @keyword{'while'} @punctuation{'('} expr @punctuation{')'} opt_semi
-switch_stmt    <- @keyword{'switch'} @punctuation{'('} expr @punctuation{')'}
+while_stmt     <- kw_while @punctuation{'('} expr @punctuation{')'} stmt
+do_while_stmt  <- kw_do stmt kw_while @punctuation{'('} expr @punctuation{')'} opt_semi
+switch_stmt    <- kw_switch @punctuation{'('} expr @punctuation{')'}
                   @punctuation{'{'} switch_case* @punctuation{'}'}
-switch_case    <- @keyword{'case'} expr @punctuation{':'} (!switch_case_term stmt)*
-                / @keyword{'default'} @punctuation{':'} (!switch_case_term stmt)*
-switch_case_term <- @keyword{'case'} / @keyword{'default'} / @punctuation{'}'}
+switch_case    <- kw_case expr @punctuation{':'} (!switch_case_term stmt)*
+                / kw_default @punctuation{':'} (!switch_case_term stmt)*
+switch_case_term <- kw_case / kw_default / @punctuation{'}'}
 # Trailing `(catch)? (finally)?` absorbed by stmt-level recovery.
-~try_stmt      <- @keyword{'try'} block catch_clause? finally_clause?
-catch_clause   <- @keyword{'catch'} (@punctuation{'('} pattern @punctuation{')'})? block
-finally_clause <- @keyword{'finally'} block
-throw_stmt     <- @keyword{'throw'} expr opt_semi
+~try_stmt      <- kw_try block catch_clause? finally_clause?
+catch_clause   <- kw_catch (@punctuation{'('} pattern @punctuation{')'})? block
+finally_clause <- kw_finally block
+throw_stmt     <- kw_throw expr opt_semi
 # Trailing `expr?` leniency on `~return_stmt` absorbed by stmt recovery.
-~return_stmt   <- @keyword{'return'} expr? opt_semi
-~break_stmt    <- @keyword{'break'} (@variable{ident})? opt_semi
-~continue_stmt <- @keyword{'continue'} (@variable{ident})? opt_semi
-debugger_stmt  <- @keyword{'debugger'} opt_semi
+~return_stmt   <- kw_return expr? opt_semi
+~break_stmt    <- kw_break (@variable{ident})? opt_semi
+~continue_stmt <- kw_continue (@variable{ident})? opt_semi
+debugger_stmt  <- kw_debugger opt_semi
 labeled_stmt   <- @variable{ident} @punctuation{':'} stmt
 block          <- @punctuation{'{'} (stmt* @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
 
@@ -201,7 +254,7 @@ assign_op      <- @operator{'**='}
 # Arrow functions tried first. `async x => ...`, `x => ...`,
 # `(a, b) => ...`, `() => ...`.
 expr_arrow     <- arrow_head @operator{'=>'} arrow_body
-arrow_head     <- @keyword{'async'} arrow_params
+arrow_head     <- kw_async arrow_params
                 / arrow_params
 arrow_params   <- @variable{ident}
                 / arrow_paren_params
@@ -210,7 +263,7 @@ arrow_body     <- block
                 / expr_no_comma
 
 # Trailing `(*)? (expr_assign)?` absorbed by stmt-level recovery.
-~expr_yield    <- @keyword{'yield'} @operator{'*'}? expr_assign?
+~expr_yield    <- kw_yield @operator{'*'}? expr_assign?
 
 # Ternary. Below the ternary, precedence is encoded by direct left
 # recursion — `level_n <- level_n OP level_{n+1} / level_{n+1}` per
@@ -228,7 +281,7 @@ expr_bor       <- expr_bor @operator{'|'} !'|' !'=' expr_bxor / expr_bxor
 expr_bxor      <- expr_bxor @operator{'^'} !'=' expr_band / expr_band
 expr_band      <- expr_band @operator{'&'} !'&' !'=' expr_eq / expr_eq
 expr_eq        <- expr_eq (@operator{'==='} / @operator{'!=='} / @operator{'=='} / @operator{'!='}) expr_rel / expr_rel
-expr_rel       <- expr_rel (@operator{'<='} / @operator{'>='} / @operator{'<'} !'<' / @operator{'>'} !'>' / @keyword{'instanceof'} / @keyword{'in'}) expr_shift / expr_shift
+expr_rel       <- expr_rel (@operator{'<='} / @operator{'>='} / @operator{'<'} !'<' / @operator{'>'} !'>' / kw_instanceof / kw_in) expr_shift / expr_shift
 expr_shift     <- expr_shift (@operator{'>>>'} !'=' / @operator{'<<'} !'=' / @operator{'>>'} !'=') expr_add / expr_add
 expr_add       <- expr_add (@operator{'+'} !'=' / @operator{'-'} !'=') expr_mul / expr_mul
 expr_mul       <- expr_mul (@operator{'*'} !'=' !'*' / @operator{'/'} !'=' / @operator{'%'} !'=') expr_pow / expr_pow
@@ -237,10 +290,10 @@ expr_mul       <- expr_mul (@operator{'*'} !'=' !'*' / @operator{'/'} !'=' / @op
 expr_pow       <- expr_unary @operator{'**'} !'=' expr_pow / expr_unary
 
 expr_unary     <- unary_op* expr_postfix
-unary_op       <- @keyword{'typeof'}
-                / @keyword{'void'}
-                / @keyword{'delete'}
-                / @keyword{'await'}
+unary_op       <- kw_typeof
+                / kw_void
+                / kw_delete
+                / kw_await
                 / @operator{'++'} / @operator{'--'}
                 / @operator{'+'} / @operator{'-'}
                 / @operator{'!'} / @operator{'~'}
@@ -265,7 +318,7 @@ arg            <- @operator{'...'} expr_no_comma
                 / expr_no_comma
 
 expr_lhs       <- expr_new / expr_primary
-expr_new       <- @keyword{'new'} expr_new_target
+expr_new       <- kw_new expr_new_target
 expr_new_target <- @type{upper_ident} new_tail?
                  / @variable{lower_ident} new_tail?
                  / expr_primary new_tail?
@@ -285,10 +338,10 @@ expr_primary   <- literal
 
 call_ident     <- @function{ident} &(@punctuation{'('})
 
-expr_this      <- @keyword{'this'}
-expr_super     <- @keyword{'super'}
-expr_fn        <- @keyword{'async'}? @keyword{'function'} @operator{'*'}? @function{ident}? fn_params block
-expr_class     <- @keyword{'class'} @type{ident}? class_heritage? class_body
+expr_this      <- kw_this
+expr_super     <- kw_super
+expr_fn        <- kw_async? kw_function @operator{'*'}? @function{ident}? fn_params block
+expr_class     <- kw_class @type{ident}? class_heritage? class_body
 expr_array     <- @punctuation{'['} array_elem_list? @punctuation{']'}
 array_elem_list <- array_elem (@punctuation{','} array_elem)* (@punctuation{','})?
 array_elem     <- @operator{'...'} expr_no_comma
@@ -300,8 +353,8 @@ object_prop    <- @operator{'...'} expr_no_comma
                 / object_method
                 / (computed_prop / string_lit / number_lit / @property{ident_name}) @punctuation{':'} expr_no_comma
                 / @property{ident}
-object_method  <- @keyword{'async'}? @operator{'*'}? method_head fn_params block
-                / (@keyword{'get'} / @keyword{'set'}) method_head fn_params block
+object_method  <- kw_async? @operator{'*'}? method_head fn_params block
+                / (kw_get / kw_set) method_head fn_params block
 expr_paren     <- @punctuation{'('} expr @punctuation{')'}
 
 # --- Literals ---------------------------------------------------------

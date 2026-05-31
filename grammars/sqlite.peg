@@ -550,7 +550,11 @@ literal     <- blob_lit / string_lit / @number{number_body} / null_lit / bool_li
 # `$` (continuation only), plus any code point above U+007F.
 *ident_start       <- [a-zA-Z_\u{80}-\u{10FFFF}]
 *ident_cont        <- [a-zA-Z\d_$\u{80}-\u{10FFFF}]
-*ident_char        <- [a-zA-Z\d_$]
+# Word-boundary negative-lookahead class. Must match `ident_cont` (the
+# full continuation class, Unicode included) so a keyword can't fire on
+# the prefix of an identifier that continues with a non-ASCII code
+# point — `SELECT€` is one identifier, not `SELECT` + `€`.
+*ident_char        <- [a-zA-Z\d_$\u{80}-\u{10FFFF}]
 
 *double_quoted_id  <- '"' ('""' / !'"' !\R .)* '"'
 *backtick_id       <- '`' ('``' / !'`' !\R .)* '`'

@@ -60,6 +60,60 @@ fn spans_for<'a>(
         .collect()
 }
 
+fn captures_with_text<'a>(
+    input: &'a str,
+    caps: &[Capture],
+    kinds: &'a [String],
+) -> Vec<(&'a str, &'a str)> {
+    caps.iter()
+        .map(|c| (kinds[c.kind.0 as usize].as_str(), &input[c.start..c.end]))
+        .collect()
+}
+
+// --- Word-boundary regression tests (issue #6) -----------------------
+
+#[test]
+fn keyword_prefix_unicode_identifier_not_split() {
+    // `order€` is one identifier — `€` (U+20AC) is a valid Unicode
+    // continuation char. The `order` keyword must not fire on its
+    // prefix. Regression for the ASCII-only `!ident_char` boundary,
+    // which let a keyword stop at the first non-ASCII byte.
+    let input = "SELECT order\u{20ac} FROM t;\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let k = kinds_for(&caps, &kinds);
+    assert!(
+        !k.contains(&"recovery"),
+        "keyword-prefixed Unicode identifier should parse cleanly: {:?}",
+        k
+    );
+    let pairs = captures_with_text(input, &caps, &kinds);
+    assert!(
+        pairs.contains(&("variable", "order\u{20ac}")),
+        "`order€` should be one identifier: {:?}",
+        pairs
+    );
+    assert!(
+        !pairs
+            .iter()
+            .any(|(kind, t)| *kind == "keyword" && t.eq_ignore_ascii_case("order")),
+        "`order` must not be captured as a keyword prefix of `order€`: {:?}",
+        pairs
+    );
+}
+
+#[test]
+fn keyword_exact_still_highlights() {
+    // No-regression: ASCII keyword boundaries still hold.
+    let input = "SELECT a FROM t;\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let pairs = captures_with_text(input, &caps, &kinds);
+    assert!(
+        pairs.contains(&("keyword", "SELECT")),
+        "`SELECT` should still be a keyword: {:?}",
+        pairs
+    );
+}
+
 fn assert_complete_full(input: &str) -> (Vec<Capture>, Vec<String>) {
     let (matched, caps, kinds, complete) = run(input);
     assert!(

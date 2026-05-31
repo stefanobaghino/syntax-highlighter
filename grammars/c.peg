@@ -60,18 +60,47 @@ decl_spec     <- storage_spec
                / type_spec
                / fn_spec
 
-storage_spec  <- @keyword{'typedef'}
-               / @keyword{'extern'}
-               / @keyword{'static'}
-               / @keyword{'auto'}
-               / @keyword{'register'}
-               / @keyword{'_Thread_local'}
-type_qualifier <- @keyword{'const'}
-                / @keyword{'volatile'}
-                / @keyword{'restrict'}
-                / @keyword{'_Atomic'}
-fn_spec       <- @keyword{'inline'}
-               / @keyword{'_Noreturn'}
+# Keyword rules are atomic and place the `!ident_body` word boundary
+# *inside* the capture. Atomicity stops auto-trivia from splicing
+# between the literal and the boundary (otherwise `static MyType` would
+# match `static`, consume the space, then fail the boundary on
+# `MyType`). Inside-capture placement means the `@keyword` capture only
+# commits when the boundary holds, so a rejected keyword (`typedefx`)
+# leaves no stray capture for top-level recovery to surface.
+*storage_spec  <- @keyword{'typedef' !ident_body}
+                / @keyword{'extern' !ident_body}
+                / @keyword{'static' !ident_body}
+                / @keyword{'auto' !ident_body}
+                / @keyword{'register' !ident_body}
+                / @keyword{'_Thread_local' !ident_body}
+*type_qualifier <- @keyword{'const' !ident_body}
+                 / @keyword{'volatile' !ident_body}
+                 / @keyword{'restrict' !ident_body}
+                 / @keyword{'_Atomic' !ident_body}
+*fn_spec       <- @keyword{'inline' !ident_body}
+                / @keyword{'_Noreturn' !ident_body}
+
+# Embedded keyword tokens. Each is an atomic rule with the keyword and
+# its `!ident_body` boundary inside the capture, so a keyword can't fire
+# on a longer identifier that merely starts with it (`structx`,
+# `returny`) and a rejected keyword leaves no stray capture behind.
+*kw_struct    <- @keyword{'struct' !ident_body}
+*kw_union     <- @keyword{'union' !ident_body}
+*kw_enum      <- @keyword{'enum' !ident_body}
+*kw_case      <- @keyword{'case' !ident_body}
+*kw_default   <- @keyword{'default' !ident_body}
+*kw_if        <- @keyword{'if' !ident_body}
+*kw_else      <- @keyword{'else' !ident_body}
+*kw_for       <- @keyword{'for' !ident_body}
+*kw_while     <- @keyword{'while' !ident_body}
+*kw_do        <- @keyword{'do' !ident_body}
+*kw_switch    <- @keyword{'switch' !ident_body}
+*kw_return    <- @keyword{'return' !ident_body}
+*kw_break     <- @keyword{'break' !ident_body}
+*kw_continue  <- @keyword{'continue' !ident_body}
+*kw_goto      <- @keyword{'goto' !ident_body}
+*kw_sizeof    <- @keyword{'sizeof' !ident_body}
+*kw_alignof   <- @keyword{'_Alignof' !ident_body}
 
 type_spec     <- struct_or_union_spec
                / enum_spec
@@ -92,7 +121,7 @@ predef_type   <- @type{predef_type_name}
                / [a-z_] (!typedef_t_end ident_body)* typedef_t_end
 *typedef_t_end <- '_t' !ident_body
 
-struct_or_union_spec <- (@keyword{'struct'} / @keyword{'union'})
+struct_or_union_spec <- (kw_struct / kw_union)
                        (@type{ident})? (@punctuation{'{'} struct_decl* @punctuation{'}'})?
 struct_decl   <- decl_spec_list struct_declarator_list? @punctuation{';'}
                / pp_line
@@ -105,7 +134,7 @@ struct_field_direct <- @property{ident} struct_field_tail*
 struct_field_tail <- @punctuation{'['} (expr / '')? @punctuation{']'}
                    / @punctuation{'('} param_list? @punctuation{')'}
 
-enum_spec     <- @keyword{'enum'} (@type{ident})?
+enum_spec     <- kw_enum (@type{ident})?
                  (@punctuation{'{'} enum_list? @punctuation{'}'})?
 enum_list     <- enum_item (@punctuation{','} enum_item)* (@punctuation{','})?
 enum_item     <- @constant{ident} (@operator{'='} expr_cond)?
@@ -164,21 +193,21 @@ stmt          <- labeled_stmt
                / expr_stmt
 
 labeled_stmt  <- @variable{ident} @punctuation{':'} stmt
-               / @keyword{'case'} expr_cond @punctuation{':'} stmt
-               / @keyword{'default'} @punctuation{':'} stmt
+               / kw_case expr_cond @punctuation{':'} stmt
+               / kw_default @punctuation{':'} stmt
 # Trailing `(else stmt)?` leniency absorbed by top-level `*^` and `^block_close`.
-~if_stmt      <- @keyword{'if'} @punctuation{'('} expr @punctuation{')'} stmt
-                 (@keyword{'else'} stmt)?
-for_stmt      <- @keyword{'for'} @punctuation{'('} for_init expr? @punctuation{';'} expr? @punctuation{')'} stmt
+~if_stmt      <- kw_if @punctuation{'('} expr @punctuation{')'} stmt
+                 (kw_else stmt)?
+for_stmt      <- kw_for @punctuation{'('} for_init expr? @punctuation{';'} expr? @punctuation{')'} stmt
 for_init      <- decl
                / expr? @punctuation{';'}
-while_stmt    <- @keyword{'while'} @punctuation{'('} expr @punctuation{')'} stmt
-do_while_stmt <- @keyword{'do'} stmt @keyword{'while'} @punctuation{'('} expr @punctuation{')'} @punctuation{';'}
-switch_stmt   <- @keyword{'switch'} @punctuation{'('} expr @punctuation{')'} stmt
-return_stmt   <- @keyword{'return'} expr? @punctuation{';'}
-break_stmt    <- @keyword{'break'} @punctuation{';'}
-continue_stmt <- @keyword{'continue'} @punctuation{';'}
-goto_stmt     <- @keyword{'goto'} @variable{ident} @punctuation{';'}
+while_stmt    <- kw_while @punctuation{'('} expr @punctuation{')'} stmt
+do_while_stmt <- kw_do stmt kw_while @punctuation{'('} expr @punctuation{')'} @punctuation{';'}
+switch_stmt   <- kw_switch @punctuation{'('} expr @punctuation{')'} stmt
+return_stmt   <- kw_return expr? @punctuation{';'}
+break_stmt    <- kw_break @punctuation{';'}
+continue_stmt <- kw_continue @punctuation{';'}
+goto_stmt     <- kw_goto @variable{ident} @punctuation{';'}
 empty_stmt    <- @punctuation{';'}
 expr_stmt     <- expr @punctuation{';'}
 
@@ -228,8 +257,8 @@ expr_unary    <- sizeof_type
 unary_prefix  <- @operator{'++'} / @operator{'--'}
                / @operator{'+'} / @operator{'-'} / @operator{'!'} / @operator{'~'}
                / @operator{'*'} / @operator{'&'}
-               / @keyword{'sizeof'} &(@punctuation{'('} / [A-Za-z_])
-               / @keyword{'_Alignof'}
+               / kw_sizeof &(@punctuation{'('} / [A-Za-z_])
+               / kw_alignof
 
 expr_postfix  <- expr_primary postfix_op*
 postfix_op    <- @operator{'++'} / @operator{'--'}
@@ -254,7 +283,7 @@ expr_primary  <- string_lit
                / @variable{ident}
 
 # `sizeof(T)` must eat the whole type-name expression as a sizeof argument.
-sizeof_type   <- @keyword{'sizeof'} @punctuation{'('} type_name @punctuation{')'}
+sizeof_type   <- kw_sizeof @punctuation{'('} type_name @punctuation{')'}
 type_name     <- decl_spec_list abstract_declarator?
 
 # `(T)expr` vs `(expr)` — try cast first (uses decl_spec which

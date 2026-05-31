@@ -28,6 +28,51 @@ root          <- (item)*^
 
 trivia        <- (comment / \s)*
 
+# --- Keyword tokens ----------------------------------------------------
+#
+# Each keyword is an atomic rule with the literal and its `!ident_body`
+# word boundary inside the capture, so a keyword can't fire on a longer
+# identifier that merely starts with it (`fnfoo`, `asyncx`) and a
+# rejected keyword leaves no stray capture for recovery to surface.
+# Atomicity keeps the boundary adjacent to the literal (no auto-trivia).
+*kw_use       <- @keyword{'use' !ident_body}
+*kw_as        <- @keyword{'as' !ident_body}
+*kw_self      <- @keyword{'self' !ident_body}
+*kw_self_ty   <- @keyword{'Self' !ident_body}
+*kw_super     <- @keyword{'super' !ident_body}
+*kw_crate     <- @keyword{'crate' !ident_body}
+*kw_fn        <- @keyword{'fn' !ident_body}
+*kw_const     <- @keyword{'const' !ident_body}
+*kw_static    <- @keyword{'static' !ident_body}
+*kw_type      <- @keyword{'type' !ident_body}
+*kw_async     <- @keyword{'async' !ident_body}
+*kw_unsafe    <- @keyword{'unsafe' !ident_body}
+*kw_extern    <- @keyword{'extern' !ident_body}
+*kw_mut       <- @keyword{'mut' !ident_body}
+*kw_struct    <- @keyword{'struct' !ident_body}
+*kw_enum      <- @keyword{'enum' !ident_body}
+*kw_impl      <- @keyword{'impl' !ident_body}
+*kw_for       <- @keyword{'for' !ident_body}
+*kw_trait     <- @keyword{'trait' !ident_body}
+*kw_mod       <- @keyword{'mod' !ident_body}
+*kw_pub       <- @keyword{'pub' !ident_body}
+*kw_in        <- @keyword{'in' !ident_body}
+*kw_where     <- @keyword{'where' !ident_body}
+*kw_dyn       <- @keyword{'dyn' !ident_body}
+*kw_box       <- @keyword{'box' !ident_body}
+*kw_ref       <- @keyword{'ref' !ident_body}
+*kw_if        <- @keyword{'if' !ident_body}
+*kw_let       <- @keyword{'let' !ident_body}
+*kw_else      <- @keyword{'else' !ident_body}
+*kw_match     <- @keyword{'match' !ident_body}
+*kw_while     <- @keyword{'while' !ident_body}
+*kw_loop      <- @keyword{'loop' !ident_body}
+*kw_return    <- @keyword{'return' !ident_body}
+*kw_break     <- @keyword{'break' !ident_body}
+*kw_continue  <- @keyword{'continue' !ident_body}
+*kw_move      <- @keyword{'move' !ident_body}
+*kw_await     <- @keyword{'await' !ident_body}
+
 # --- Items -------------------------------------------------------------
 #
 # Order matters (PEG first-match). Attributes / inner-attributes must
@@ -56,39 +101,39 @@ item          <- attr_outer
 *attr_body    <- .. ']'
 
 # `use foo::bar::{baz, qux as q};`
-use_item      <- @keyword{'use'} use_tree @punctuation{';'}
+use_item      <- kw_use use_tree @punctuation{';'}
 use_tree      <- use_path use_tail?
-use_tail      <- @keyword{'as'} ident_any
+use_tail      <- kw_as ident_any
                / @punctuation{'::'} @punctuation{'*'}
                / @punctuation{'::'} @punctuation{'{'} use_tree_list? @punctuation{'}'}
 use_tree_list <- use_tree (@punctuation{','} use_tree)* (@punctuation{','})?
 use_path      <- use_seg (@punctuation{'::'} use_seg)*
-use_seg       <- @keyword{'self'}
-               / @keyword{'super'}
-               / @keyword{'crate'}
+use_seg       <- kw_self
+               / kw_super
+               / kw_crate
                / @type{upper_ident}
                / @variable{lower_ident}
 
 # `fn name<T>(a: T) -> T where T: Bound { ... }`
-fn_item       <- vis? fn_qualifier* @keyword{'fn'} @function{ident} generic_params?
+fn_item       <- vis? fn_qualifier* kw_fn @function{ident} generic_params?
                  fn_params fn_return? where_clause? (block / @punctuation{';'})
-fn_qualifier  <- @keyword{'const'}
-               / @keyword{'async'}
-               / @keyword{'unsafe'}
-               / @keyword{'extern'} string_lit?
+fn_qualifier  <- kw_const
+               / kw_async
+               / kw_unsafe
+               / kw_extern string_lit?
 fn_params     <- @punctuation{'('} fn_param_list? @punctuation{')'}
 fn_param_list <- fn_param (@punctuation{','} fn_param)* (@punctuation{','})?
 fn_param      <- attr_outer? self_param
                / attr_outer? fn_param_named
 fn_param_named <- pattern_no_or @punctuation{':'} type_expr
-self_param    <- ref_marker? @keyword{'mut'}? @keyword{'self'}
-               / @keyword{'mut'} @keyword{'self'}
-               / @keyword{'self'} @punctuation{':'} type_expr
+self_param    <- ref_marker? kw_mut? kw_self
+               / kw_mut kw_self
+               / kw_self @punctuation{':'} type_expr
 ref_marker    <- @punctuation{'&'} lifetime?
 fn_return     <- @punctuation{'->'} type_expr
 
 # `struct Foo { a: T, b: U }` / `struct Foo(T, U);` / `struct Foo;`
-struct_item   <- vis? @keyword{'struct'} @type{ident} generic_params?
+struct_item   <- vis? kw_struct @type{ident} generic_params?
                  (struct_body_named / struct_body_tuple / @punctuation{';'})
 struct_body_named <- where_clause? @punctuation{'{'} struct_fields? @punctuation{'}'}
 struct_body_tuple <- @punctuation{'('} tuple_fields? @punctuation{')'} where_clause? @punctuation{';'}
@@ -98,7 +143,7 @@ tuple_fields  <- tuple_field (@punctuation{','} tuple_field)* (@punctuation{','}
 tuple_field   <- attr_outer* vis? type_expr
 
 # `enum E { A, B(T), C { x: T } }`
-enum_item     <- vis? @keyword{'enum'} @type{ident} generic_params? where_clause?
+enum_item     <- vis? kw_enum @type{ident} generic_params? where_clause?
                  @punctuation{'{'} enum_variants? @punctuation{'}'}
 enum_variants <- enum_variant (@punctuation{','} enum_variant)* (@punctuation{','})?
 enum_variant  <- attr_outer* @type{ident} enum_variant_body?
@@ -107,29 +152,29 @@ enum_variant_body <- @punctuation{'('} tuple_fields? @punctuation{')'}
                    / @punctuation{'='} expr
 
 # `impl<T> Trait<T> for Foo<T> where T: Bound { ... }`
-impl_item     <- @keyword{'impl'} generic_params? impl_head where_clause?
+impl_item     <- kw_impl generic_params? impl_head where_clause?
                  @punctuation{'{'} impl_body @punctuation{'}'}
-impl_head     <- type_expr (@keyword{'for'} type_expr)?
+impl_head     <- type_expr (kw_for type_expr)?
 impl_body     <- item*
 
 # `trait T<U>: Bound { ... }`
-trait_item    <- vis? @keyword{'unsafe'}? @keyword{'trait'} @type{ident}
+trait_item    <- vis? kw_unsafe? kw_trait @type{ident}
                  generic_params? trait_bounds? where_clause?
                  @punctuation{'{'} impl_body @punctuation{'}'}
 trait_bounds  <- @punctuation{':'} bound_list
 
 # `mod name;` / `mod name { ... }`
-mod_item      <- vis? @keyword{'mod'} @variable{ident}
+mod_item      <- vis? kw_mod @variable{ident}
                  (@punctuation{';'} / @punctuation{'{'} item* @punctuation{'}'})
 
 # `extern "C" { ... }` — extern as an *item* (not as an fn qualifier).
-extern_item   <- @keyword{'extern'} string_lit? @punctuation{'{'} item* @punctuation{'}'}
+extern_item   <- kw_extern string_lit? @punctuation{'{'} item* @punctuation{'}'}
 
-const_item    <- vis? @keyword{'const'} @constant{ident} @punctuation{':'} type_expr
+const_item    <- vis? kw_const @constant{ident} @punctuation{':'} type_expr
                  @punctuation{'='} expr @punctuation{';'}
-static_item   <- vis? @keyword{'static'} @keyword{'mut'}? @constant{ident} @punctuation{':'} type_expr
+static_item   <- vis? kw_static kw_mut? @constant{ident} @punctuation{':'} type_expr
                  @punctuation{'='} expr @punctuation{';'}
-type_alias_item <- vis? @keyword{'type'} @type{ident} generic_params? where_clause?
+type_alias_item <- vis? kw_type @type{ident} generic_params? where_clause?
                    @punctuation{'='} type_expr @punctuation{';'}
 
 # `macro_rules! name { (...) => {...}; ... }` — body is arbitrary token
@@ -144,9 +189,9 @@ macro_args    <- paren_group
                / bracket_group
 
 # Visibility modifier.
-vis           <- @keyword{'pub'} (@punctuation{'('} vis_scope @punctuation{')'})?
-vis_scope     <- @keyword{'crate'} / @keyword{'self'} / @keyword{'super'}
-               / @keyword{'in'} use_path
+vis           <- kw_pub (@punctuation{'('} vis_scope @punctuation{')'})?
+vis_scope     <- kw_crate / kw_self / kw_super
+               / kw_in use_path
 
 # --- Generic parameters and where-clauses ----------------------------
 
@@ -158,9 +203,9 @@ generic_param <- lifetime_param
 lifetime_param <- lifetime (@punctuation{':'} lifetime_bounds)?
 lifetime_bounds <- lifetime (@punctuation{'+'} lifetime)*
 type_param    <- @type{ident} (@punctuation{':'} bound_list)? (@punctuation{'='} type_expr)?
-const_param   <- @keyword{'const'} @constant{ident} @punctuation{':'} type_expr
+const_param   <- kw_const @constant{ident} @punctuation{':'} type_expr
 
-where_clause  <- @keyword{'where'} where_pred (@punctuation{','} where_pred)* (@punctuation{','})?
+where_clause  <- kw_where where_pred (@punctuation{','} where_pred)* (@punctuation{','})?
 where_pred    <- lifetime @punctuation{':'} lifetime_bounds
                / type_expr @punctuation{':'} bound_list
 
@@ -184,17 +229,17 @@ type_expr     <- type_fn
                / type_path
 
 # Trailing `(-> type)?` absorbed by enclosing recovery.
-~type_fn      <- type_fn_qualifier* @keyword{'fn'} @punctuation{'('} type_list? @punctuation{')'}
+~type_fn      <- type_fn_qualifier* kw_fn @punctuation{'('} type_list? @punctuation{')'}
                  (@punctuation{'->'} type_expr)?
-type_fn_qualifier <- @keyword{'unsafe'}
-                   / @keyword{'extern'} string_lit?
+type_fn_qualifier <- kw_unsafe
+                   / kw_extern string_lit?
 type_list     <- type_expr (@punctuation{','} type_expr)* (@punctuation{','})?
 
-type_impl     <- @keyword{'impl'} bound_list
-type_dyn      <- @keyword{'dyn'} bound_list
+type_impl     <- kw_impl bound_list
+type_dyn      <- kw_dyn bound_list
 
-type_ref      <- @punctuation{'&'} lifetime? @keyword{'mut'}? type_expr
-type_ptr      <- @punctuation{'*'} (@keyword{'mut'} / @keyword{'const'}) type_expr
+type_ref      <- @punctuation{'&'} lifetime? kw_mut? type_expr
+type_ptr      <- @punctuation{'*'} (kw_mut / kw_const) type_expr
 
 type_array_or_slice <- @punctuation{'['} type_expr (@punctuation{';'} expr)? @punctuation{']'}
 type_tuple_or_group <- @punctuation{'('} type_list? @punctuation{')'}
@@ -204,10 +249,10 @@ type_never    <- @punctuation{'!'}
 type_path     <- type_path_seg (@punctuation{'::'} type_path_seg)*
 type_path_seg <- @type{upper_ident} path_tail?
                / @variable{lower_ident} path_tail?
-               / @keyword{'self'}
-               / @keyword{'Self'}
-               / @keyword{'super'}
-               / @keyword{'crate'}
+               / kw_self
+               / kw_self_ty
+               / kw_super
+               / kw_crate
 
 # Either angle-bracket generics (`Foo<T>`) or paren-sugar for Fn-traits
 # (`Fn(T) -> U`); Rust's reference grammar splits these as
@@ -246,8 +291,8 @@ pattern_atom  <- pattern_ref
                / pattern_wild
                / pattern_rest
                / pattern_binding
-pattern_ref   <- @punctuation{'&'} @keyword{'mut'}? pattern_atom
-pattern_box   <- @keyword{'box'} pattern_atom
+pattern_ref   <- @punctuation{'&'} kw_mut? pattern_atom
+pattern_box   <- kw_box pattern_atom
 pattern_tuple <- @punctuation{'('} pattern_list? @punctuation{')'}
 pattern_list  <- pattern (@punctuation{','} pattern)* (@punctuation{','})?
 # Trailing `::` chain leniency absorbed by outer recovery.
@@ -264,7 +309,7 @@ pattern_literal <- string_lit / char_lit / number_lit / @constant{'true' / 'fals
 pattern_wild  <- @punctuation{'_'}
 pattern_rest  <- @punctuation{'..'}
 # `(ref)? (mut)?` prefix leniency absorbed by outer recovery.
-~pattern_binding <- @keyword{'ref'}? @keyword{'mut'}? @variable{ident}
+~pattern_binding <- kw_ref? kw_mut? @variable{ident}
                    (@punctuation{'@'} pattern_atom)?
 
 # --- Expressions -------------------------------------------------------
@@ -303,14 +348,14 @@ expr_band     <- expr_band @operator{'&'} !'&' !'=' expr_shift / expr_shift
 expr_shift    <- expr_shift (@operator{'<<'} !'=' / @operator{'>>'} !'=') expr_add / expr_add
 expr_add      <- expr_add (@operator{'+'} !'=' / @operator{'-'} !'=') expr_mul / expr_mul
 expr_mul      <- expr_mul (@operator{'*'} !'=' / @operator{'/'} !'=' / @operator{'%'} !'=') expr_as / expr_as
-expr_as       <- expr_as @keyword{'as'} type_expr_suffix_marker / expr_unary
+expr_as       <- expr_as kw_as type_expr_suffix_marker / expr_unary
 
 # A marker rule: when `as` matches, consume the following type. Split
 # from the cascade so the type_expr stays attached.
 type_expr_suffix_marker <- type_expr
 
 expr_unary    <- unary_op* expr_postfix
-unary_op      <- @operator{'&'} lifetime? @keyword{'mut'}?
+unary_op      <- @operator{'&'} lifetime? kw_mut?
                / @operator{'*'}
                / @operator{'-'}
                / @operator{'!'}
@@ -318,7 +363,7 @@ unary_op      <- @operator{'&'} lifetime? @keyword{'mut'}?
 # Postfix chain: calls, indexing, field access, try `?`.
 expr_postfix  <- expr_primary postfix_op*
 postfix_op    <- @punctuation{'?'}
-               / @punctuation{'.'} @keyword{'await'}
+               / @punctuation{'.'} kw_await
                / @punctuation{'.'} postfix_member
                / @punctuation{'('} expr_list? @punctuation{')'}
                / @punctuation{'['} expr @punctuation{']'}
@@ -347,31 +392,31 @@ expr_primary  <- literal
                / expr_keyword
 
 # Trailing `(else (if | block))?` leniency absorbed by `root`'s `*^` and `block`'s `^block_close`.
-~expr_if      <- @keyword{'if'} (@keyword{'let'} pattern @operator{'='})? expr block
-                 (@keyword{'else'} (expr_if / block))?
-expr_match    <- @keyword{'match'} expr @punctuation{'{'} match_arms? @punctuation{'}'}
+~expr_if      <- kw_if (kw_let pattern @operator{'='})? expr block
+                 (kw_else (expr_if / block))?
+expr_match    <- kw_match expr @punctuation{'{'} match_arms? @punctuation{'}'}
 match_arms    <- match_arm (@punctuation{','} match_arm)* (@punctuation{','})?
-match_arm     <- attr_outer* pattern (@keyword{'if'} expr)? @punctuation{'=>'} expr
-expr_while    <- @keyword{'while'} (@keyword{'let'} pattern @operator{'='})? expr block
-expr_loop     <- loop_label? @keyword{'loop'} block
-expr_for      <- @keyword{'for'} pattern @keyword{'in'} expr block
+match_arm     <- attr_outer* pattern (kw_if expr)? @punctuation{'=>'} expr
+expr_while    <- kw_while (kw_let pattern @operator{'='})? expr block
+expr_loop     <- loop_label? kw_loop block
+expr_for      <- kw_for pattern kw_in expr block
 # Trailing-optional leniency on these stmt-shaped exprs is absorbed by outer recovery.
-~expr_return  <- @keyword{'return'} expr?
-~expr_break   <- @keyword{'break'} loop_label? expr?
-~expr_continue <- @keyword{'continue'} loop_label?
-expr_unsafe   <- @keyword{'unsafe'} block
-expr_closure  <- @keyword{'move'}? @punctuation{'|'} closure_params? @punctuation{'|'}
+~expr_return  <- kw_return expr?
+~expr_break   <- kw_break loop_label? expr?
+~expr_continue <- kw_continue loop_label?
+expr_unsafe   <- kw_unsafe block
+expr_closure  <- kw_move? @punctuation{'|'} closure_params? @punctuation{'|'}
                  (@punctuation{'->'} type_expr)? expr
 closure_params <- closure_param (@punctuation{','} closure_param)* (@punctuation{','})?
 closure_param <- pattern_no_or (@punctuation{':'} type_expr)?
 expr_block    <- block
-expr_async_block <- @keyword{'async'} @keyword{'move'}? block
+expr_async_block <- kw_async kw_move? block
 expr_tuple_or_paren <- @punctuation{'('} expr_list? @punctuation{')'}
 expr_array    <- @punctuation{'['} expr_array_body? @punctuation{']'}
 expr_array_body <- expr @punctuation{';'} expr
                  / expr (@punctuation{','} expr)* (@punctuation{','})?
 expr_list     <- expr (@punctuation{','} expr)* (@punctuation{','})?
-expr_keyword  <- @keyword{'self'} / @keyword{'Self'} / @keyword{'super'} / @keyword{'crate'}
+expr_keyword  <- kw_self / kw_self_ty / kw_super / kw_crate
 
 *loop_label   <- @punctuation{'\''} @variable{ident} @punctuation{':'}
 
@@ -398,8 +443,8 @@ stmt          <- let_stmt
                / expr @punctuation{';'}
                / expr                                    # trailing expression (block-valued)
 
-let_stmt      <- @keyword{'let'} pattern (@punctuation{':'} type_expr)?
-                 (@punctuation{'='} expr)? (@keyword{'else'} block)? @punctuation{';'}
+let_stmt      <- kw_let pattern (@punctuation{':'} type_expr)?
+                 (@punctuation{'='} expr)? (kw_else block)? @punctuation{';'}
 
 # --- Balanced-bracket helpers (used for macro bodies) -----------------
 #

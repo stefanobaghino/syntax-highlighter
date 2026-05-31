@@ -58,6 +58,62 @@ fn kinds_for<'a>(captures: &[Capture], kinds: &'a [String]) -> Vec<&'a str> {
         .collect()
 }
 
+fn captures_with_text<'a>(
+    input: &'a str,
+    caps: &[Capture],
+    kinds: &'a [String],
+) -> Vec<(&'a str, &'a str)> {
+    caps.iter()
+        .map(|c| (kinds[c.kind.0 as usize].as_str(), &input[c.start..c.end]))
+        .collect()
+}
+
+// --- Word-boundary regression tests (issue #6) -----------------------
+
+#[test]
+fn keyword_prefix_func_not_split() {
+    // `funcx` is one identifier; `func` must not be captured as a keyword.
+    let input = "package main\n\nfuncx F() {}\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let pairs = captures_with_text(input, &caps, &kinds);
+    assert!(
+        !pairs.contains(&("keyword", "func")),
+        "`func` must not be captured as a keyword prefix of `funcx`: {:?}",
+        pairs
+    );
+}
+
+#[test]
+fn keyword_prefix_return_not_split() {
+    // `returnx` is one identifier; `return` must not be captured.
+    let input = "package main\n\nfunc f() { returnx() }\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let pairs = captures_with_text(input, &caps, &kinds);
+    assert!(
+        !pairs.contains(&("keyword", "return")),
+        "`return` must not be captured as a keyword prefix of `returnx`: {:?}",
+        pairs
+    );
+}
+
+#[test]
+fn keyword_exact_still_highlights() {
+    // No-regression: bare keywords still highlight when standalone.
+    let input = "package main\n\nfunc f() int { return 1 }\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let pairs = captures_with_text(input, &caps, &kinds);
+    assert!(
+        pairs.contains(&("keyword", "func")),
+        "`func` should still be a keyword: {:?}",
+        pairs
+    );
+    assert!(
+        pairs.contains(&("keyword", "return")),
+        "`return` should still be a keyword: {:?}",
+        pairs
+    );
+}
+
 /// Collect recovery captures whose text contains anything other than ASCII
 /// whitespace. Trailing-newline recovery is a known pre-existing quirk (see
 /// #71); this filter keeps callers focused on real recovery regressions.

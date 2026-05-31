@@ -28,12 +28,45 @@ root          <- package_clause import_decl* (top_decl)*^
 
 trivia        <- (comment / \s)*
 
+# --- Keyword tokens --------------------------------------------------
+#
+# Each keyword is an atomic rule with the literal and its `!ident_body`
+# word boundary inside the capture, so a keyword can't fire on a longer
+# identifier that merely starts with it (`funcx`, `ranger`) and a
+# rejected keyword leaves no stray capture for recovery to surface.
+# Atomicity keeps the boundary adjacent to the literal (no auto-trivia).
+*kw_package   <- @keyword{'package' !ident_body}
+*kw_import    <- @keyword{'import' !ident_body}
+*kw_var       <- @keyword{'var' !ident_body}
+*kw_const     <- @keyword{'const' !ident_body}
+*kw_type      <- @keyword{'type' !ident_body}
+*kw_map       <- @keyword{'map' !ident_body}
+*kw_chan      <- @keyword{'chan' !ident_body}
+*kw_func      <- @keyword{'func' !ident_body}
+*kw_struct    <- @keyword{'struct' !ident_body}
+*kw_interface <- @keyword{'interface' !ident_body}
+*kw_if        <- @keyword{'if' !ident_body}
+*kw_else      <- @keyword{'else' !ident_body}
+*kw_for       <- @keyword{'for' !ident_body}
+*kw_range     <- @keyword{'range' !ident_body}
+*kw_switch    <- @keyword{'switch' !ident_body}
+*kw_case      <- @keyword{'case' !ident_body}
+*kw_default   <- @keyword{'default' !ident_body}
+*kw_select    <- @keyword{'select' !ident_body}
+*kw_go        <- @keyword{'go' !ident_body}
+*kw_defer     <- @keyword{'defer' !ident_body}
+*kw_return    <- @keyword{'return' !ident_body}
+*kw_break     <- @keyword{'break' !ident_body}
+*kw_continue  <- @keyword{'continue' !ident_body}
+*kw_goto      <- @keyword{'goto' !ident_body}
+*kw_fallthrough <- @keyword{'fallthrough' !ident_body}
+
 # --- Package / imports ----------------------------------------------
 
-package_clause <- @keyword{'package'} @variable{ident} opt_semi
+package_clause <- kw_package @variable{ident} opt_semi
 
-import_decl   <- @keyword{'import'} import_spec_group opt_semi
-               / @keyword{'import'} import_spec opt_semi
+import_decl   <- kw_import import_spec_group opt_semi
+               / kw_import import_spec opt_semi
 import_spec_group <- @punctuation{'('} (import_spec opt_semi)* @punctuation{')'}
 import_spec   <- import_alias? string_lit
 import_alias  <- @punctuation{'.'}
@@ -47,12 +80,12 @@ top_decl      <- decl
 
 # Every alt below has trailing-optional leniency (opt_semi or block?)
 # absorbed by `go_file`'s `*^` and `block`'s `^block_close`.
-~decl         <- @keyword{'var'} var_spec_group
-               / @keyword{'var'} var_spec opt_semi
-               / @keyword{'const'} const_spec_group
-               / @keyword{'const'} const_spec opt_semi
-               / @keyword{'type'} type_spec_group
-               / @keyword{'type'} type_spec opt_semi
+~decl         <- kw_var var_spec_group
+               / kw_var var_spec opt_semi
+               / kw_const const_spec_group
+               / kw_const const_spec opt_semi
+               / kw_type type_spec_group
+               / kw_type type_spec opt_semi
 
 var_spec_group <- @punctuation{'('} (var_spec opt_semi)* @punctuation{')'}
 var_spec      <- ident_list type_expr @operator{'='} expr_list
@@ -67,8 +100,8 @@ type_spec_group <- @punctuation{'('} (type_spec opt_semi)* @punctuation{')'}
 type_spec     <- @type{ident} type_params? @operator{'='}? type_expr
 
 # Trailing `block?` absorbed by `*^` / `^block_close`.
-~func_decl    <- @keyword{'func'} @function{ident} type_params? fn_signature block?
-~method_decl  <- @keyword{'func'} method_receiver @function{ident} fn_signature block?
+~func_decl    <- kw_func @function{ident} type_params? fn_signature block?
+~method_decl  <- kw_func method_receiver @function{ident} fn_signature block?
 method_receiver <- @punctuation{'('} (@variable{ident})? type_expr @punctuation{')'}
 
 # Generics type parameters: `[T any, U comparable]`.
@@ -103,16 +136,16 @@ type_expr     <- type_ptr
 
 type_ptr      <- @operator{'*'} type_expr
 type_slice_or_array <- @punctuation{'['} (@operator{'...'} / expr)? @punctuation{']'} type_expr
-type_map      <- @keyword{'map'} @punctuation{'['} type_expr @punctuation{']'} type_expr
-type_chan     <- @operator{'<-'} @keyword{'chan'} type_expr
-               / @keyword{'chan'} @operator{'<-'} type_expr
-               / @keyword{'chan'} type_expr
-type_func     <- @keyword{'func'} fn_signature
-type_struct   <- @keyword{'struct'} @punctuation{'{'} struct_field_list? @punctuation{'}'}
+type_map      <- kw_map @punctuation{'['} type_expr @punctuation{']'} type_expr
+type_chan     <- @operator{'<-'} kw_chan type_expr
+               / kw_chan @operator{'<-'} type_expr
+               / kw_chan type_expr
+type_func     <- kw_func fn_signature
+type_struct   <- kw_struct @punctuation{'{'} struct_field_list? @punctuation{'}'}
 struct_field_list <- struct_field (opt_semi struct_field)* opt_semi?
 struct_field  <- @property{ident} (@punctuation{','} @property{ident})* type_expr string_lit?
                / @operator{'*'}? type_name string_lit?       # embedded field
-type_interface <- @keyword{'interface'} @punctuation{'{'} interface_members? @punctuation{'}'}
+type_interface <- kw_interface @punctuation{'{'} interface_members? @punctuation{'}'}
 interface_members <- interface_member (opt_semi interface_member)* opt_semi?
 interface_member <- @function{ident} fn_signature
                   / type_term
@@ -169,42 +202,42 @@ assign_op     <- @operator{'+='} / @operator{'-='} / @operator{'*='} / @operator
 labeled_stmt  <- @variable{ident} @punctuation{':'} stmt
 
 # Trailing `(else (if | block))?` leniency absorbed by outer recovery.
-~if_stmt      <- @keyword{'if'} (simple_stmt @punctuation{';'})? expr_no_compound block
-                 (@keyword{'else'} (if_stmt / block))?
-for_stmt      <- @keyword{'for'} for_header? block
+~if_stmt      <- kw_if (simple_stmt @punctuation{';'})? expr_no_compound block
+                 (kw_else (if_stmt / block))?
+for_stmt      <- kw_for for_header? block
 for_header    <- for_range
                / for_c_style
                / expr_no_compound
-for_range     <- (ident_list (@operator{'='} / @operator{':='}))? @keyword{'range'} expr_no_compound
+for_range     <- (ident_list (@operator{'='} / @operator{':='}))? kw_range expr_no_compound
 for_c_style   <- simple_stmt? @punctuation{';'} expr_no_compound? @punctuation{';'} simple_stmt?
 
-switch_stmt   <- @keyword{'switch'} type_switch_header @punctuation{'{'} type_case* @punctuation{'}'}
-               / @keyword{'switch'} expr_switch_header @punctuation{'{'} expr_case* @punctuation{'}'}
+switch_stmt   <- kw_switch type_switch_header @punctuation{'{'} type_case* @punctuation{'}'}
+               / kw_switch expr_switch_header @punctuation{'{'} expr_case* @punctuation{'}'}
 expr_switch_header <- (simple_stmt @punctuation{';'})? expr_no_compound?
                / ''
 type_switch_header <- (simple_stmt @punctuation{';'})? type_switch_guard
-type_switch_guard  <- (@variable{ident} @operator{':='})? expr_no_compound @punctuation{'.'} @punctuation{'('} @keyword{'type'} @punctuation{')'}
-expr_case     <- @keyword{'case'} expr_list @punctuation{':'} stmt*
-               / @keyword{'default'} @punctuation{':'} stmt*
-type_case     <- @keyword{'case'} type_list @punctuation{':'} stmt*
-               / @keyword{'default'} @punctuation{':'} stmt*
+type_switch_guard  <- (@variable{ident} @operator{':='})? expr_no_compound @punctuation{'.'} @punctuation{'('} kw_type @punctuation{')'}
+expr_case     <- kw_case expr_list @punctuation{':'} stmt*
+               / kw_default @punctuation{':'} stmt*
+type_case     <- kw_case type_list @punctuation{':'} stmt*
+               / kw_default @punctuation{':'} stmt*
 type_list     <- type_expr (@punctuation{','} type_expr)*
 
-select_stmt   <- @keyword{'select'} @punctuation{'{'} comm_case* @punctuation{'}'}
-comm_case     <- @keyword{'case'} comm_clause @punctuation{':'} stmt*
-               / @keyword{'default'} @punctuation{':'} stmt*
+select_stmt   <- kw_select @punctuation{'{'} comm_case* @punctuation{'}'}
+comm_case     <- kw_case comm_clause @punctuation{':'} stmt*
+               / kw_default @punctuation{':'} stmt*
 comm_clause   <- send_stmt
                / recv_stmt
 recv_stmt     <- (ident_list (@operator{'='} / @operator{':='}))? expr_no_compound
 
-go_stmt       <- @keyword{'go'} expr
-defer_stmt    <- @keyword{'defer'} expr
+go_stmt       <- kw_go expr
+defer_stmt    <- kw_defer expr
 # Trailing-optional leniency absorbed by outer recovery.
-~return_stmt  <- @keyword{'return'} expr_list?
-~break_stmt   <- @keyword{'break'} (@variable{ident})?
-~continue_stmt <- @keyword{'continue'} (@variable{ident})?
-goto_stmt     <- @keyword{'goto'} @variable{ident}
-fallthrough_stmt <- @keyword{'fallthrough'}
+~return_stmt  <- kw_return expr_list?
+~break_stmt   <- kw_break (@variable{ident})?
+~continue_stmt <- kw_continue (@variable{ident})?
+goto_stmt     <- kw_goto @variable{ident}
+fallthrough_stmt <- kw_fallthrough
 
 # --- Expressions -----------------------------------------------------
 #
@@ -305,9 +338,9 @@ paren_expr    <- @punctuation{'('} expr @punctuation{')'}
 
 # Composite literal: `T{...}` where T is a named/qualified type.
 composite_lit <- @type{qualified_ident} composite_body
-               / @keyword{'map'} @punctuation{'['} type_expr @punctuation{']'} type_expr composite_body
+               / kw_map @punctuation{'['} type_expr @punctuation{']'} type_expr composite_body
                / @punctuation{'['} (@operator{'...'} / expr)? @punctuation{']'} type_expr composite_body
-               / @keyword{'struct'} type_struct_body composite_body
+               / kw_struct type_struct_body composite_body
 type_struct_body <- @punctuation{'{'} struct_field_list? @punctuation{'}'}
 
 # Type conversion: `T(x)` where T is a named type — only triggers if
@@ -315,7 +348,7 @@ type_struct_body <- @punctuation{'{'} struct_field_list? @punctuation{'}'}
 type_conv     <- @type{predeclared_type} @punctuation{'('} expr @punctuation{')'}
 
 # Function literal.
-fn_lit        <- @keyword{'func'} fn_signature block
+fn_lit        <- kw_func fn_signature block
 
 call_ident    <- @function{ident} &(@punctuation{'('})
 
