@@ -33,6 +33,10 @@ root          <- (external_decl)*^
 
 trivia        <- (comment / \s)*
 
+# Word boundary for `%` reserved-word rules: a keyword can't be the
+# prefix of a longer identifier. Per C11 §6.4.2.1 identifier-continue.
+wb            <- !ident_body
+
 # --- Preprocessor directives (absorbed as @comment) ------------------
 
 pp_line       <- @keyword{pp_body}
@@ -60,47 +64,42 @@ decl_spec     <- storage_spec
                / type_spec
                / fn_spec
 
-# Keyword rules are atomic and place the `!ident_body` word boundary
-# *inside* the capture. Atomicity stops auto-trivia from splicing
-# between the literal and the boundary (otherwise `static MyType` would
-# match `static`, consume the space, then fail the boundary on
-# `MyType`). Inside-capture placement means the `@keyword` capture only
-# commits when the boundary holds, so a rejected keyword (`typedefx`)
-# leaves no stray capture for top-level recovery to surface.
-*storage_spec  <- @keyword{'typedef' !ident_body}
-                / @keyword{'extern' !ident_body}
-                / @keyword{'static' !ident_body}
-                / @keyword{'auto' !ident_body}
-                / @keyword{'register' !ident_body}
-                / @keyword{'_Thread_local' !ident_body}
-*type_qualifier <- @keyword{'const' !ident_body}
-                 / @keyword{'volatile' !ident_body}
-                 / @keyword{'restrict' !ident_body}
-                 / @keyword{'_Atomic' !ident_body}
-*fn_spec       <- @keyword{'inline' !ident_body}
-                / @keyword{'_Noreturn' !ident_body}
+# `%` reserved-word rules: compiled atomic, with a `wb` boundary call
+# appended inside each keyword capture. A keyword can't fire on a longer
+# identifier that merely starts with it (`static MyType`, `typedefx`),
+# and a rejected keyword leaves no stray capture for recovery to surface.
+%storage_spec  <- @keyword{'typedef'}
+                / @keyword{'extern'}
+                / @keyword{'static'}
+                / @keyword{'auto'}
+                / @keyword{'register'}
+                / @keyword{'_Thread_local'}
+%type_qualifier <- @keyword{'const'}
+                 / @keyword{'volatile'}
+                 / @keyword{'restrict'}
+                 / @keyword{'_Atomic'}
+%fn_spec       <- @keyword{'inline'}
+                / @keyword{'_Noreturn'}
 
-# Embedded keyword tokens. Each is an atomic rule with the keyword and
-# its `!ident_body` boundary inside the capture, so a keyword can't fire
-# on a longer identifier that merely starts with it (`structx`,
-# `returny`) and a rejected keyword leaves no stray capture behind.
-*kw_struct    <- @keyword{'struct' !ident_body}
-*kw_union     <- @keyword{'union' !ident_body}
-*kw_enum      <- @keyword{'enum' !ident_body}
-*kw_case      <- @keyword{'case' !ident_body}
-*kw_default   <- @keyword{'default' !ident_body}
-*kw_if        <- @keyword{'if' !ident_body}
-*kw_else      <- @keyword{'else' !ident_body}
-*kw_for       <- @keyword{'for' !ident_body}
-*kw_while     <- @keyword{'while' !ident_body}
-*kw_do        <- @keyword{'do' !ident_body}
-*kw_switch    <- @keyword{'switch' !ident_body}
-*kw_return    <- @keyword{'return' !ident_body}
-*kw_break     <- @keyword{'break' !ident_body}
-*kw_continue  <- @keyword{'continue' !ident_body}
-*kw_goto      <- @keyword{'goto' !ident_body}
-*kw_sizeof    <- @keyword{'sizeof' !ident_body}
-*kw_alignof   <- @keyword{'_Alignof' !ident_body}
+# Embedded keyword tokens: one `%` rule per keyword, referenced wherever
+# the keyword appears so the `wb` boundary is applied uniformly.
+%kw_struct    <- @keyword{'struct'}
+%kw_union     <- @keyword{'union'}
+%kw_enum      <- @keyword{'enum'}
+%kw_case      <- @keyword{'case'}
+%kw_default   <- @keyword{'default'}
+%kw_if        <- @keyword{'if'}
+%kw_else      <- @keyword{'else'}
+%kw_for       <- @keyword{'for'}
+%kw_while     <- @keyword{'while'}
+%kw_do        <- @keyword{'do'}
+%kw_switch    <- @keyword{'switch'}
+%kw_return    <- @keyword{'return'}
+%kw_break     <- @keyword{'break'}
+%kw_continue  <- @keyword{'continue'}
+%kw_goto      <- @keyword{'goto'}
+%kw_sizeof    <- @keyword{'sizeof'}
+%kw_alignof   <- @keyword{'_Alignof'}
 
 type_spec     <- struct_or_union_spec
                / enum_spec
@@ -108,9 +107,9 @@ type_spec     <- struct_or_union_spec
                / @type{typedef_name}
 
 predef_type   <- @type{predef_type_name}
-*predef_type_name <- ('void' / 'char' / 'short' / 'long long' / 'long'
+%predef_type_name <- 'void' / 'char' / 'short' / 'long long' / 'long'
                    / 'int' / 'float' / 'double' / 'signed' / 'unsigned'
-                   / '_Bool' / '_Complex' / '_Imaginary') !ident_body
+                   / '_Bool' / '_Complex' / '_Imaginary'
 
 # Heuristic typedef-name: PascalCase or `*_t` tail. If this mismatches
 # an actual declaration, the decl path will fail and we fall back to
@@ -119,7 +118,7 @@ predef_type   <- @type{predef_type_name}
 # greedy `ident_body*` would swallow the trailing `_t`.
 *typedef_name <- [A-Z] ident_body*
                / [a-z_] (!typedef_t_end ident_body)* typedef_t_end
-*typedef_t_end <- '_t' !ident_body
+%typedef_t_end <- '_t'
 
 struct_or_union_spec <- (kw_struct / kw_union)
                        (@type{ident})? (@punctuation{'{'} struct_decl* @punctuation{'}'})?
@@ -277,10 +276,14 @@ expr_primary  <- string_lit
                / cast_or_paren
                / call_ident
                / @type{predef_type_name}
-               / @constant{'true' !ident_body}
-               / @constant{'false' !ident_body}
-               / @constant{'NULL' !ident_body}
+               / lit_const
                / @variable{ident}
+
+# Boolean / null constants as a `%` reserved-word alternation so the
+# `wb` boundary keeps `trueish` / `NULLify` from matching the prefix.
+%lit_const    <- @constant{'true'}
+               / @constant{'false'}
+               / @constant{'NULL'}
 
 # `sizeof(T)` must eat the whole type-name expression as a sizeof argument.
 sizeof_type   <- kw_sizeof @punctuation{'('} type_name @punctuation{')'}
@@ -329,7 +332,7 @@ ident_body    <- [\p{L}\p{Nd}_] / ucn
 ucn           <- '\\u' [0-9A-Fa-f]{4} / '\\U' [0-9A-Fa-f]{8}
 
 # Reserved keywords that must not be matched as identifiers.
-*reserved     <- reserved_word !ident_body
+%reserved     <- reserved_word
 reserved_word <- 'auto' / 'break' / 'case' / 'char' / 'const' / 'continue'
                / 'default' / 'do' / 'double' / 'else' / 'enum' / 'extern'
                / 'float' / 'for' / 'goto' / 'if' / 'inline' / 'int'

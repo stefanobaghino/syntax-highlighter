@@ -33,58 +33,59 @@ root           <- (stmt)*^
 
 trivia         <- (comment / \s)*
 
+# Word boundary for `%` reserved-word rules: a keyword can't be the
+# prefix of a longer identifier (ECMAScript IdentifierPartChar).
+wb             <- !ident_body
+
 # --- Keyword tokens ---------------------------------------------------
 #
-# Each keyword is an atomic rule with the literal and its `!ident_body`
-# word boundary inside the capture, so a keyword can't fire on a longer
-# identifier that merely starts with it. This matters most for the
-# contextual keywords (`async`, `as`, `of`, `from`, `get`, `set`,
-# `static`, `yield`) deliberately kept out of `reserved` so they remain
-# usable as identifiers: `{ asyncFoo() {} }` must stay one method name.
-# Atomicity keeps the boundary adjacent to the literal (no auto-trivia);
-# inside-capture placement means a rejected keyword leaves no stray
-# capture for recovery to surface.
-*kw_import     <- @keyword{'import' !ident_body}
-*kw_from       <- @keyword{'from' !ident_body}
-*kw_as         <- @keyword{'as' !ident_body}
-*kw_export     <- @keyword{'export' !ident_body}
-*kw_default    <- @keyword{'default' !ident_body}
-*kw_async      <- @keyword{'async' !ident_body}
-*kw_function   <- @keyword{'function' !ident_body}
-*kw_class      <- @keyword{'class' !ident_body}
-*kw_extends    <- @keyword{'extends' !ident_body}
-*kw_static     <- @keyword{'static' !ident_body}
-*kw_get        <- @keyword{'get' !ident_body}
-*kw_set        <- @keyword{'set' !ident_body}
-*kw_var        <- @keyword{'var' !ident_body}
-*kw_let        <- @keyword{'let' !ident_body}
-*kw_const      <- @keyword{'const' !ident_body}
-*kw_if         <- @keyword{'if' !ident_body}
-*kw_else       <- @keyword{'else' !ident_body}
-*kw_for        <- @keyword{'for' !ident_body}
-*kw_await      <- @keyword{'await' !ident_body}
-*kw_in         <- @keyword{'in' !ident_body}
-*kw_of         <- @keyword{'of' !ident_body}
-*kw_while      <- @keyword{'while' !ident_body}
-*kw_do         <- @keyword{'do' !ident_body}
-*kw_switch     <- @keyword{'switch' !ident_body}
-*kw_case       <- @keyword{'case' !ident_body}
-*kw_try        <- @keyword{'try' !ident_body}
-*kw_catch      <- @keyword{'catch' !ident_body}
-*kw_finally    <- @keyword{'finally' !ident_body}
-*kw_throw      <- @keyword{'throw' !ident_body}
-*kw_return     <- @keyword{'return' !ident_body}
-*kw_break      <- @keyword{'break' !ident_body}
-*kw_continue   <- @keyword{'continue' !ident_body}
-*kw_debugger   <- @keyword{'debugger' !ident_body}
-*kw_yield      <- @keyword{'yield' !ident_body}
-*kw_instanceof <- @keyword{'instanceof' !ident_body}
-*kw_typeof     <- @keyword{'typeof' !ident_body}
-*kw_void       <- @keyword{'void' !ident_body}
-*kw_delete     <- @keyword{'delete' !ident_body}
-*kw_new        <- @keyword{'new' !ident_body}
-*kw_this       <- @keyword{'this' !ident_body}
-*kw_super      <- @keyword{'super' !ident_body}
+# One `%` reserved-word rule per keyword, referenced wherever the
+# keyword appears so the `wb` boundary is applied uniformly. This
+# matters most for the contextual keywords (`async`, `as`, `of`,
+# `from`, `get`, `set`, `static`, `yield`) deliberately kept out of
+# `reserved` so they remain usable as identifiers: `{ asyncFoo() {} }`
+# must stay one method name.
+%kw_import     <- @keyword{'import'}
+%kw_from       <- @keyword{'from'}
+%kw_as         <- @keyword{'as'}
+%kw_export     <- @keyword{'export'}
+%kw_default    <- @keyword{'default'}
+%kw_async      <- @keyword{'async'}
+%kw_function   <- @keyword{'function'}
+%kw_class      <- @keyword{'class'}
+%kw_extends    <- @keyword{'extends'}
+%kw_static     <- @keyword{'static'}
+%kw_get        <- @keyword{'get'}
+%kw_set        <- @keyword{'set'}
+%kw_var        <- @keyword{'var'}
+%kw_let        <- @keyword{'let'}
+%kw_const      <- @keyword{'const'}
+%kw_if         <- @keyword{'if'}
+%kw_else       <- @keyword{'else'}
+%kw_for        <- @keyword{'for'}
+%kw_await      <- @keyword{'await'}
+%kw_in         <- @keyword{'in'}
+%kw_of         <- @keyword{'of'}
+%kw_while      <- @keyword{'while'}
+%kw_do         <- @keyword{'do'}
+%kw_switch     <- @keyword{'switch'}
+%kw_case       <- @keyword{'case'}
+%kw_try        <- @keyword{'try'}
+%kw_catch      <- @keyword{'catch'}
+%kw_finally    <- @keyword{'finally'}
+%kw_throw      <- @keyword{'throw'}
+%kw_return     <- @keyword{'return'}
+%kw_break      <- @keyword{'break'}
+%kw_continue   <- @keyword{'continue'}
+%kw_debugger   <- @keyword{'debugger'}
+%kw_yield      <- @keyword{'yield'}
+%kw_instanceof <- @keyword{'instanceof'}
+%kw_typeof     <- @keyword{'typeof'}
+%kw_void       <- @keyword{'void'}
+%kw_delete     <- @keyword{'delete'}
+%kw_new        <- @keyword{'new'}
+%kw_this       <- @keyword{'this'}
+%kw_super      <- @keyword{'super'}
 
 # --- Statements -------------------------------------------------------
 #
@@ -362,9 +363,13 @@ expr_paren     <- @punctuation{'('} expr @punctuation{')'}
 literal        <- template_lit
                 / string_lit
                 / number_lit
-                / @constant{'true' !ident_body / 'false' !ident_body}
-                / @constant{'null' !ident_body}
-                / @constant{'undefined' !ident_body}
+                / lit_const
+
+# Boolean / null / undefined constants as a `%` reserved-word
+# alternation so the `wb` boundary keeps `trueish` / `nullish` from
+# matching the prefix.
+%lit_const     <- @constant{'true'} / @constant{'false'}
+                / @constant{'null'} / @constant{'undefined'}
 
 string_lit     <- @string{sq_string / dq_string}
 *sq_string     <- "'" ('\\' . / !"'" !'\n' .)* "'"
@@ -426,7 +431,7 @@ ident_body     <- [\p{ID_Continue}$\u{200C}\u{200D}]
 # `of`, `from`, `as`, `get`, `set`, `static`, `yield` outside
 # generators) are intentionally omitted so they can still be used as
 # identifiers where the language allows.
-*reserved      <- reserved_word !ident_body
+%reserved      <- reserved_word
 reserved_word  <- 'break' / 'case' / 'catch' / 'class' / 'const' / 'continue'
                 / 'debugger' / 'default' / 'delete' / 'do' / 'else'
                 / 'export' / 'extends' / 'false' / 'finally' / 'for'

@@ -28,50 +28,52 @@ root          <- (item)*^
 
 trivia        <- (comment / \s)*
 
+# Word boundary for `%` reserved-word rules: a keyword can't be the
+# prefix of a longer identifier (Rust Reference XID_Continue).
+wb            <- !ident_body
+
 # --- Keyword tokens ----------------------------------------------------
 #
-# Each keyword is an atomic rule with the literal and its `!ident_body`
-# word boundary inside the capture, so a keyword can't fire on a longer
-# identifier that merely starts with it (`fnfoo`, `asyncx`) and a
-# rejected keyword leaves no stray capture for recovery to surface.
-# Atomicity keeps the boundary adjacent to the literal (no auto-trivia).
-*kw_use       <- @keyword{'use' !ident_body}
-*kw_as        <- @keyword{'as' !ident_body}
-*kw_self      <- @keyword{'self' !ident_body}
-*kw_self_ty   <- @keyword{'Self' !ident_body}
-*kw_super     <- @keyword{'super' !ident_body}
-*kw_crate     <- @keyword{'crate' !ident_body}
-*kw_fn        <- @keyword{'fn' !ident_body}
-*kw_const     <- @keyword{'const' !ident_body}
-*kw_static    <- @keyword{'static' !ident_body}
-*kw_type      <- @keyword{'type' !ident_body}
-*kw_async     <- @keyword{'async' !ident_body}
-*kw_unsafe    <- @keyword{'unsafe' !ident_body}
-*kw_extern    <- @keyword{'extern' !ident_body}
-*kw_mut       <- @keyword{'mut' !ident_body}
-*kw_struct    <- @keyword{'struct' !ident_body}
-*kw_enum      <- @keyword{'enum' !ident_body}
-*kw_impl      <- @keyword{'impl' !ident_body}
-*kw_for       <- @keyword{'for' !ident_body}
-*kw_trait     <- @keyword{'trait' !ident_body}
-*kw_mod       <- @keyword{'mod' !ident_body}
-*kw_pub       <- @keyword{'pub' !ident_body}
-*kw_in        <- @keyword{'in' !ident_body}
-*kw_where     <- @keyword{'where' !ident_body}
-*kw_dyn       <- @keyword{'dyn' !ident_body}
-*kw_box       <- @keyword{'box' !ident_body}
-*kw_ref       <- @keyword{'ref' !ident_body}
-*kw_if        <- @keyword{'if' !ident_body}
-*kw_let       <- @keyword{'let' !ident_body}
-*kw_else      <- @keyword{'else' !ident_body}
-*kw_match     <- @keyword{'match' !ident_body}
-*kw_while     <- @keyword{'while' !ident_body}
-*kw_loop      <- @keyword{'loop' !ident_body}
-*kw_return    <- @keyword{'return' !ident_body}
-*kw_break     <- @keyword{'break' !ident_body}
-*kw_continue  <- @keyword{'continue' !ident_body}
-*kw_move      <- @keyword{'move' !ident_body}
-*kw_await     <- @keyword{'await' !ident_body}
+# One `%` reserved-word rule per keyword, referenced wherever the
+# keyword appears so the `wb` boundary is applied uniformly: a keyword
+# can't fire on a longer identifier that starts with it (`fnfoo`).
+%kw_use       <- @keyword{'use'}
+%kw_as        <- @keyword{'as'}
+%kw_self      <- @keyword{'self'}
+%kw_self_ty   <- @keyword{'Self'}
+%kw_super     <- @keyword{'super'}
+%kw_crate     <- @keyword{'crate'}
+%kw_fn        <- @keyword{'fn'}
+%kw_const     <- @keyword{'const'}
+%kw_static    <- @keyword{'static'}
+%kw_type      <- @keyword{'type'}
+%kw_async     <- @keyword{'async'}
+%kw_unsafe    <- @keyword{'unsafe'}
+%kw_extern    <- @keyword{'extern'}
+%kw_mut       <- @keyword{'mut'}
+%kw_struct    <- @keyword{'struct'}
+%kw_enum      <- @keyword{'enum'}
+%kw_impl      <- @keyword{'impl'}
+%kw_for       <- @keyword{'for'}
+%kw_trait     <- @keyword{'trait'}
+%kw_mod       <- @keyword{'mod'}
+%kw_pub       <- @keyword{'pub'}
+%kw_in        <- @keyword{'in'}
+%kw_where     <- @keyword{'where'}
+%kw_dyn       <- @keyword{'dyn'}
+%kw_box       <- @keyword{'box'}
+%kw_ref       <- @keyword{'ref'}
+%kw_if        <- @keyword{'if'}
+%kw_let       <- @keyword{'let'}
+%kw_else      <- @keyword{'else'}
+%kw_match     <- @keyword{'match'}
+%kw_while     <- @keyword{'while'}
+%kw_loop      <- @keyword{'loop'}
+%kw_return    <- @keyword{'return'}
+%kw_break     <- @keyword{'break'}
+%kw_continue  <- @keyword{'continue'}
+%kw_move      <- @keyword{'move'}
+%kw_await     <- @keyword{'await'}
 
 # --- Items -------------------------------------------------------------
 #
@@ -305,7 +307,7 @@ pattern_struct_field  <- @property{ident} @punctuation{':'} pattern
                        / @punctuation{'..'}
 pattern_slice <- @punctuation{'['} pattern_list? @punctuation{']'}
 pattern_range <- pattern_literal (@punctuation{'..='} / @punctuation{'..'}) pattern_literal
-pattern_literal <- string_lit / char_lit / number_lit / @constant{'true' / 'false'}
+pattern_literal <- string_lit / char_lit / number_lit / lit_const
 pattern_wild  <- @punctuation{'_'}
 pattern_rest  <- @punctuation{'..'}
 # `(ref)? (mut)?` prefix leniency absorbed by outer recovery.
@@ -470,7 +472,11 @@ balanced_atom <- brace_block
 
 # --- Literals ----------------------------------------------------------
 
-literal       <- string_lit / char_lit / number_lit / @constant{'true' / 'false'}
+literal       <- string_lit / char_lit / number_lit / lit_const
+
+# Boolean constants as a `%` reserved-word alternation so the `wb`
+# boundary keeps `trueish` from matching the `true` prefix.
+%lit_const    <- @constant{'true'} / @constant{'false'}
 
 # Raw strings first (longer prefix), then regular.
 string_lit    <- @string{raw_string / byte_string / regular_string}

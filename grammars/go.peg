@@ -28,38 +28,40 @@ root          <- package_clause import_decl* (top_decl)*^
 
 trivia        <- (comment / \s)*
 
+# Word boundary for `%` reserved-word rules: a keyword can't be the
+# prefix of a longer identifier (Go spec identifier-continue).
+wb            <- !ident_body
+
 # --- Keyword tokens --------------------------------------------------
 #
-# Each keyword is an atomic rule with the literal and its `!ident_body`
-# word boundary inside the capture, so a keyword can't fire on a longer
-# identifier that merely starts with it (`funcx`, `ranger`) and a
-# rejected keyword leaves no stray capture for recovery to surface.
-# Atomicity keeps the boundary adjacent to the literal (no auto-trivia).
-*kw_package   <- @keyword{'package' !ident_body}
-*kw_import    <- @keyword{'import' !ident_body}
-*kw_var       <- @keyword{'var' !ident_body}
-*kw_const     <- @keyword{'const' !ident_body}
-*kw_type      <- @keyword{'type' !ident_body}
-*kw_map       <- @keyword{'map' !ident_body}
-*kw_chan      <- @keyword{'chan' !ident_body}
-*kw_func      <- @keyword{'func' !ident_body}
-*kw_struct    <- @keyword{'struct' !ident_body}
-*kw_interface <- @keyword{'interface' !ident_body}
-*kw_if        <- @keyword{'if' !ident_body}
-*kw_else      <- @keyword{'else' !ident_body}
-*kw_for       <- @keyword{'for' !ident_body}
-*kw_range     <- @keyword{'range' !ident_body}
-*kw_switch    <- @keyword{'switch' !ident_body}
-*kw_case      <- @keyword{'case' !ident_body}
-*kw_default   <- @keyword{'default' !ident_body}
-*kw_select    <- @keyword{'select' !ident_body}
-*kw_go        <- @keyword{'go' !ident_body}
-*kw_defer     <- @keyword{'defer' !ident_body}
-*kw_return    <- @keyword{'return' !ident_body}
-*kw_break     <- @keyword{'break' !ident_body}
-*kw_continue  <- @keyword{'continue' !ident_body}
-*kw_goto      <- @keyword{'goto' !ident_body}
-*kw_fallthrough <- @keyword{'fallthrough' !ident_body}
+# One `%` reserved-word rule per keyword, referenced wherever the
+# keyword appears so the `wb` boundary is applied uniformly: a keyword
+# can't fire on a longer identifier that starts with it (`funcx`).
+%kw_package   <- @keyword{'package'}
+%kw_import    <- @keyword{'import'}
+%kw_var       <- @keyword{'var'}
+%kw_const     <- @keyword{'const'}
+%kw_type      <- @keyword{'type'}
+%kw_map       <- @keyword{'map'}
+%kw_chan      <- @keyword{'chan'}
+%kw_func      <- @keyword{'func'}
+%kw_struct    <- @keyword{'struct'}
+%kw_interface <- @keyword{'interface'}
+%kw_if        <- @keyword{'if'}
+%kw_else      <- @keyword{'else'}
+%kw_for       <- @keyword{'for'}
+%kw_range     <- @keyword{'range'}
+%kw_switch    <- @keyword{'switch'}
+%kw_case      <- @keyword{'case'}
+%kw_default   <- @keyword{'default'}
+%kw_select    <- @keyword{'select'}
+%kw_go        <- @keyword{'go'}
+%kw_defer     <- @keyword{'defer'}
+%kw_return    <- @keyword{'return'}
+%kw_break     <- @keyword{'break'}
+%kw_continue  <- @keyword{'continue'}
+%kw_goto      <- @keyword{'goto'}
+%kw_fallthrough <- @keyword{'fallthrough'}
 
 # --- Package / imports ----------------------------------------------
 
@@ -359,10 +361,12 @@ expr_no_compound_list <- expr_no_compound (@punctuation{','} expr_no_compound)*
 
 # --- Literals -------------------------------------------------------
 
-literal       <- string_lit / number_lit / rune_lit
-               / @constant{'true' !ident_body / 'false' !ident_body}
-               / @constant{'nil' !ident_body}
-               / @constant{'iota' !ident_body}
+literal       <- string_lit / number_lit / rune_lit / lit_const
+
+# Predeclared constants as a `%` reserved-word alternation so the `wb`
+# boundary keeps `trueish` / `nilish` from matching the prefix.
+%lit_const    <- @constant{'true'} / @constant{'false'}
+               / @constant{'nil'} / @constant{'iota'}
 
 string_lit    <- @string{raw_string / interp_string}
 *raw_string   <- '`' ..= '`'
@@ -401,7 +405,7 @@ number_lit    <- @number{num_body}
 ident_body    <- [\p{L}\p{Nd}_]
 
 # Reserved keywords blocking identifier capture.
-*reserved     <- reserved_word !ident_body
+%reserved     <- reserved_word
 reserved_word <- 'break' / 'case' / 'chan' / 'const' / 'continue'
                / 'defer' / 'default' / 'else' / 'fallthrough' / 'for'
                / 'func' / 'go' / 'goto' / 'if' / 'import' / 'interface'
@@ -411,15 +415,15 @@ reserved_word <- 'break' / 'case' / 'chan' / 'const' / 'continue'
 # Predeclared constants / types / builtin funcs — matched as whole
 # identifiers so colouring is consistent without contextual
 # resolution.
-*predeclared_const <- ('true' / 'false' / 'nil' / 'iota') !ident_body
-*predeclared_type <- ('uint8' / 'uint16' / 'uint32' / 'uint64' / 'uint'
+%predeclared_const <- 'true' / 'false' / 'nil' / 'iota'
+%predeclared_type <- 'uint8' / 'uint16' / 'uint32' / 'uint64' / 'uint'
                    / 'int8' / 'int16' / 'int32' / 'int64' / 'int'
                    / 'float32' / 'float64' / 'complex64' / 'complex128'
                    / 'uintptr' / 'byte' / 'rune' / 'string' / 'bool'
-                   / 'error' / 'any' / 'comparable') !ident_body
-*predeclared_fn <- ('append' / 'cap' / 'close' / 'complex' / 'copy'
+                   / 'error' / 'any' / 'comparable'
+%predeclared_fn <- 'append' / 'cap' / 'close' / 'complex' / 'copy'
                  / 'delete' / 'imag' / 'len' / 'make' / 'new' / 'panic'
-                 / 'print' / 'println' / 'real' / 'recover') !ident_body
+                 / 'print' / 'println' / 'real' / 'recover'
 
 # --- Whitespace / comments / semicolon handling ----------------------
 

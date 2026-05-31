@@ -17,7 +17,7 @@ A periodic cleanup sweep over `grammars/*.peg`. Each sweep tends to harvest a sm
 Each candidate falls into one of four categories. The first two are mechanical, the next two are judgment calls.
 
 1. **Char-class re-aliases (mechanical).** A rule whose body is just `[...]` (one or two character classes in sequence), and the rule name doesn't carry documentary intent beyond "this char class." Inline the class at use sites unless the name appears at many sites — a high-ref alias *is* the documentation.
-2. **Duplicate-body rules (mechanical).** Two atomic rules with byte-identical bodies under different names — e.g. `sqlite.peg` has `*ident_cont <- [a-zA-Z\d_]` and `*ident_char <- [a-zA-Z\d_]`. Merge to one name unless the dual naming documents a future divergence.
+2. **Duplicate-body rules (mechanical).** Two atomic rules with byte-identical bodies under different names — e.g. a grammar carrying both `*ident_cont <- [a-zA-Z\d_]` and a separate `*ident_char <- [a-zA-Z\d_]` boundary class. Merge to one name unless the dual naming documents a future divergence.
 3. **Refs=1 single-use rules (judgment).** Many rules are referenced once. Most are NOT inline candidates — they exist to name a multi-line cascade entry, an alternation, or a spec-significant phrase. Only inline when the body is a single `name+` / `name*` / `name` / `[...]` / literal — i.e. a textbook thin wrapper.
 4. **Name ≥ body (judgment).** When the rule name is at least as long as the body string, the indirection isn't paying its way. Same evaluation as refs=1: only inline trivial wrappers.
 
@@ -56,13 +56,13 @@ for f in /tmp/grammar-refactor/*.ndjson; do
   g=$(basename "$f" .ndjson)
   echo "=== $g ==="
   echo "-- single-use, excluding reserved --"
-  tail -n +2 "$f" | jq -r 'select(.references==1 and .rule!="trivia" and .rule!="root") | "\(.rule) (\(.body_chars) chars)"'
+  tail -n +2 "$f" | jq -r 'select(.references==1 and .rule!="trivia" and .rule!="root" and .rule!="wb") | "\(.rule) (\(.body_chars) chars)"'
   echo "-- name length >= body chars, excluding reserved --"
-  tail -n +2 "$f" | jq -r 'select((.rule|length) >= .body_chars and .rule!="trivia" and .rule!="root") | "\(.rule) (name=\(.rule|length), body=\(.body_chars), refs=\(.references))"'
+  tail -n +2 "$f" | jq -r 'select((.rule|length) >= .body_chars and .rule!="trivia" and .rule!="root" and .rule!="wb") | "\(.rule) (name=\(.rule|length), body=\(.body_chars), refs=\(.references))"'
 done
 ```
 
-`trivia` and `root` are reserved (`src/pegc/parser.rs` enforces) — never candidates.
+`root`, `trivia`, and `wb` are reserved (`src/pegc/parser.rs` enforces) — never candidates. A `%`-marked rule (`%name <-`) is also off-limits to inlining: see the *Atomicity check* below.
 
 ### 3. For each candidate, evaluate
 
@@ -86,6 +86,8 @@ Safe shapes regardless of atomicity:
 
 When the body has internal Sequence elements (e.g. `'foo' bar baz`), inlining is **only safe when source and target rule atomicity match**. Verify by reading the `*` sigil on both rule headers before changing anything.
 
+**`%` reserved-word rules are never inline candidates.** A `%name <-` rule carries an *implicit* trailing `wb` boundary that the compiler appends inside the rule's captures; the boundary is invisible in the rule body, so inlining the body silently drops it — the same class of hazard as the atomic case above, but worse because there's no `!ident_body` in the source to tip you off. Leave `%` rules (and the `wb` rule itself) alone.
+
 ### 5. Report
 
 Produce a table grouped by category:
@@ -107,7 +109,7 @@ The applied edit is mechanical at this point — the judgment was the previous s
 - **Bulk-inlining all refs=1 rules.** Most refs=1 rules are spec-significant cascade entries (every binary-precedence level, every statement form, every type-position-specific entry). Inlining them produces an unreadable wall of alternation.
 - **Inlining across atomicity boundaries without checking.** Will silently change parsing behavior — usually in a way that's not caught by the unit tests but shows up in the highlighter fixtures or recovery baselines.
 - **Forgetting to update the grammar header comment** when removing a rule that's named there.
-- **Touching `root` or `trivia`.** Reserved; the parser will reject any grammar that mangles them. Filter these out before evaluating.
+- **Touching `root`, `trivia`, `wb`, or any `%` rule.** `root` / `trivia` / `wb` are reserved (the parser rejects grammars that mangle their position); `%` rules carry an invisible trailing `wb` boundary that inlining would drop. Filter all of these out before evaluating.
 - **Touching the `sqlite.peg` `kw_*` / `*_body` cluster.** Each `kw_*` rule has refs=1 by construction (one keyword, one statement-rule use), but the two-tier `kw_*` → `*_body` design is a deliberate convention — `*_body` is used both by `kw_*` (in `@keyword{...}` capture) and by `keyword_word` (for the no-keyword-as-identifier lookahead). Don't sweep these.
 
 ## Reference PRs
