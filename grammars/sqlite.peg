@@ -523,12 +523,15 @@ literal     <- blob_lit / string_lit / @number{number_body} / null_lit / bool_li
 *string_lit  <- @string{string_body}
 *string_body <- "'" ("''" / !"'" .)* "'"
 
-*number_body <- '0x' [\da-fA-F]+ wb
-             / float_body
-             / int_body
-*float_body  <- \d+ '.' \d+ ([eE] [+\-]? \d+)?
-             / \d+ [eE] [+\-]? \d+
-*int_body    <- \d+
+# Hex is a `%` rule so the compiler appends the `wb` boundary: hex
+# digits include a-f, so a hex run can butt against identifier chars
+# (`0x1Fg` must fall back to `0` + `x1Fg`, not lex `0x1F`). float/int
+# use `\d`, which can't, so they carry no boundary.
+number_body <- hex_body / float_body / int_body
+%hex_body   <- '0x' [\da-fA-F]+
+*float_body <- \d+ '.' \d+ ([eE] [+\-]? \d+)?
+            / \d+ [eE] [+\-]? \d+
+*int_body   <- \d+
 
 # Bind parameters are placeholders bound at execute time — lexically
 # variables, not named constants.
