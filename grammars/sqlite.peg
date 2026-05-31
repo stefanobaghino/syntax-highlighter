@@ -567,9 +567,11 @@ number_body <- hex_body / float_body / int_body
 # boundary call inside the @keyword capture so `SELECT` doesn't match
 # the prefix of `SELECTED`. The `i"…"` literal sugar gives
 # case-insensitive matching at the parser level — see src/pegc/README.md.
-# `keyword_word` keeps an explicit `!ident_cont` boundary: it is a pure
-# negative-lookahead helper (no capture), so it has nothing to leak and
-# stays a single trailing check on the hot identifier-exclusion path.
+# `keyword_word` is also a `%` rule. It has no capture (it's a pure
+# negative-lookahead helper), so the compiler appends a single trailing
+# `wb` after the whole alternation rather than one per branch — one
+# check on the hot identifier-exclusion path, same as a hand-written
+# `!ident_cont`.
 
 %kw_select    <- @keyword{i"select"}
 %kw_from      <- @keyword{i"from"}
@@ -735,9 +737,10 @@ number_body <- hex_body / float_body / int_body
 #   NATURAL > NULL > NOT            (N-prefix)
 #   OFFSET > ORDER / OUTER > ON / OR (O-prefix)
 #
-# `!ident_cont` is applied once on the outside so each body stays
-# boundary-free.
-*keyword_word <-
+# The `%` marker appends one `wb` boundary after the whole alternation
+# (this rule has no capture, so it isn't distributed per branch), which
+# keeps each body boundary-free.
+%keyword_word <-
     ( i"autoincrement"  # 13
     / i"transaction"    # 11
     / i"constraint"     # 10
@@ -862,7 +865,7 @@ number_body <- hex_body / float_body / int_body
     / i"on"             # 2
     / i"or"             # 2
     / i"to"             # 2
-    ) !ident_cont
+    )
 
 # --- Whitespace & comments -------------------------------------------
 
