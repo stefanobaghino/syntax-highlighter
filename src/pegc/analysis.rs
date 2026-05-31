@@ -1632,3 +1632,50 @@ pub fn wrap_root(grammar: &mut Grammar) {
 fn trivia_call() -> Pattern {
     Pattern::nt(TRIVIA_ROOT_RULE)
 }
+
+/// Append a `wb` word-boundary call inside the terminal captures of
+/// every `%`-marked rule (see [`Grammar::percent_rules`]).
+///
+/// The boundary is pushed to the tail of the matched region, *inside*
+/// the capture that ends the match, so the capture commits only when
+/// the boundary holds. Placing `wb` after the capture instead would let
+/// the keyword capture commit before the boundary check fails, leaking a
+/// stray keyword token through top-level `*^` recovery on inputs like
+/// `typedefx`. The rule is already atomic (the `%` sigil inserts it into
+/// `atomic_rules`), so no `trivia` is spliced between the literal and
+/// the appended call.
+///
+/// A `wb` call into a rule with no `wb` definition surfaces downstream
+/// as `CompileError::UndefinedRule("wb")` from `compile_rules`.
+pub fn append_wb_check(grammar: &mut Grammar) {
+    let names: Vec<String> = grammar.percent_rules.iter().cloned().collect();
+    for name in names {
+        if let Some(mut body) = grammar.rules.remove(&name) {
+            append_wb_in(&mut body);
+            grammar.rules.insert(name, body);
+        }
+    }
+}
+
+/// Recursively append a `wb` call at the tail of `pat`'s match, pushing
+/// it inside the final capture and distributing across choice branches
+/// so each alternative ends in its own boundary check.
+fn append_wb_in(pat: &mut Pattern) {
+    match pat {
+        Pattern::OrderedChoice { alts, .. } => {
+            for alt in alts.iter_mut() {
+                append_wb_in(alt);
+            }
+        }
+        Pattern::Sequence { items, .. } => {
+            if let Some(last) = items.last_mut() {
+                append_wb_in(last);
+            }
+        }
+        Pattern::Capture { inner, .. } => append_wb_in(inner),
+        other => {
+            let taken = std::mem::replace(other, Pattern::any_char());
+            *other = Pattern::seq(vec![taken, Pattern::nt(super::parser::WB_RULE)]);
+        }
+    }
+}
