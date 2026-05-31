@@ -1661,6 +1661,15 @@ pub fn append_wb_check(grammar: &mut Grammar) {
 /// it inside the final capture and distributing across choice branches
 /// so each alternative ends in its own boundary check.
 fn append_wb_in(pat: &mut Pattern) {
+    // A choice whose branches hold no capture can't leak a committed
+    // capture through recovery, so one trailing `wb` after the whole
+    // choice is equivalent to — and leaner than — one per branch. Only
+    // distribute when there is a capture to keep the boundary inside of.
+    if matches!(pat, Pattern::OrderedChoice { .. }) && !contains_capture(pat) {
+        let taken = std::mem::replace(pat, Pattern::any_char());
+        *pat = Pattern::seq(vec![taken, Pattern::nt(super::parser::WB_RULE)]);
+        return;
+    }
     match pat {
         Pattern::OrderedChoice { alts, .. } => {
             for alt in alts.iter_mut() {
@@ -1677,5 +1686,93 @@ fn append_wb_in(pat: &mut Pattern) {
             let taken = std::mem::replace(other, Pattern::any_char());
             *other = Pattern::seq(vec![taken, Pattern::nt(super::parser::WB_RULE)]);
         }
+    }
+}
+
+/// Whether `pat` contains a [`Pattern::Capture`] anywhere in its tree.
+/// `NonTerminal`s are opaque (a referenced rule's captures aren't
+/// visible here) — consistent with the rest of `append_wb_in`, which
+/// appends `wb` after a `NonTerminal` call rather than inside it.
+fn contains_capture(pat: &Pattern) -> bool {
+    match pat {
+        Pattern::Capture { .. } => true,
+        Pattern::Sequence { items, .. } => items.iter().any(contains_capture),
+        Pattern::OrderedChoice { alts, .. } => alts.iter().any(contains_capture),
+        Pattern::Repeat { inner, .. }
+        | Pattern::RepeatOne { inner, .. }
+        | Pattern::Optional { inner, .. }
+        | Pattern::NotPredicate { inner, .. }
+        | Pattern::AndPredicate { inner, .. }
+        | Pattern::Lenient { inner, .. } => contains_capture(inner),
+        Pattern::Catch {
+            inner, recovery, ..
+        } => contains_capture(inner) || contains_capture(recovery),
+        Pattern::InferBoundaryCatch { inner, .. } => contains_capture(inner),
+        Pattern::Literal { .. }
+        | Pattern::CharClass { .. }
+        | Pattern::AnyChar { .. }
+        | Pattern::NonTerminal { .. } => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn count_wb(pat: &Pattern) -> usize {
+        match pat {
+            Pattern::NonTerminal { name, .. } if name.as_str() == super::super::parser::WB_RULE => {
+                1
+            }
+            Pattern::Sequence { items, .. } => items.iter().map(count_wb).sum(),
+            Pattern::OrderedChoice { alts, .. } => alts.iter().map(count_wb).sum(),
+            Pattern::Repeat { inner, .. }
+            | Pattern::RepeatOne { inner, .. }
+            | Pattern::Optional { inner, .. }
+            | Pattern::NotPredicate { inner, .. }
+            | Pattern::AndPredicate { inner, .. }
+            | Pattern::Capture { inner, .. }
+            | Pattern::Lenient { inner, .. } => count_wb(inner),
+            Pattern::Catch {
+                inner, recovery, ..
+            } => count_wb(inner) + count_wb(recovery),
+            Pattern::InferBoundaryCatch { inner, .. } => count_wb(inner),
+            _ => 0,
+        }
+    }
+
+    /// Mark a single rule `t` as a `%` rule, run `append_wb_check`, and
+    /// return the rewritten body.
+    fn append_to(body: Pattern) -> Pattern {
+        let mut rules = HashMap::new();
+        rules.insert("t".to_string(), body);
+        let mut g = Grammar::new(rules);
+        g.percent_rules.insert("t".to_string());
+        append_wb_check(&mut g);
+        g.rules.remove("t").unwrap()
+    }
+
+    #[test]
+    fn capture_less_choice_gets_one_trailing_wb() {
+        // `%t <- 'a' / 'b' / 'c'` — no capture to leak, so a single
+        // trailing `wb` after the choice, not one per branch.
+        let body = Pattern::choice(vec![
+            Pattern::literal("a"),
+            Pattern::literal("b"),
+            Pattern::literal("c"),
+        ]);
+        assert_eq!(count_wb(&append_to(body)), 1);
+    }
+
+    #[test]
+    fn capture_choice_distributes_wb_per_branch() {
+        // `%t <- @k{'a'} / @k{'b'}` — each capture must keep `wb` inside
+        // so a committed keyword can't leak through recovery.
+        let body = Pattern::choice(vec![
+            Pattern::capture("k", Pattern::literal("a")),
+            Pattern::capture("k", Pattern::literal("b")),
+        ]);
+        assert_eq!(count_wb(&append_to(body)), 2);
     }
 }
