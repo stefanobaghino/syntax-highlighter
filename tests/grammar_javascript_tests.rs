@@ -58,6 +58,63 @@ fn kinds_for<'a>(captures: &[Capture], kinds: &'a [String]) -> Vec<&'a str> {
         .collect()
 }
 
+fn captures_with_text<'a>(
+    input: &'a str,
+    caps: &[Capture],
+    kinds: &'a [String],
+) -> Vec<(&'a str, &'a str)> {
+    caps.iter()
+        .map(|c| (kinds[c.kind.0 as usize].as_str(), &input[c.start..c.end]))
+        .collect()
+}
+
+// --- Word-boundary regression tests (issue #6) -----------------------
+
+#[test]
+fn keyword_prefix_function_not_split() {
+    // `functionx` is one identifier; `function` must not be a keyword.
+    let input = "functionx foo() {}\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let pairs = captures_with_text(input, &caps, &kinds);
+    assert!(
+        !pairs.contains(&("keyword", "function")),
+        "`function` must not be captured as a keyword prefix of `functionx`: {:?}",
+        pairs
+    );
+}
+
+#[test]
+fn contextual_keyword_async_method_name_not_split() {
+    // `async` is a contextual keyword: `{ asyncFoo() {} }` must keep
+    // `asyncFoo` as one method name, not `async` keyword + `Foo`.
+    let input = "let o = { asyncFoo() {} };\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let pairs = captures_with_text(input, &caps, &kinds);
+    assert!(
+        !pairs.contains(&("keyword", "async")),
+        "`async` must not be captured as a keyword prefix of `asyncFoo`: {:?}",
+        pairs
+    );
+}
+
+#[test]
+fn keyword_exact_still_highlights() {
+    // No-regression: bare keywords / contextual keywords still highlight.
+    let input = "async function f() { return 1; }\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let pairs = captures_with_text(input, &caps, &kinds);
+    assert!(
+        pairs.contains(&("keyword", "async")),
+        "`async` should still be a keyword before `function`: {:?}",
+        pairs
+    );
+    assert!(
+        pairs.contains(&("keyword", "function")),
+        "`function` should still be a keyword: {:?}",
+        pairs
+    );
+}
+
 fn kind_spans(captures: &[Capture], kinds: &[String], kind: &str) -> Vec<String> {
     captures
         .iter()

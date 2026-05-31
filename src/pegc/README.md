@@ -33,13 +33,20 @@ name2 <-  body2
   pair of consecutive items in non-atomic rule bodies, including
   between iterations of `*` / `+`. Without a `trivia` rule, no
   auto-insertion happens.
+- An optional **`wb` rule** is the word-boundary target consumed by
+  `%` rules (see below); it is typically `wb <- !ident_body`. Defining
+  it is only required when the grammar has at least one `%` rule.
 - Rules may carry **prefix sigils**: `~name <-` for the intentional
-  leniency marker (see below) and `*name <-` for the atomic marker
-  (no `trivia` injected inside this rule's body). The two compose:
-  `~*name` and `*~name` are equivalent. `*trivia <- …` is the
-  special case that disables auto-insertion grammar-wide.
-- **Position constraint:** `root` is always the first rule. When a
-  `trivia` rule is present it sits immediately after `root`. Other
+  leniency marker, `*name <-` for the atomic marker (no `trivia`
+  injected inside this rule's body), and `%name <-` for the
+  reserved-word marker (atomic *and* appends a trailing `wb` call
+  inside the rule's terminal captures). `~` composes with either of
+  `*` / `%` (`~*name`, `%~name`, …); `*` and `%` are mutually
+  exclusive — both make a rule atomic. `*trivia <- …` is the special
+  case that disables auto-insertion grammar-wide.
+- **Position constraint:** `root` is always the first rule. The
+  optional special rules `trivia` and `wb` occupy the contiguous slots
+  immediately after `root` (positions 1..2, in either order). Other
   rules follow in any order.
 - **Identifiers** are ASCII `[A-Za-z_][A-Za-z0-9_]*`.
 - **Whitespace** (space, tab, newline, carriage return) separates
@@ -514,7 +521,7 @@ recorded in adjacent comments and unenforced by the lint; see
 
 ### Reserved rule names
 
-Two rule names get compile-time treatment:
+Three rule names get compile-time treatment:
 
 - **`root`** — the start rule (mandatory). The compiler wraps its
   body as `trivia? root_body trivia? !.` so end-of-input is always
@@ -569,6 +576,20 @@ Two rule names get compile-time treatment:
   pair`, and each iteration begins by consuming whatever
   inter-iteration whitespace is sitting in front of it.
 
+- **`wb`** — the optional word-boundary target for `%` rules. Its
+  body is a bare boundary predicate (typically `wb <- !ident_body`,
+  or `!ident_cont` for a Unicode-aware continuation class). The
+  compiler appends a `wb` call inside the terminal captures of every
+  `%` rule (see [`%name <-`](#name----reserved-word-marker)); it is
+  required only when the grammar has at least one `%` rule. Like
+  `trivia`, `wb` is exempt from trivia auto-insertion and must sit in
+  the reserved slots immediately after `root`. It is **not** part of
+  the trivia diagnostic cascade.
+
+  ```peg
+  wb            <- !ident_body
+  ```
+
 ### `*name <-` — atomic-rule marker
 
 A `*` prefix on the rule name opts the rule out of `trivia`
@@ -588,6 +609,37 @@ between adjacent bytes would let whitespace appear inside the
 token. The atomic boundary stops at `NonTerminal` calls: a
 non-atomic rule called from inside an atomic body still gets
 auto-insertion in its own body.
+
+For a keyword rule that also needs a trailing word boundary, prefer
+the [`%name <-`](#name----reserved-word-marker) sibling below — it is
+atomic *and* supplies the boundary, so you don't hand-write `!ident_body`.
+
+### `%name <-` — reserved-word marker
+
+A `%` prefix marks a rule as a **reserved word**: it is compiled
+atomic (like `*`) *and* the compiler appends a call to the `wb` rule
+inside the rule's terminal captures, so the match must be followed by
+a word boundary. This keeps a keyword from firing on the prefix of a
+longer identifier — `if` must not match the start of `ifx`.
+
+```peg
+wb            <- !ident_body
+%kw_if        <- @keyword{'if'}
+%storage_spec <- @keyword{'typedef'} / @keyword{'extern'} / @keyword{'static'}
+```
+
+The `wb` call is pushed inside each leaf capture (and distributed
+across choice branches), not appended after the rule body. That
+placement matters: it means the `@keyword` capture only commits when
+the boundary holds, so a rejected keyword leaves no stray capture for
+top-level `*^` recovery to surface. Because the rule is atomic, no
+`trivia` is spliced between the literal and the appended `wb` call.
+
+- Requires a `wb` rule; with none defined, the synthesized
+  `NonTerminal("wb")` surfaces as `CompileError::UndefinedRule("wb")`.
+- Composes with `~` (`%~name` / `~%name`); mutually exclusive with `*`
+  (combining them is a parse error).
+- Rejected on the reserved rules `root` / `trivia` / `wb`.
 
 ### Reserved syntax
 

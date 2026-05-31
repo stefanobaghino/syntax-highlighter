@@ -60,6 +60,60 @@ fn spans_for<'a>(
         .collect()
 }
 
+fn captures_with_text<'a>(
+    input: &'a str,
+    caps: &[Capture],
+    kinds: &'a [String],
+) -> Vec<(&'a str, &'a str)> {
+    caps.iter()
+        .map(|c| (kinds[c.kind.0 as usize].as_str(), &input[c.start..c.end]))
+        .collect()
+}
+
+// --- Word-boundary regression tests (issue #6) -----------------------
+
+#[test]
+fn keyword_prefix_unicode_identifier_not_split() {
+    // `order€` is one identifier — `€` (U+20AC) is a valid Unicode
+    // continuation char. The `order` keyword must not fire on its
+    // prefix. Regression for the ASCII-only `!ident_char` boundary,
+    // which let a keyword stop at the first non-ASCII byte.
+    let input = "SELECT order\u{20ac} FROM t;\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let k = kinds_for(&caps, &kinds);
+    assert!(
+        !k.contains(&"recovery"),
+        "keyword-prefixed Unicode identifier should parse cleanly: {:?}",
+        k
+    );
+    let pairs = captures_with_text(input, &caps, &kinds);
+    assert!(
+        pairs.contains(&("variable", "order\u{20ac}")),
+        "`order€` should be one identifier: {:?}",
+        pairs
+    );
+    assert!(
+        !pairs
+            .iter()
+            .any(|(kind, t)| *kind == "keyword" && t.eq_ignore_ascii_case("order")),
+        "`order` must not be captured as a keyword prefix of `order€`: {:?}",
+        pairs
+    );
+}
+
+#[test]
+fn keyword_exact_still_highlights() {
+    // No-regression: ASCII keyword boundaries still hold.
+    let input = "SELECT a FROM t;\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let pairs = captures_with_text(input, &caps, &kinds);
+    assert!(
+        pairs.contains(&("keyword", "SELECT")),
+        "`SELECT` should still be a keyword: {:?}",
+        pairs
+    );
+}
+
 fn assert_complete_full(input: &str) -> (Vec<Capture>, Vec<String>) {
     let (matched, caps, kinds, complete) = run(input);
     assert!(
@@ -300,6 +354,37 @@ fn float_variants() {
         let nums = spans_for(&caps, &kinds, "number", input);
         assert_eq!(nums.len(), 1, "input: {:?}", input);
     }
+}
+
+#[test]
+fn number_literal_does_not_span_whitespace() {
+    // Numeric forms are atomic: `1 . 5` must not lex as a single number
+    // (no trivia injected inside a numeric literal).
+    let input = "SELECT 1 . 5";
+    let (_, caps, kinds, _) = run(input);
+    let nums = spans_for(&caps, &kinds, "number", input);
+    assert!(
+        nums.iter().all(|n| !n.contains(' ')),
+        "no number literal should contain whitespace: {nums:?}"
+    );
+    assert!(
+        nums.contains(&"1"),
+        "`1` should be the number literal: {nums:?}"
+    );
+}
+
+#[test]
+fn hex_literal_requires_word_boundary() {
+    // `0x1Fg` must not lex `0x1F` as a number: the hex boundary rejects the
+    // partial match (`g` is an identifier char), so it falls back to the
+    // integer `0` followed by the identifier `x1Fg`.
+    let input = "SELECT 0x1Fg";
+    let (_, caps, kinds, _) = run(input);
+    let nums = spans_for(&caps, &kinds, "number", input);
+    assert!(
+        !nums.contains(&"0x1F"),
+        "hex word boundary should reject `0x1F` before `g`: {nums:?}"
+    );
 }
 
 #[test]

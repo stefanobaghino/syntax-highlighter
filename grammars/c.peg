@@ -33,6 +33,10 @@ root          <- (external_decl)*^
 
 trivia        <- (comment / \s)*
 
+# Word boundary for `%` reserved-word rules: a keyword can't be the
+# prefix of a longer identifier. Per C11 §6.4.2.1 identifier-continue.
+wb            <- !ident_body
+
 # --- Preprocessor directives (absorbed as @comment) ------------------
 
 pp_line       <- @keyword{pp_body}
@@ -60,18 +64,42 @@ decl_spec     <- storage_spec
                / type_spec
                / fn_spec
 
-storage_spec  <- @keyword{'typedef'}
-               / @keyword{'extern'}
-               / @keyword{'static'}
-               / @keyword{'auto'}
-               / @keyword{'register'}
-               / @keyword{'_Thread_local'}
-type_qualifier <- @keyword{'const'}
-                / @keyword{'volatile'}
-                / @keyword{'restrict'}
-                / @keyword{'_Atomic'}
-fn_spec       <- @keyword{'inline'}
-               / @keyword{'_Noreturn'}
+# `%` reserved-word rules: compiled atomic, with a `wb` boundary call
+# appended inside each keyword capture. A keyword can't fire on a longer
+# identifier that merely starts with it (`static MyType`, `typedefx`),
+# and a rejected keyword leaves no stray capture for recovery to surface.
+%storage_spec  <- @keyword{'typedef'}
+                / @keyword{'extern'}
+                / @keyword{'static'}
+                / @keyword{'auto'}
+                / @keyword{'register'}
+                / @keyword{'_Thread_local'}
+%type_qualifier <- @keyword{'const'}
+                 / @keyword{'volatile'}
+                 / @keyword{'restrict'}
+                 / @keyword{'_Atomic'}
+%fn_spec       <- @keyword{'inline'}
+                / @keyword{'_Noreturn'}
+
+# Embedded keyword tokens: one `%` rule per keyword, referenced wherever
+# the keyword appears so the `wb` boundary is applied uniformly.
+%kw_struct    <- @keyword{'struct'}
+%kw_union     <- @keyword{'union'}
+%kw_enum      <- @keyword{'enum'}
+%kw_case      <- @keyword{'case'}
+%kw_default   <- @keyword{'default'}
+%kw_if        <- @keyword{'if'}
+%kw_else      <- @keyword{'else'}
+%kw_for       <- @keyword{'for'}
+%kw_while     <- @keyword{'while'}
+%kw_do        <- @keyword{'do'}
+%kw_switch    <- @keyword{'switch'}
+%kw_return    <- @keyword{'return'}
+%kw_break     <- @keyword{'break'}
+%kw_continue  <- @keyword{'continue'}
+%kw_goto      <- @keyword{'goto'}
+%kw_sizeof    <- @keyword{'sizeof'}
+%kw_alignof   <- @keyword{'_Alignof'}
 
 type_spec     <- struct_or_union_spec
                / enum_spec
@@ -79,9 +107,9 @@ type_spec     <- struct_or_union_spec
                / @type{typedef_name}
 
 predef_type   <- @type{predef_type_name}
-*predef_type_name <- ('void' / 'char' / 'short' / 'long long' / 'long'
+%predef_type_name <- 'void' / 'char' / 'short' / 'long long' / 'long'
                    / 'int' / 'float' / 'double' / 'signed' / 'unsigned'
-                   / '_Bool' / '_Complex' / '_Imaginary') !ident_body
+                   / '_Bool' / '_Complex' / '_Imaginary'
 
 # Heuristic typedef-name: PascalCase or `*_t` tail. If this mismatches
 # an actual declaration, the decl path will fail and we fall back to
@@ -90,9 +118,9 @@ predef_type   <- @type{predef_type_name}
 # greedy `ident_body*` would swallow the trailing `_t`.
 *typedef_name <- [A-Z] ident_body*
                / [a-z_] (!typedef_t_end ident_body)* typedef_t_end
-*typedef_t_end <- '_t' !ident_body
+%typedef_t_end <- '_t'
 
-struct_or_union_spec <- (@keyword{'struct'} / @keyword{'union'})
+struct_or_union_spec <- (kw_struct / kw_union)
                        (@type{ident})? (@punctuation{'{'} struct_decl* @punctuation{'}'})?
 struct_decl   <- decl_spec_list struct_declarator_list? @punctuation{';'}
                / pp_line
@@ -105,7 +133,7 @@ struct_field_direct <- @property{ident} struct_field_tail*
 struct_field_tail <- @punctuation{'['} (expr / '')? @punctuation{']'}
                    / @punctuation{'('} param_list? @punctuation{')'}
 
-enum_spec     <- @keyword{'enum'} (@type{ident})?
+enum_spec     <- kw_enum (@type{ident})?
                  (@punctuation{'{'} enum_list? @punctuation{'}'})?
 enum_list     <- enum_item (@punctuation{','} enum_item)* (@punctuation{','})?
 enum_item     <- @constant{ident} (@operator{'='} expr_cond)?
@@ -164,21 +192,21 @@ stmt          <- labeled_stmt
                / expr_stmt
 
 labeled_stmt  <- @variable{ident} @punctuation{':'} stmt
-               / @keyword{'case'} expr_cond @punctuation{':'} stmt
-               / @keyword{'default'} @punctuation{':'} stmt
+               / kw_case expr_cond @punctuation{':'} stmt
+               / kw_default @punctuation{':'} stmt
 # Trailing `(else stmt)?` leniency absorbed by top-level `*^` and `^block_close`.
-~if_stmt      <- @keyword{'if'} @punctuation{'('} expr @punctuation{')'} stmt
-                 (@keyword{'else'} stmt)?
-for_stmt      <- @keyword{'for'} @punctuation{'('} for_init expr? @punctuation{';'} expr? @punctuation{')'} stmt
+~if_stmt      <- kw_if @punctuation{'('} expr @punctuation{')'} stmt
+                 (kw_else stmt)?
+for_stmt      <- kw_for @punctuation{'('} for_init expr? @punctuation{';'} expr? @punctuation{')'} stmt
 for_init      <- decl
                / expr? @punctuation{';'}
-while_stmt    <- @keyword{'while'} @punctuation{'('} expr @punctuation{')'} stmt
-do_while_stmt <- @keyword{'do'} stmt @keyword{'while'} @punctuation{'('} expr @punctuation{')'} @punctuation{';'}
-switch_stmt   <- @keyword{'switch'} @punctuation{'('} expr @punctuation{')'} stmt
-return_stmt   <- @keyword{'return'} expr? @punctuation{';'}
-break_stmt    <- @keyword{'break'} @punctuation{';'}
-continue_stmt <- @keyword{'continue'} @punctuation{';'}
-goto_stmt     <- @keyword{'goto'} @variable{ident} @punctuation{';'}
+while_stmt    <- kw_while @punctuation{'('} expr @punctuation{')'} stmt
+do_while_stmt <- kw_do stmt kw_while @punctuation{'('} expr @punctuation{')'} @punctuation{';'}
+switch_stmt   <- kw_switch @punctuation{'('} expr @punctuation{')'} stmt
+return_stmt   <- kw_return expr? @punctuation{';'}
+break_stmt    <- kw_break @punctuation{';'}
+continue_stmt <- kw_continue @punctuation{';'}
+goto_stmt     <- kw_goto @variable{ident} @punctuation{';'}
 empty_stmt    <- @punctuation{';'}
 expr_stmt     <- expr @punctuation{';'}
 
@@ -228,8 +256,8 @@ expr_unary    <- sizeof_type
 unary_prefix  <- @operator{'++'} / @operator{'--'}
                / @operator{'+'} / @operator{'-'} / @operator{'!'} / @operator{'~'}
                / @operator{'*'} / @operator{'&'}
-               / @keyword{'sizeof'} &(@punctuation{'('} / [A-Za-z_])
-               / @keyword{'_Alignof'}
+               / kw_sizeof &(@punctuation{'('} / [A-Za-z_])
+               / kw_alignof
 
 expr_postfix  <- expr_primary postfix_op*
 postfix_op    <- @operator{'++'} / @operator{'--'}
@@ -248,13 +276,17 @@ expr_primary  <- string_lit
                / cast_or_paren
                / call_ident
                / @type{predef_type_name}
-               / @constant{'true' !ident_body}
-               / @constant{'false' !ident_body}
-               / @constant{'NULL' !ident_body}
+               / lit_const
                / @variable{ident}
 
+# Boolean / null constants as a `%` reserved-word alternation so the
+# `wb` boundary keeps `trueish` / `NULLify` from matching the prefix.
+%lit_const    <- @constant{'true'}
+               / @constant{'false'}
+               / @constant{'NULL'}
+
 # `sizeof(T)` must eat the whole type-name expression as a sizeof argument.
-sizeof_type   <- @keyword{'sizeof'} @punctuation{'('} type_name @punctuation{')'}
+sizeof_type   <- kw_sizeof @punctuation{'('} type_name @punctuation{')'}
 type_name     <- decl_spec_list abstract_declarator?
 
 # `(T)expr` vs `(expr)` — try cast first (uses decl_spec which
@@ -300,7 +332,7 @@ ident_body    <- [\p{L}\p{Nd}_] / ucn
 ucn           <- '\\u' [0-9A-Fa-f]{4} / '\\U' [0-9A-Fa-f]{8}
 
 # Reserved keywords that must not be matched as identifiers.
-*reserved     <- reserved_word !ident_body
+%reserved     <- reserved_word
 reserved_word <- 'auto' / 'break' / 'case' / 'char' / 'const' / 'continue'
                / 'default' / 'do' / 'double' / 'else' / 'enum' / 'extern'
                / 'float' / 'for' / 'goto' / 'if' / 'inline' / 'int'

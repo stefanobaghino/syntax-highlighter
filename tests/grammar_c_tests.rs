@@ -308,6 +308,66 @@ fn sizeof_struct_type_name_parses() {
     assert_eq!(kind_at_pos(&caps, &kinds, foo_pos), Some("type"));
 }
 
+fn captures_with_text<'a>(
+    input: &'a str,
+    caps: &[Capture],
+    kinds: &'a [String],
+) -> Vec<(&'a str, &'a str)> {
+    caps.iter()
+        .map(|c| (kinds[c.kind.0 as usize].as_str(), &input[c.start..c.end]))
+        .collect()
+}
+
+// --- Word-boundary regression tests (issue #6) -----------------------
+//
+// Keywords matched inline as `@keyword{'…'}` must not fire on a longer
+// identifier that merely starts with the keyword. Without a trailing
+// boundary, `typedefiner` highlights as `typedef` + `iner`.
+
+#[test]
+fn keyword_prefix_storage_spec_not_split() {
+    // `typedefiner` is one identifier; `typedef` must not be captured.
+    let input = "typedefiner x;\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let pairs = captures_with_text(input, &caps, &kinds);
+    assert!(
+        !pairs.contains(&("keyword", "typedef")),
+        "`typedef` must not be captured as a keyword prefix of `typedefiner`: {:?}",
+        pairs
+    );
+}
+
+#[test]
+fn keyword_prefix_struct_not_split() {
+    // `structx` is one word; `struct` must not be captured as a keyword.
+    let input = "structx var;\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let pairs = captures_with_text(input, &caps, &kinds);
+    assert!(
+        !pairs.contains(&("keyword", "struct")),
+        "`struct` must not be captured as a keyword prefix of `structx`: {:?}",
+        pairs
+    );
+}
+
+#[test]
+fn keyword_exact_still_highlights() {
+    // No-regression: the bare keywords still highlight when standalone.
+    let input = "static int g;\nstruct P { int x; };\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let pairs = captures_with_text(input, &caps, &kinds);
+    assert!(
+        pairs.contains(&("keyword", "static")),
+        "`static` should still be a keyword: {:?}",
+        pairs
+    );
+    assert!(
+        pairs.contains(&("keyword", "struct")),
+        "`struct` should still be a keyword: {:?}",
+        pairs
+    );
+}
+
 #[test]
 fn medium_fixture_parses_without_recovery() {
     let input = include_str!("../benches/fixtures/medium.c");

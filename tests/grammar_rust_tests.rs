@@ -58,6 +58,62 @@ fn kinds_for<'a>(captures: &[Capture], kinds: &'a [String]) -> Vec<&'a str> {
         .collect()
 }
 
+fn captures_with_text<'a>(
+    input: &'a str,
+    caps: &[Capture],
+    kinds: &'a [String],
+) -> Vec<(&'a str, &'a str)> {
+    caps.iter()
+        .map(|c| (kinds[c.kind.0 as usize].as_str(), &input[c.start..c.end]))
+        .collect()
+}
+
+// --- Word-boundary regression tests (issue #6) -----------------------
+
+#[test]
+fn keyword_prefix_fn_not_split() {
+    // `fnfoo` is one identifier; `fn` must not be captured as a keyword.
+    let input = "fnfoo bar() {}\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let pairs = captures_with_text(input, &caps, &kinds);
+    assert!(
+        !pairs.contains(&("keyword", "fn")),
+        "`fn` must not be captured as a keyword prefix of `fnfoo`: {:?}",
+        pairs
+    );
+}
+
+#[test]
+fn keyword_prefix_async_not_split() {
+    // `asyncx` is one identifier; `async` must not be captured.
+    let input = "fn f() { asyncx() }\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let pairs = captures_with_text(input, &caps, &kinds);
+    assert!(
+        !pairs.contains(&("keyword", "async")),
+        "`async` must not be captured as a keyword prefix of `asyncx`: {:?}",
+        pairs
+    );
+}
+
+#[test]
+fn keyword_exact_still_highlights() {
+    // No-regression: bare keywords still highlight when standalone.
+    let input = "pub fn f() -> i32 { return 1; }\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let pairs = captures_with_text(input, &caps, &kinds);
+    assert!(
+        pairs.contains(&("keyword", "fn")),
+        "`fn` should still be a keyword: {:?}",
+        pairs
+    );
+    assert!(
+        pairs.contains(&("keyword", "return")),
+        "`return` should still be a keyword: {:?}",
+        pairs
+    );
+}
+
 fn kind_spans(captures: &[Capture], kinds: &[String], kind: &str) -> Vec<String> {
     captures
         .iter()

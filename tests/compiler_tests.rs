@@ -2181,3 +2181,137 @@ fn pattern_nodes_carry_parser_set_spans_for_each_variant_family() {
     };
     assert_eq!(*lit_span, Span { line: 1, col: 12 });
 }
+
+// ---- `%` reserved-word sigil + `wb` special rule -------------------
+
+/// Compile a grammar from source and run it, returning the captures
+/// paired with their resolved kind name and matched text.
+fn run_grammar<'a>(src: &str, input: &'a str) -> Vec<(String, &'a str)> {
+    let prog = parse(src)
+        .expect("grammar parses")
+        .compile()
+        .expect("grammar compiles");
+    let r = VM::new_from_program(&prog, input.as_bytes()).run();
+    r.captures
+        .iter()
+        .map(|c| {
+            (
+                prog.capture_kinds[c.kind.0 as usize].clone(),
+                &input[c.start..c.end],
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn percent_sigil_populates_percent_and_atomic_sets() {
+    let g = parse("root <- r\ntrivia <- (\\s)*\nwb <- !'x'\n%r <- @keyword{'if'}").expect("parse");
+    assert!(
+        g.percent_rules.contains("r"),
+        "`%r` should be a percent rule"
+    );
+    assert!(
+        g.atomic_rules.contains("r"),
+        "a `%` rule is also atomic (trivia is not auto-inserted inside it)"
+    );
+}
+
+#[test]
+fn percent_composes_with_lenient() {
+    // `~%name` and `%~name` both parse: `~` (lenient) and `%`
+    // (reserved-word) are independent markers.
+    for src in [
+        "root <- r\ntrivia <- (\\s)*\nwb <- !'x'\n~%r <- @keyword{'if'}",
+        "root <- r\ntrivia <- (\\s)*\nwb <- !'x'\n%~r <- @keyword{'if'}",
+    ] {
+        let g = parse(src).unwrap_or_else(|e| panic!("parse {src:?}: {}", e.message));
+        assert!(
+            g.percent_rules.contains("r"),
+            "{src:?} should mark r percent"
+        );
+    }
+}
+
+#[test]
+fn percent_rule_appends_wb_inside_capture() {
+    // `%kw_if` must match the keyword `if` but not fire on `ifx`, and
+    // (the leak guard) must leave no stray `if` capture behind on `ifx`.
+    let src = "root <- (token)*^\n\
+               trivia <- (\\s)*\n\
+               wb <- !ident_body\n\
+               token <- kw_if / @variable{ident}\n\
+               %kw_if <- @keyword{'if'}\n\
+               *ident <- [a-z] ident_body*\n\
+               ident_body <- [a-z0-9_]";
+    assert_eq!(
+        run_grammar(src, "if ifx if"),
+        vec![
+            ("keyword".to_string(), "if"),
+            ("variable".to_string(), "ifx"),
+            ("keyword".to_string(), "if"),
+        ]
+    );
+}
+
+#[test]
+fn percent_without_wb_errors_undefined_rule() {
+    // A `%` rule emits a `NonTerminal("wb")`; with no `wb` defined the
+    // reference surfaces as `UndefinedRule("wb")`.
+    let g = parse("root <- r\ntrivia <- (\\s)*\n%r <- @keyword{'if'}").expect("parse");
+    match g.compile().expect_err("compile should fail without wb") {
+        syntax_highlighter::pegc::CompileError::UndefinedRule(name) => assert_eq!(name, "wb"),
+        other => panic!("expected UndefinedRule(\"wb\"), got: {other:?}"),
+    }
+}
+
+#[test]
+fn percent_and_atomic_combined_is_parse_error() {
+    for src in ["%*r <- 'a'", "*%r <- 'a'"] {
+        let err = parse(src).expect_err("combining `%` and `*` must error");
+        assert!(
+            err.message.contains("cannot be combined"),
+            "{src:?} unexpected error: {}",
+            err.message
+        );
+    }
+}
+
+#[test]
+fn percent_on_reserved_rule_is_parse_error() {
+    for name in ["root", "trivia", "wb"] {
+        let src = format!("%{name} <- 'a'");
+        let err = parse(&src).expect_err("`%` on a reserved rule must error");
+        assert!(
+            err.message.contains("reserved rule"),
+            "{src:?} unexpected error: {}",
+            err.message
+        );
+    }
+}
+
+#[test]
+fn wb_must_sit_in_the_reserved_slots() {
+    // `wb` after a non-reserved rule (not contiguous with `root`) errors.
+    let err = parse("root <- r\nr <- 'a'\nwb <- !'x'").expect_err("misplaced wb must error");
+    assert!(
+        err.message.contains("reserved slots"),
+        "unexpected error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn wb_and_trivia_compose_in_either_order() {
+    // Both orderings of the two reserved slots after `root` are accepted.
+    parse("root <- 'a'\ntrivia <- (\\s)*\nwb <- !'x'").expect("trivia then wb");
+    parse("root <- 'a'\nwb <- !'x'\ntrivia <- (\\s)*").expect("wb then trivia");
+}
+
+#[test]
+fn wb_without_trivia_is_valid() {
+    // `wb` does not require `trivia`; a grammar may define only `wb`.
+    parse("root <- r\nwb <- !'x'\n%r <- @keyword{'if'}")
+        .expect("parse")
+        .compile()
+        .expect("compile");
+}

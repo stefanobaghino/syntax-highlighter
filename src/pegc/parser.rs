@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::analysis::{
-    inject_auto_trivia, lint_partial_match, resolve_inferred_boundaries, wrap_root,
+    append_wb_check, inject_auto_trivia, lint_partial_match, resolve_inferred_boundaries, wrap_root,
 };
 use super::compiler::{compile_rules, CompileError};
 use super::pattern::{Pattern, Span};
@@ -43,6 +43,15 @@ pub const ROOT_RULE: &str = "root";
 /// definition but disables auto-insertion grammar-wide.
 pub const TRIVIA_RULE: &str = "trivia";
 
+/// Reserved rule name for the (optional) word-boundary target. A rule
+/// marked with the `%name <- …` sigil is compiled atomic and has a
+/// trailing call to [`WB_RULE`] appended inside its terminal captures by
+/// [`append_wb_check`](super::analysis::append_wb_check), so a keyword
+/// can't fire on the prefix of a longer identifier. Defining `wb` is
+/// only required when at least one `%` rule exists; like [`TRIVIA_RULE`]
+/// it must sit in the reserved slots immediately after [`ROOT_RULE`].
+pub const WB_RULE: &str = "wb";
+
 /// Cap for the `p{n}` exact-count quantifier. Conservative typo guard:
 /// the largest plausible corpus site is `hex{8}`. Above this the parser
 /// rejects with a clear error instead of expanding a malformed grammar
@@ -59,6 +68,12 @@ pub struct Grammar {
     /// being atomic) is the special case that disables auto-insertion
     /// grammar-wide.
     pub atomic_rules: HashSet<String>,
+    /// Names of rules marked with the `%name <- body` reserved-word
+    /// sigil. Each such rule is also in `atomic_rules` (so trivia is not
+    /// auto-inserted inside it); membership here additionally drives
+    /// [`append_wb_check`](super::analysis::append_wb_check), which
+    /// appends a [`WB_RULE`] call inside the rule's terminal captures.
+    pub percent_rules: HashSet<String>,
     /// Per-rule source ranges, in declaration order. Populated by
     /// [`parse`]; empty for grammars built via [`Grammar::new`] (which
     /// has no source text). `pegc stats` uses these to slice the
@@ -94,6 +109,7 @@ impl Grammar {
         Grammar {
             rules,
             atomic_rules: HashSet::new(),
+            percent_rules: HashSet::new(),
             rule_headers: Vec::new(),
         }
     }
@@ -105,6 +121,7 @@ impl Grammar {
         Grammar {
             rules,
             atomic_rules,
+            percent_rules: HashSet::new(),
             rule_headers: Vec::new(),
         }
     }
@@ -157,6 +174,7 @@ impl Grammar {
         let mut resolved = Grammar {
             rules: self.rules.clone(),
             atomic_rules: self.atomic_rules.clone(),
+            percent_rules: self.percent_rules.clone(),
             rule_headers: self.rule_headers.clone(),
         };
         resolve_inferred_boundaries(&mut resolved)?;
@@ -165,6 +183,11 @@ impl Grammar {
             return Err(CompileError::PartialMatchLeniency(findings));
         }
         inject_auto_trivia(&mut resolved);
+        // After trivia injection (which skips the atomic `%` rules) and
+        // before the root wrap: append the `wb` boundary call inside each
+        // `%` rule's terminal captures. An undefined `wb` surfaces as
+        // `CompileError::UndefinedRule("wb")` from `compile_rules`.
+        append_wb_check(&mut resolved);
         wrap_root(&mut resolved);
         compile_rules(&resolved.rules)
     }
@@ -247,6 +270,7 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         let mut rules = HashMap::new();
         let mut atomic_rules: HashSet<String> = HashSet::new();
+        let mut percent_rules: HashSet<String> = HashSet::new();
         let mut rule_headers: Vec<RuleHeader> = Vec::new();
         while self.pos < self.src.len() {
             // Definition-level lenient marker: `~name <- body` declares
@@ -260,22 +284,41 @@ impl<'a> Parser<'a> {
             // the rule out of trivia auto-insertion: the rewriter walks
             // the body but does not splice `trivia` between `Sequence`
             // items. `*trivia <- …` is the special case that disables
-            // auto-insertion grammar-wide. The two prefixes compose
-            // in either order.
+            // auto-insertion grammar-wide.
+            //
+            // The reserved-word marker `%name <- body` implies atomic and
+            // additionally appends a `wb` boundary call inside the rule's
+            // terminal captures (see `append_wb_check`). `%` composes with
+            // `~` but is mutually exclusive with `*` — both make a rule
+            // atomic, so combining them is always a mistake.
             let mut lenient_span: Option<Span> = None;
             let mut definition_atomic = false;
+            let mut definition_percent = false;
             loop {
                 match self.peek() {
                     Some(b'~') if lenient_span.is_none() => {
                         lenient_span = Some(self.span());
                         self.pos += 1;
                     }
-                    Some(b'*') if !definition_atomic => {
+                    Some(b'*') if !definition_atomic && !definition_percent => {
                         self.pos += 1;
                         definition_atomic = true;
                     }
+                    Some(b'%') if !definition_percent && !definition_atomic => {
+                        self.pos += 1;
+                        definition_percent = true;
+                    }
                     _ => break,
                 }
+            }
+            // A leftover `*`/`%` here means the two were combined
+            // (`*%name`, `%*name`) or doubled — reject with a clear error
+            // instead of a confusing "expected rule name".
+            if matches!(self.peek(), Some(b'*') | Some(b'%')) {
+                return Err(self.err(
+                    "the `*` (atomic) and `%` (reserved-word) rule qualifiers cannot be combined"
+                        .into(),
+                ));
             }
             let name_byte = self.pos;
             let name = self.parse_ident()?;
@@ -291,7 +334,15 @@ impl<'a> Parser<'a> {
                     span,
                 };
             }
-            if definition_atomic {
+            if definition_percent {
+                if name == ROOT_RULE || name == TRIVIA_RULE || name == WB_RULE {
+                    return Err(self.err(format!(
+                        "the `%` reserved-word qualifier cannot be applied to the reserved rule `{name}`"
+                    )));
+                }
+                percent_rules.insert(name.clone());
+            }
+            if definition_atomic || definition_percent {
                 atomic_rules.insert(name.clone());
             }
             if rules.insert(name.clone(), pat).is_some() {
@@ -308,22 +359,39 @@ impl<'a> Parser<'a> {
         if rule_headers.is_empty() {
             return Err(self.err("grammar has no rules".into()));
         }
-        // Reserved-name enforcement for `trivia`'s position is parse-
-        // time so the error points at the offending source location.
-        // `root`'s presence (and the requirement that `root` itself
-        // sits at the top) is enforced by `Grammar::compile` — that
-        // lets AST-only parser tests build fixtures with arbitrary
+        // Reserved-name enforcement for the special rules' positions is
+        // parse-time so the error points at the offending source
+        // location. `root`'s presence (and the requirement that `root`
+        // itself sits at the top) is enforced by `Grammar::compile` —
+        // that lets AST-only parser tests build fixtures with arbitrary
         // rule names without inventing a `root` placeholder.
-        if let Some(trivia_pos) = rule_headers.iter().position(|h| h.name == TRIVIA_RULE) {
-            if trivia_pos != 1 {
+        //
+        // `trivia` and `wb`, when present, occupy the contiguous slots
+        // immediately after `root` (positions 1..=n in either order),
+        // where n is how many of them the grammar defines.
+        let specials = [TRIVIA_RULE, WB_RULE];
+        let n_special = rule_headers
+            .iter()
+            .filter(|h| specials.contains(&h.name.as_str()))
+            .count();
+        for (pos, h) in rule_headers.iter().enumerate() {
+            if specials.contains(&h.name.as_str()) && !(1..=n_special).contains(&pos) {
                 return Err(self.err(format!(
-                    "`{TRIVIA_RULE}` must be the second rule (immediately after `{ROOT_RULE}`) when present"
+                    "`{}` must appear in the reserved slots immediately after `{ROOT_RULE}` (before any other rule)",
+                    h.name
                 )));
             }
+        }
+        // `wb`, like `trivia`, is exempt from trivia auto-insertion: its
+        // body is a bare boundary predicate that must stay adjacent to
+        // the keyword it follows.
+        if rules.contains_key(WB_RULE) {
+            atomic_rules.insert(WB_RULE.to_string());
         }
         Ok(Grammar {
             rules,
             atomic_rules,
+            percent_rules,
             rule_headers,
         })
     }

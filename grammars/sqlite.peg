@@ -56,6 +56,10 @@
 root       <- (statement stmt_sep?)*^[;]
 
 trivia    <- (comment / \s)*
+# Word boundary for `%` reserved-word rules: a keyword can't be the
+# prefix of a longer identifier. Matches the full identifier-continue
+# class (`ident_cont`, Unicode included).
+wb        <- !ident_cont
 stmt_sep   <- @punctuation{';'}
 statement       <- explain_stmt / statement_body
 statement_body  <- select_stmt
@@ -509,8 +513,8 @@ exists_expr <- kw_exists @punctuation{'('} select_stmt @punctuation{')'}
 
 literal     <- blob_lit / string_lit / @number{number_body} / null_lit / bool_lit
 
-*null_lit    <- @constant{null_body !ident_char}
-*bool_lit    <- @constant{bool_body !ident_char}
+%null_lit    <- @constant{null_body}
+%bool_lit    <- @constant{bool_body}
 *null_body   <- i"null"
 *bool_body   <- i"true" / i"false"
 
@@ -519,12 +523,15 @@ literal     <- blob_lit / string_lit / @number{number_body} / null_lit / bool_li
 *string_lit  <- @string{string_body}
 *string_body <- "'" ("''" / !"'" .)* "'"
 
-*number_body <- '0x' [\da-fA-F]+ !ident_char
-             / float_body
-             / int_body
-*float_body  <- \d+ '.' \d+ ([eE] [+\-]? \d+)?
-             / \d+ [eE] [+\-]? \d+
-*int_body    <- \d+
+# Hex is a `%` rule so the compiler appends the `wb` boundary: hex
+# digits include a-f, so a hex run can butt against identifier chars
+# (`0x1Fg` must fall back to `0` + `x1Fg`, not lex `0x1F`). float/int
+# use `\d`, which can't, so they carry no boundary.
+number_body <- hex_body / float_body / int_body
+%hex_body   <- '0x' [\da-fA-F]+
+*float_body <- \d+ '.' \d+ ([eE] [+\-]? \d+)?
+            / \d+ [eE] [+\-]? \d+
+*int_body   <- \d+
 
 # Bind parameters are placeholders bound at execute time — lexically
 # variables, not named constants.
@@ -550,167 +557,170 @@ literal     <- blob_lit / string_lit / @number{number_body} / null_lit / bool_li
 # `$` (continuation only), plus any code point above U+007F.
 *ident_start       <- [a-zA-Z_\u{80}-\u{10FFFF}]
 *ident_cont        <- [a-zA-Z\d_$\u{80}-\u{10FFFF}]
-*ident_char        <- [a-zA-Z\d_$]
 
 *double_quoted_id  <- '"' ('""' / !'"' !\R .)* '"'
 *backtick_id       <- '`' ('``' / !'`' !\R .)* '`'
 *bracket_id        <- '[' .. (']' / \R) ']'
 
 # --- Keywords (case-insensitive) --------------------------------------
-# Every kw_* wraps its body in @keyword{...} and appends the
-# `!ident_char` boundary so `SELECT` doesn't match the prefix of
-# `SELECTED`. The `i"…"` literal sugar gives case-insensitive matching
-# at the parser level — see src/pegc/README.md. `keyword_word` reuses
-# the same boundary for the identifier-exclusion negative lookahead.
+# Each kw_* is a `%` reserved-word rule: the compiler appends a `wb`
+# boundary call inside the @keyword capture so `SELECT` doesn't match
+# the prefix of `SELECTED`. The `i"…"` literal sugar gives
+# case-insensitive matching at the parser level — see src/pegc/README.md.
+# `keyword_word` is also a `%` rule. It has no capture (it's a pure
+# negative-lookahead helper), so the compiler appends a single trailing
+# `wb` after the whole alternation rather than one per branch — one
+# check on the hot identifier-exclusion path, same as a hand-written
+# `!ident_cont`.
 
-*kw_select    <- @keyword{i"select" !ident_char}
-*kw_from      <- @keyword{i"from" !ident_char}
-*kw_where     <- @keyword{i"where" !ident_char}
-*kw_group     <- @keyword{i"group" !ident_char}
-*kw_by        <- @keyword{i"by" !ident_char}
-*kw_having    <- @keyword{i"having" !ident_char}
-*kw_order     <- @keyword{i"order" !ident_char}
-*kw_asc       <- @keyword{i"asc" !ident_char}
-*kw_desc      <- @keyword{i"desc" !ident_char}
-*kw_limit     <- @keyword{i"limit" !ident_char}
-*kw_offset    <- @keyword{i"offset" !ident_char}
-*kw_join      <- @keyword{i"join" !ident_char}
-*kw_inner     <- @keyword{i"inner" !ident_char}
-*kw_left      <- @keyword{i"left" !ident_char}
-*kw_right     <- @keyword{i"right" !ident_char}
-*kw_full      <- @keyword{i"full" !ident_char}
-*kw_outer     <- @keyword{i"outer" !ident_char}
-*kw_cross     <- @keyword{i"cross" !ident_char}
-*kw_natural   <- @keyword{i"natural" !ident_char}
-*kw_on        <- @keyword{i"on" !ident_char}
-*kw_using     <- @keyword{i"using" !ident_char}
-*kw_as        <- @keyword{i"as" !ident_char}
-*kw_distinct  <- @keyword{i"distinct" !ident_char}
-*kw_all       <- @keyword{i"all" !ident_char}
-*kw_union     <- @keyword{i"union" !ident_char}
-*kw_intersect <- @keyword{i"intersect" !ident_char}
-*kw_except    <- @keyword{i"except" !ident_char}
-*kw_with      <- @keyword{i"with" !ident_char}
-*kw_and       <- @keyword{i"and" !ident_char}
-*kw_or        <- @keyword{i"or" !ident_char}
-*kw_not       <- @keyword{i"not" !ident_char}
-*kw_is        <- @keyword{i"is" !ident_char}
-*kw_in        <- @keyword{i"in" !ident_char}
-*kw_like      <- @keyword{i"like" !ident_char}
-*kw_glob      <- @keyword{i"glob" !ident_char}
-*kw_match     <- @keyword{i"match" !ident_char}
-*kw_regexp    <- @keyword{i"regexp" !ident_char}
-*kw_between   <- @keyword{i"between" !ident_char}
-*kw_escape    <- @keyword{i"escape" !ident_char}
-*kw_case      <- @keyword{i"case" !ident_char}
-*kw_when      <- @keyword{i"when" !ident_char}
-*kw_then      <- @keyword{i"then" !ident_char}
-*kw_else      <- @keyword{i"else" !ident_char}
-*kw_end       <- @keyword{i"end" !ident_char}
-*kw_cast      <- @keyword{i"cast" !ident_char}
-*kw_exists    <- @keyword{i"exists" !ident_char}
-*kw_collate   <- @keyword{i"collate" !ident_char}
+%kw_select    <- @keyword{i"select"}
+%kw_from      <- @keyword{i"from"}
+%kw_where     <- @keyword{i"where"}
+%kw_group     <- @keyword{i"group"}
+%kw_by        <- @keyword{i"by"}
+%kw_having    <- @keyword{i"having"}
+%kw_order     <- @keyword{i"order"}
+%kw_asc       <- @keyword{i"asc"}
+%kw_desc      <- @keyword{i"desc"}
+%kw_limit     <- @keyword{i"limit"}
+%kw_offset    <- @keyword{i"offset"}
+%kw_join      <- @keyword{i"join"}
+%kw_inner     <- @keyword{i"inner"}
+%kw_left      <- @keyword{i"left"}
+%kw_right     <- @keyword{i"right"}
+%kw_full      <- @keyword{i"full"}
+%kw_outer     <- @keyword{i"outer"}
+%kw_cross     <- @keyword{i"cross"}
+%kw_natural   <- @keyword{i"natural"}
+%kw_on        <- @keyword{i"on"}
+%kw_using     <- @keyword{i"using"}
+%kw_as        <- @keyword{i"as"}
+%kw_distinct  <- @keyword{i"distinct"}
+%kw_all       <- @keyword{i"all"}
+%kw_union     <- @keyword{i"union"}
+%kw_intersect <- @keyword{i"intersect"}
+%kw_except    <- @keyword{i"except"}
+%kw_with      <- @keyword{i"with"}
+%kw_and       <- @keyword{i"and"}
+%kw_or        <- @keyword{i"or"}
+%kw_not       <- @keyword{i"not"}
+%kw_is        <- @keyword{i"is"}
+%kw_in        <- @keyword{i"in"}
+%kw_like      <- @keyword{i"like"}
+%kw_glob      <- @keyword{i"glob"}
+%kw_match     <- @keyword{i"match"}
+%kw_regexp    <- @keyword{i"regexp"}
+%kw_between   <- @keyword{i"between"}
+%kw_escape    <- @keyword{i"escape"}
+%kw_case      <- @keyword{i"case"}
+%kw_when      <- @keyword{i"when"}
+%kw_then      <- @keyword{i"then"}
+%kw_else      <- @keyword{i"else"}
+%kw_end       <- @keyword{i"end"}
+%kw_cast      <- @keyword{i"cast"}
+%kw_exists    <- @keyword{i"exists"}
+%kw_collate   <- @keyword{i"collate"}
 
 # Window-function vocabulary. Only WINDOW and OVER are reserved; the
 # rest are matched positionally inside window_defn / frame_spec and
 # remain usable as identifiers outside those positions.
-*kw_recursive <- @keyword{i"recursive" !ident_char}
-*kw_window    <- @keyword{i"window" !ident_char}
-*kw_over      <- @keyword{i"over" !ident_char}
-*kw_filter    <- @keyword{i"filter" !ident_char}
-*kw_partition <- @keyword{i"partition" !ident_char}
-*kw_range     <- @keyword{i"range" !ident_char}
-*kw_rows      <- @keyword{i"rows" !ident_char}
-*kw_groups    <- @keyword{i"groups" !ident_char}
-*kw_unbounded <- @keyword{i"unbounded" !ident_char}
-*kw_preceding <- @keyword{i"preceding" !ident_char}
-*kw_following <- @keyword{i"following" !ident_char}
-*kw_current   <- @keyword{i"current" !ident_char}
-*kw_row       <- @keyword{i"row" !ident_char}
-*kw_exclude   <- @keyword{i"exclude" !ident_char}
-*kw_ties      <- @keyword{i"ties" !ident_char}
-*kw_others    <- @keyword{i"others" !ident_char}
-*kw_no        <- @keyword{i"no" !ident_char}
+%kw_recursive <- @keyword{i"recursive"}
+%kw_window    <- @keyword{i"window"}
+%kw_over      <- @keyword{i"over"}
+%kw_filter    <- @keyword{i"filter"}
+%kw_partition <- @keyword{i"partition"}
+%kw_range     <- @keyword{i"range"}
+%kw_rows      <- @keyword{i"rows"}
+%kw_groups    <- @keyword{i"groups"}
+%kw_unbounded <- @keyword{i"unbounded"}
+%kw_preceding <- @keyword{i"preceding"}
+%kw_following <- @keyword{i"following"}
+%kw_current   <- @keyword{i"current"}
+%kw_row       <- @keyword{i"row"}
+%kw_exclude   <- @keyword{i"exclude"}
+%kw_ties      <- @keyword{i"ties"}
+%kw_others    <- @keyword{i"others"}
+%kw_no        <- @keyword{i"no"}
 
 # DML (INSERT family). UPDATE lands in a later commit but its keyword
 # rule goes here so UPSERT's DO UPDATE path can use it now.
-*kw_insert    <- @keyword{i"insert" !ident_char}
-*kw_replace   <- @keyword{i"replace" !ident_char}
-*kw_into      <- @keyword{i"into" !ident_char}
-*kw_values    <- @keyword{i"values" !ident_char}
-*kw_default   <- @keyword{i"default" !ident_char}
-*kw_conflict  <- @keyword{i"conflict" !ident_char}
-*kw_do        <- @keyword{i"do" !ident_char}
-*kw_nothing   <- @keyword{i"nothing" !ident_char}
-*kw_rollback  <- @keyword{i"rollback" !ident_char}
-*kw_abort     <- @keyword{i"abort" !ident_char}
-*kw_fail      <- @keyword{i"fail" !ident_char}
-*kw_ignore    <- @keyword{i"ignore" !ident_char}
-*kw_set       <- @keyword{i"set" !ident_char}
-*kw_returning <- @keyword{i"returning" !ident_char}
-*kw_update    <- @keyword{i"update" !ident_char}
-*kw_delete    <- @keyword{i"delete" !ident_char}
+%kw_insert    <- @keyword{i"insert"}
+%kw_replace   <- @keyword{i"replace"}
+%kw_into      <- @keyword{i"into"}
+%kw_values    <- @keyword{i"values"}
+%kw_default   <- @keyword{i"default"}
+%kw_conflict  <- @keyword{i"conflict"}
+%kw_do        <- @keyword{i"do"}
+%kw_nothing   <- @keyword{i"nothing"}
+%kw_rollback  <- @keyword{i"rollback"}
+%kw_abort     <- @keyword{i"abort"}
+%kw_fail      <- @keyword{i"fail"}
+%kw_ignore    <- @keyword{i"ignore"}
+%kw_set       <- @keyword{i"set"}
+%kw_returning <- @keyword{i"returning"}
+%kw_update    <- @keyword{i"update"}
+%kw_delete    <- @keyword{i"delete"}
 
 # DDL (CREATE / ALTER / DROP TABLE, constraints, foreign-key actions).
-*kw_create    <- @keyword{i"create" !ident_char}
-*kw_table     <- @keyword{i"table" !ident_char}
-*kw_alter     <- @keyword{i"alter" !ident_char}
-*kw_drop      <- @keyword{i"drop" !ident_char}
-*kw_rename    <- @keyword{i"rename" !ident_char}
-*kw_add       <- @keyword{i"add" !ident_char}
-*kw_column    <- @keyword{i"column" !ident_char}
-*kw_if        <- @keyword{i"if" !ident_char}
-*kw_temp      <- @keyword{i"temp" !ident_char}
-*kw_temporary <- @keyword{i"temporary" !ident_char}
-*kw_primary   <- @keyword{i"primary" !ident_char}
-*kw_key       <- @keyword{i"key" !ident_char}
-*kw_unique    <- @keyword{i"unique" !ident_char}
-*kw_check     <- @keyword{i"check" !ident_char}
-*kw_null      <- @keyword{i"null" !ident_char}
-*kw_references <- @keyword{i"references" !ident_char}
-*kw_generated <- @keyword{i"generated" !ident_char}
-*kw_always    <- @keyword{i"always" !ident_char}
-*kw_stored    <- @keyword{i"stored" !ident_char}
-*kw_virtual   <- @keyword{i"virtual" !ident_char}
-*kw_constraint<- @keyword{i"constraint" !ident_char}
-*kw_foreign   <- @keyword{i"foreign" !ident_char}
-*kw_action    <- @keyword{i"action" !ident_char}
-*kw_cascade   <- @keyword{i"cascade" !ident_char}
-*kw_restrict  <- @keyword{i"restrict" !ident_char}
-*kw_deferrable<- @keyword{i"deferrable" !ident_char}
-*kw_initially <- @keyword{i"initially" !ident_char}
-*kw_immediate <- @keyword{i"immediate" !ident_char}
-*kw_deferred  <- @keyword{i"deferred" !ident_char}
-*kw_autoincrement <- @keyword{i"autoincrement" !ident_char}
-*kw_rowid     <- @keyword{i"rowid" !ident_char}
-*kw_strict    <- @keyword{i"strict" !ident_char}
-*kw_without   <- @keyword{i"without" !ident_char}
-*kw_to        <- @keyword{i"to" !ident_char}
-*kw_index     <- @keyword{i"index" !ident_char}
-*kw_view      <- @keyword{i"view" !ident_char}
-*kw_trigger   <- @keyword{i"trigger" !ident_char}
-*kw_before    <- @keyword{i"before" !ident_char}
-*kw_after     <- @keyword{i"after" !ident_char}
-*kw_instead   <- @keyword{i"instead" !ident_char}
-*kw_of        <- @keyword{i"of" !ident_char}
-*kw_for       <- @keyword{i"for" !ident_char}
-*kw_each      <- @keyword{i"each" !ident_char}
-*kw_begin     <- @keyword{i"begin" !ident_char}
-*kw_commit    <- @keyword{i"commit" !ident_char}
-*kw_transaction <- @keyword{i"transaction" !ident_char}
-*kw_savepoint <- @keyword{i"savepoint" !ident_char}
-*kw_release   <- @keyword{i"release" !ident_char}
-*kw_exclusive <- @keyword{i"exclusive" !ident_char}
-*kw_pragma    <- @keyword{i"pragma" !ident_char}
-*kw_vacuum    <- @keyword{i"vacuum" !ident_char}
-*kw_attach    <- @keyword{i"attach" !ident_char}
-*kw_detach    <- @keyword{i"detach" !ident_char}
-*kw_database  <- @keyword{i"database" !ident_char}
-*kw_reindex   <- @keyword{i"reindex" !ident_char}
-*kw_analyze   <- @keyword{i"analyze" !ident_char}
-*kw_explain   <- @keyword{i"explain" !ident_char}
-*kw_query     <- @keyword{i"query" !ident_char}
-*kw_plan      <- @keyword{i"plan" !ident_char}
+%kw_create    <- @keyword{i"create"}
+%kw_table     <- @keyword{i"table"}
+%kw_alter     <- @keyword{i"alter"}
+%kw_drop      <- @keyword{i"drop"}
+%kw_rename    <- @keyword{i"rename"}
+%kw_add       <- @keyword{i"add"}
+%kw_column    <- @keyword{i"column"}
+%kw_if        <- @keyword{i"if"}
+%kw_temp      <- @keyword{i"temp"}
+%kw_temporary <- @keyword{i"temporary"}
+%kw_primary   <- @keyword{i"primary"}
+%kw_key       <- @keyword{i"key"}
+%kw_unique    <- @keyword{i"unique"}
+%kw_check     <- @keyword{i"check"}
+%kw_null      <- @keyword{i"null"}
+%kw_references <- @keyword{i"references"}
+%kw_generated <- @keyword{i"generated"}
+%kw_always    <- @keyword{i"always"}
+%kw_stored    <- @keyword{i"stored"}
+%kw_virtual   <- @keyword{i"virtual"}
+%kw_constraint<- @keyword{i"constraint"}
+%kw_foreign   <- @keyword{i"foreign"}
+%kw_action    <- @keyword{i"action"}
+%kw_cascade   <- @keyword{i"cascade"}
+%kw_restrict  <- @keyword{i"restrict"}
+%kw_deferrable<- @keyword{i"deferrable"}
+%kw_initially <- @keyword{i"initially"}
+%kw_immediate <- @keyword{i"immediate"}
+%kw_deferred  <- @keyword{i"deferred"}
+%kw_autoincrement <- @keyword{i"autoincrement"}
+%kw_rowid     <- @keyword{i"rowid"}
+%kw_strict    <- @keyword{i"strict"}
+%kw_without   <- @keyword{i"without"}
+%kw_to        <- @keyword{i"to"}
+%kw_index     <- @keyword{i"index"}
+%kw_view      <- @keyword{i"view"}
+%kw_trigger   <- @keyword{i"trigger"}
+%kw_before    <- @keyword{i"before"}
+%kw_after     <- @keyword{i"after"}
+%kw_instead   <- @keyword{i"instead"}
+%kw_of        <- @keyword{i"of"}
+%kw_for       <- @keyword{i"for"}
+%kw_each      <- @keyword{i"each"}
+%kw_begin     <- @keyword{i"begin"}
+%kw_commit    <- @keyword{i"commit"}
+%kw_transaction <- @keyword{i"transaction"}
+%kw_savepoint <- @keyword{i"savepoint"}
+%kw_release   <- @keyword{i"release"}
+%kw_exclusive <- @keyword{i"exclusive"}
+%kw_pragma    <- @keyword{i"pragma"}
+%kw_vacuum    <- @keyword{i"vacuum"}
+%kw_attach    <- @keyword{i"attach"}
+%kw_detach    <- @keyword{i"detach"}
+%kw_database  <- @keyword{i"database"}
+%kw_reindex   <- @keyword{i"reindex"}
+%kw_analyze   <- @keyword{i"analyze"}
+%kw_explain   <- @keyword{i"explain"}
+%kw_query     <- @keyword{i"query"}
+%kw_plan      <- @keyword{i"plan"}
 
 # Keyword negative-lookahead for the identifier rule.
 #
@@ -727,9 +737,10 @@ literal     <- blob_lit / string_lit / @number{number_body} / null_lit / bool_li
 #   NATURAL > NULL > NOT            (N-prefix)
 #   OFFSET > ORDER / OUTER > ON / OR (O-prefix)
 #
-# `!ident_char` is applied once on the outside so each body stays
-# boundary-free.
-*keyword_word <-
+# The `%` marker appends one `wb` boundary after the whole alternation
+# (this rule has no capture, so it isn't distributed per branch), which
+# keeps each body boundary-free.
+%keyword_word <-
     ( i"autoincrement"  # 13
     / i"transaction"    # 11
     / i"constraint"     # 10
@@ -854,7 +865,7 @@ literal     <- blob_lit / string_lit / @number{number_body} / null_lit / bool_li
     / i"on"             # 2
     / i"or"             # 2
     / i"to"             # 2
-    ) !ident_char
+    )
 
 # --- Whitespace & comments -------------------------------------------
 
