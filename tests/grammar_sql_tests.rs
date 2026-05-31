@@ -357,6 +357,37 @@ fn float_variants() {
 }
 
 #[test]
+fn number_literal_does_not_span_whitespace() {
+    // Numeric forms are atomic: `1 . 5` must not lex as a single number
+    // (no trivia injected inside a numeric literal).
+    let input = "SELECT 1 . 5";
+    let (_, caps, kinds, _) = run(input);
+    let nums = spans_for(&caps, &kinds, "number", input);
+    assert!(
+        nums.iter().all(|n| !n.contains(' ')),
+        "no number literal should contain whitespace: {nums:?}"
+    );
+    assert!(
+        nums.contains(&"1"),
+        "`1` should be the number literal: {nums:?}"
+    );
+}
+
+#[test]
+fn hex_literal_requires_word_boundary() {
+    // `0x1Fg` must not lex `0x1F` as a number: the hex boundary rejects the
+    // partial match (`g` is an identifier char), so it falls back to the
+    // integer `0` followed by the identifier `x1Fg`.
+    let input = "SELECT 0x1Fg";
+    let (_, caps, kinds, _) = run(input);
+    let nums = spans_for(&caps, &kinds, "number", input);
+    assert!(
+        !nums.contains(&"0x1F"),
+        "hex word boundary should reject `0x1F` before `g`: {nums:?}"
+    );
+}
+
+#[test]
 fn null_true_false_are_constants() {
     for (input, expected) in [
         ("SELECT NULL", "NULL"),
