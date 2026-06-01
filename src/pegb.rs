@@ -706,10 +706,10 @@ mod tests {
 
     #[test]
     fn smallest_program_round_trips() {
-        // Trivial one-rule grammar: `start <- "x"`. Compiles to a
+        // Trivial one-rule grammar: `start = "x"`. Compiles to a
         // bootstrap `Call` + `End` plus the rule body wrapped in
         // `RuleEnter`/`MemoClose`/`Return`.
-        let p = pegc::compile("root <- \"x\"").unwrap();
+        let p = pegc::compile("root = \"x\"").unwrap();
         assert_roundtrip(&p);
     }
 

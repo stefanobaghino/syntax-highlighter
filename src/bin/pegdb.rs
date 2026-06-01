@@ -448,7 +448,7 @@ fn run_recoveries_explain(args: &[String]) -> ExitCode {
     // carries a label — labeled catches (`^label`) use the author's
     // identifier; `*^` uses the intern of its `recovery_kind` string.
     // Trailing rule_stack frames marked trivia (reached from a
-    // `trivia <- …` reserved-name root) are popped before the key is
+    // `trivia = …` reserved-name root) are popped before the key is
     // built, so two diagnostics that bottom out in different trivia
     // merge into one cluster on the deepest semantic rule. BTreeMap
     // preserves a stable key order for deterministic output.
@@ -632,7 +632,7 @@ fn compute_recovery_span_aggregates(
 
 /// Pop trailing trivia frames from `stack`. A frame is trivia when its
 /// `MemoId.0` indexes a `true` slot in `rule_is_trivia` (cascaded from
-/// the reserved `trivia <- …` rule at compile time). Both
+/// the reserved `trivia = …` rule at compile time). Both
 /// `recoveries explain` and `recoveries dump` use this to keep the
 /// displayed leaf on a semantically interesting rule rather than `ws`
 /// or `line_comment`.

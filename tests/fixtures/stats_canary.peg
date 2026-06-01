@@ -1,1 +1,1 @@
-root <- 'a' / @keyword{'b'}
+root = 'a' / @keyword{'b'}

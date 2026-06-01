@@ -23,111 +23,111 @@
 # malformed declarations inside a rule/at-rule body resync at the
 # closing `}` instead of failing the enclosing statement.
 
-root          <- (statement)*^
+root = (statement)*^
 
-trivia        <- (comment / \s)*
+trivia = (comment / \s)*
 
-statement     <- at_rule
-                / rule
+statement = at_rule
+           / rule
 
 # --- At-rules --------------------------------------------------------
 
-at_rule       <- at_name prelude (block / @punctuation{';'})
-*at_name      <- @keyword{'@' ident_body+}
+at_rule = at_name prelude (block / @punctuation{';'})
+*at_name = @keyword{'@' ident_body+}
 
 # Prelude: tokens up to `{` or `;` — sequences of value-like tokens.
-prelude       <- prelude_token*
-prelude_token <- string_lit
-                / fn_call
-                / hex_color
-                / number_with_unit
-                / @keyword{'!important'}
-                / @type{ident}
-                / @punctuation{'('} prelude @punctuation{')'}
-                / @punctuation{','}
-                / @punctuation{':'}
-                / @operator{'='}
-                / @operator{'+'}
-                / @operator{'-'}
-                / @operator{'*'}
-                / @operator{'/'}
-                / @operator{'>'}
+prelude = prelude_token*
+prelude_token = string_lit
+               / fn_call
+               / hex_color
+               / number_with_unit
+               / @keyword{'!important'}
+               / @type{ident}
+               / @punctuation{'('} prelude @punctuation{')'}
+               / @punctuation{','}
+               / @punctuation{':'}
+               / @operator{'='}
+               / @operator{'+'}
+               / @operator{'-'}
+               / @operator{'*'}
+               / @operator{'/'}
+               / @operator{'>'}
 
 # --- Rules -----------------------------------------------------------
 
-rule          <- selector_list block
-selector_list <- selector (@punctuation{','} selector)*
-selector      <- compound_selector combinator_and_next*
-combinator_and_next <- @operator{'>'} compound_selector
-                     / @operator{'+'} compound_selector
-                     / @operator{'~'} compound_selector
-                     / compound_selector
+rule = selector_list block
+selector_list = selector (@punctuation{','} selector)*
+selector = compound_selector combinator_and_next*
+combinator_and_next = @operator{'>'} compound_selector
+                    / @operator{'+'} compound_selector
+                    / @operator{'~'} compound_selector
+                    / compound_selector
 
-compound_selector <- selector_atom+
-*selector_atom <- @property{'.' ident}
-                / @constant{'#' ident}
-                / @function{'::' ident pseudo_args?}
-                / @function{':' ident pseudo_args?}
-                / @punctuation{'['} (.. ']') @punctuation{']'}
-                / @punctuation{'&'}
-                / @punctuation{'*'}
-                / @type{ident}
+compound_selector = selector_atom+
+*selector_atom = @property{'.' ident}
+               / @constant{'#' ident}
+               / @function{'::' ident pseudo_args?}
+               / @function{':' ident pseudo_args?}
+               / @punctuation{'['} (.. ']') @punctuation{']'}
+               / @punctuation{'&'}
+               / @punctuation{'*'}
+               / @type{ident}
 
-*pseudo_args  <- '(' ..= ')'
+*pseudo_args = '(' ..= ')'
 
 # --- Blocks & declarations ------------------------------------------
 
-block         <- @punctuation{'{'} (block_item* @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
-block_item    <- at_rule
-                / declaration
-                / rule
-                / @punctuation{';'}
+block = @punctuation{'{'} (block_item* @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
+block_item = at_rule
+            / declaration
+            / rule
+            / @punctuation{';'}
 
 # Trailing `important? (';' / &'}')` leniency is absorbed by `block`'s `^block_close`.
-~declaration  <- @property{prop_ident} @punctuation{':'} value_list
-                 @keyword{'!important'}? (@punctuation{';'} / &'}')
+~declaration = @property{prop_ident} @punctuation{':'} value_list
+               @keyword{'!important'}? (@punctuation{';'} / &'}')
 
-*prop_ident   <- '--' ident_body+
-                / '-'? ident
+*prop_ident = '--' ident_body+
+             / '-'? ident
 
 # --- Values ---------------------------------------------------------
 
-value_list    <- value_term (@punctuation{','} value_term)*
-value_term    <- value_factor+
-value_factor  <- string_lit
-                / fn_call
-                / hex_color
-                / number_with_unit
-                / url_unquoted
-                / @variable{ident}
-                / @operator{'/'}
-                / @operator{'+'}
-                / @operator{'-'}
-                / @operator{'*'}
+value_list = value_term (@punctuation{','} value_term)*
+value_term = value_factor+
+value_factor = string_lit
+              / fn_call
+              / hex_color
+              / number_with_unit
+              / url_unquoted
+              / @variable{ident}
+              / @operator{'/'}
+              / @operator{'+'}
+              / @operator{'-'}
+              / @operator{'*'}
 
-fn_call       <- @function{ident} @punctuation{'('} fn_args? @punctuation{')'}
-fn_args       <- value_term (@punctuation{','} value_term)*
+fn_call = @function{ident} @punctuation{'('} fn_args? @punctuation{')'}
+fn_args = value_term (@punctuation{','} value_term)*
 
 # Unquoted `url(...)` arg — bare text till the closing paren.
-url_unquoted  <- @function{'url'} @punctuation{'('} @string{.. ')'} @punctuation{')'}
+url_unquoted = @function{'url'} @punctuation{'('} @string{.. ')'} @punctuation{')'}
 
 # --- Literals -------------------------------------------------------
 
-*hex_color    <- @constant{'#' [\da-fA-F]+}
+*hex_color = @constant{'#' [\da-fA-F]+}
 
-number_with_unit <- @number{num_body}
+number_with_unit = @number{num_body}
 
 # Trailing `num_unit?` leniency: unitless numbers stop at the next non-unit byte; outer recovery handles malformed values.
-*~num_body    <- [+\-]? (num_float / \d+) num_unit?
-*num_float    <- \d* '.' \d+
-                / \d+ '.' \d*
-num_unit      <- '%'
-                / ident
+*~num_body = [+\-]? (num_float / \d+) num_unit?
+*num_float = \d* '.' \d+
+            / \d+ '.' \d*
+num_unit = '%'
+          / ident
 
-string_lit    <- @string{dq_string / sq_string}
-*dq_string    <- '"' (str_escape / !'"' !'\n' .)* '"'
-*sq_string    <- "'" (str_escape / !"'" !'\n' .)* "'"
-*str_escape   <- '\\' .
+string_lit = @string{dq_string / sq_string}
+*dq_string = '"' (str_escape / !'"' !'\n' .)* '"'
+*sq_string = "'" (str_escape / !"'" !'\n' .)* "'"
+*str_escape = '\\' .
 
 # --- Identifiers ----------------------------------------------------
 
@@ -135,20 +135,20 @@ string_lit    <- @string{dq_string / sq_string}
 # code point (≥ U+0080) | css_escape; ident code point = ident-start |
 # digit | -. The escape is `\` followed by 1-6 hex digits and an
 # optional trailing whitespace (consumed by the escape, not the ident).
-*ident        <- (ident_start_char / css_escape) (ident_body_char / css_escape)*
-ident_start_char <- [A-Za-z_\-\u{80}-\u{10FFFF}]
-ident_body_char  <- [A-Za-z\d_\-\u{80}-\u{10FFFF}]
-ident_body    <- ident_body_char / css_escape
+*ident = (ident_start_char / css_escape) (ident_body_char / css_escape)*
+ident_start_char = [A-Za-z_\-\u{80}-\u{10FFFF}]
+ident_body_char = [A-Za-z\d_\-\u{80}-\u{10FFFF}]
+ident_body = ident_body_char / css_escape
 # Per CSS Syntax Module L3 §4.6 an escape is `\\` followed by either
 # 1-6 hex digits (plus optional trailing whitespace) or any non-newline
 # code point. The broader "any non-newline byte" form covers both
 # cases for highlighter purposes; encoding the hex-digit-count
 # refinement separately would force a partial-match call site that
 # trips the lint.
-*css_escape   <- '\\' !\R .
+*css_escape = '\\' !\R .
 
 # --- Whitespace / comments -----------------------------------------
 #
 # CSS has only block comments.
 
-*comment      <- @comment{'/*' ..= '*/'}
+*comment = @comment{'/*' ..= '*/'}

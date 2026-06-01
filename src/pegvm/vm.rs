@@ -1764,7 +1764,7 @@ mod examined_max_tests {
 
     #[test]
     fn and_predicate_success_records_examined_past_end_sp() {
-        // root <- consumer &"y"; consumer <- "x"   against "xy"
+        // root = consumer &"y"; consumer = "x"   against "xy"
         // `consumer`'s memo entry is the focus: end_sp=1 (matched "x")
         // but examined_max must be 1 (only position 0 was read inside
         // consumer). `root`'s subsequent `&"y"` is a sibling of the
@@ -1798,7 +1798,7 @@ mod examined_max_tests {
 
     #[test]
     fn and_predicate_failure_records_examined_up_to_failed_read() {
-        // start <- "x" &"z"   against "xy"
+        // start = "x" &"z"   against "xy"
         // "x" succeeds (sp=1), then &"z" reads 'y' at sp=1 and fails.
         // The failure entry for start at sp=0 must remember that
         // position 1 was examined, so an edit there can invalidate it.
@@ -1828,8 +1828,8 @@ mod examined_max_tests {
 
     #[test]
     fn nested_rule_examined_max_propagates_to_caller() {
-        // root <- inner "y"
-        // inner <- "x"
+        // root = inner "y"
+        // inner = "x"
         // against "xy".  inner's entry: end_sp=1, examined_max=1.
         // root's entry: end_sp=2 (the body span), but examined_max=3
         // because the synthesized `!.` at root's tail reads one byte
@@ -1873,8 +1873,8 @@ mod examined_max_tests {
         // whichever rule encloses the call.
         //
         // Grammar:
-        //   start <- (X "aa") / (X "bb")
-        //   X <- "a"
+        //   start = (X "aa") / (X "bb")
+        //   X = "a"
         // Input: "abb" — first alt fails after X matches "a" and "aa"
         // fails on "bb"; backtrack to second alt, which hits X's cache
         // and then matches "bb".
@@ -1911,7 +1911,7 @@ mod examined_max_tests {
 
     #[test]
     fn recover_repeat_propagates_examined_max_through_loop_iterations() {
-        // start <- ("ab")*^   against "abxab"
+        // start = ("ab")*^   against "abxab"
         //
         // The recovery loop runs entirely inside start's memo entry.
         // Across iterations the loop reads positions 0, 1 (success),
@@ -1965,7 +1965,7 @@ mod recovery_diagnostic_tests {
     #[test]
     fn diagnostics_empty_when_knob_off() {
         // Grammar that triggers recovery but no opt-in to diagnostics.
-        let prog = pegc::compile("root <- ([a-z]+)*^").unwrap();
+        let prog = pegc::compile("root = ([a-z]+)*^").unwrap();
         let result = VM::new_from_program(&prog, b"abc!!def").run();
         assert!(result.complete);
         assert!(
@@ -1985,7 +1985,7 @@ mod recovery_diagnostic_tests {
 
     #[test]
     fn diagnostics_one_per_recovery_byte_when_knob_on() {
-        let prog = pegc::compile("root <- ([a-z]+)*^").unwrap();
+        let prog = pegc::compile("root = ([a-z]+)*^").unwrap();
         let result = VM::new_from_program(&prog, b"abc!!def")
             .with_track_recovery_diagnostics(true)
             .run();
@@ -2029,9 +2029,9 @@ mod recovery_diagnostic_tests {
         // reached deepest *inside* `inner`, so the recorded rule_stack
         // must include `inner`.
         let src = "\
-            root <- (item)*^\n\
-            item <- inner\n\
-            inner <- [a-z]+\n";
+            root = (item)*^\n\
+            item = inner\n\
+            inner = [a-z]+\n";
         let prog = pegc::compile(src).unwrap();
         let result = VM::new_from_program(&prog, b"abc!!def")
             .with_track_recovery_diagnostics(true)

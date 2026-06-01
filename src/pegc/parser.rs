@@ -45,7 +45,7 @@ pub const ROOT_RULE: &str = "root";
 pub const TRIVIA_RULE: &str = "trivia";
 
 /// Reserved rule name for the (optional) word-boundary target. A rule
-/// marked with the `%name <- …` sigil is compiled atomic and has a
+/// marked with the `%name = …` sigil is compiled atomic and has a
 /// trailing call to [`WB_RULE`] appended inside its terminal captures by
 /// [`append_wb_check`](super::analysis::append_wb_check), so a keyword
 /// can't fire on the prefix of a longer identifier. Defining `wb` is
@@ -76,22 +76,22 @@ const MAX_REPEAT_COUNT: usize = 1024;
 #[derive(Debug, Clone)]
 pub struct Grammar {
     pub rules: HashMap<String, Pattern>,
-    /// Names of rules marked atomic with the `*name <- body` sigil. The
+    /// Names of rules marked atomic with the `*name = body` sigil. The
     /// auto-insertion rewriter skips these rules: `Sequence` items inside
     /// an atomic body don't get a synthesized `trivia` call spliced
     /// between them. The `trivia` rule itself never appears here — it
     /// carries no qualifiers; auto-insertion is disabled by omitting
     /// the rule, not by marking it.
     pub atomic_rules: HashSet<String>,
-    /// Names of rules marked with the `%name <- body` reserved-word
-    /// sigil (and the `%?name <- body` preferred-word sigil, which is a
+    /// Names of rules marked with the `%name = body` reserved-word
+    /// sigil (and the `%?name = body` preferred-word sigil, which is a
     /// subset — every `%?` rule is also here so it still gets a
     /// boundary). Each such rule is also in `atomic_rules` (so trivia is
     /// not auto-inserted inside it); membership here additionally drives
     /// [`append_wb_check`](super::analysis::append_wb_check), which
     /// appends a [`WB_RULE`] call inside the rule's terminal captures.
     pub percent_rules: HashSet<String>,
-    /// Names of rules marked with the `%?name <- body` preferred-word
+    /// Names of rules marked with the `%?name = body` preferred-word
     /// sigil — identifier-eligible distinguished tokens (Go predeclared
     /// `int` / `len`, JS contextual `async` / `let`). A strict subset of
     /// `percent_rules`: a `%?` rule still gets the [`WB_RULE`] boundary,
@@ -115,7 +115,7 @@ pub struct RuleHeader {
     pub name: String,
     /// Byte offset of the rule's identifier (after any leading `~` / `*`).
     pub name_byte: usize,
-    /// Byte offset of the first non-whitespace byte after `<-`.
+    /// Byte offset of the first non-whitespace byte after `=`.
     pub body_byte_start: usize,
     /// Byte offset just past the last byte consumed for the body.
     pub body_byte_end: usize,
@@ -165,7 +165,7 @@ impl Grammar {
     /// 2. Run [`lint_partial_match`]; any finding is a fatal
     ///    `CompileError::PartialMatchLeniency`. Anchor real bugs with
     ///    `^^lbl B` (or `^^lbl`); mark intentional leniency with `~`
-    ///    at the call site or `~name <- body` at the rule definition.
+    ///    at the call site or `~name = body` at the rule definition.
     /// 3. Inject auto-trivia calls into every non-atomic rule's body
     ///    (no-op when the grammar has no `trivia` rule).
     /// 4. Wrap `root`'s body with `trivia? body trivia? !.` (the
@@ -308,26 +308,26 @@ impl<'a> Parser<'a> {
         let mut preferred_rules: HashSet<String> = HashSet::new();
         let mut rule_headers: Vec<RuleHeader> = Vec::new();
         while self.pos < self.src.len() {
-            // Definition-level lenient marker: `~name <- body` declares
+            // Definition-level lenient marker: `~name = body` declares
             // that every call to `name` is intentionally lenient and
             // suppresses `lint_partial_match` findings at every call site
             // of `name`. The marker touches the name (no whitespace);
             // the rule's body is wrapped with `Pattern::Lenient` so the
             // lint walker sees the same shape as a per-call-site `~p`.
             //
-            // The atomic marker `*name <- body` (sibling of `~`) opts
+            // The atomic marker `*name = body` (sibling of `~`) opts
             // the rule out of trivia auto-insertion: the rewriter walks
             // the body but does not splice `trivia` between `Sequence`
             // items. The `trivia` rule carries no qualifiers; omitting it
             // (not marking it) is what disables auto-insertion.
             //
-            // The reserved-word marker `%name <- body` implies atomic and
+            // The reserved-word marker `%name = body` implies atomic and
             // additionally appends a `wb` boundary call inside the rule's
             // terminal captures (see `append_wb_check`). `%` composes with
             // `~` but is mutually exclusive with `*` — both make a rule
             // atomic, so combining them is always a mistake.
             //
-            // The preferred-word marker `%?name <- body` (the `?` touches
+            // The preferred-word marker `%?name = body` (the `?` touches
             // the `%`) is a sibling of `%`: same atomic + `wb` behavior,
             // but the rule's literals are *excluded* from the synthesized
             // `reserved` set and collected into `preferred` instead, so a
@@ -373,7 +373,7 @@ impl<'a> Parser<'a> {
             let name_byte = self.pos;
             let name = self.parse_ident()?;
             self.skip_ws();
-            self.expect_str("<-")?;
+            self.expect_str("=")?;
             self.skip_ws();
             let body_byte_start = self.pos;
             let mut pat = self.parse_choice()?;
@@ -626,7 +626,7 @@ impl<'a> Parser<'a> {
         match self.peek() {
             None => false,
             Some(b'/') | Some(b')') | Some(b'}') => false,
-            Some(b'<') => false, // start of next rule's "<-"
+            Some(b'=') => false, // start of next rule's "="
             // `^` is the catch operator at infix position — leave it
             // for `parse_catch`. Future overlays (e.g. `^!lbl` throw
             // atom, `^_` anonymous catch) live in the reserved
@@ -636,7 +636,7 @@ impl<'a> Parser<'a> {
             // `~` is a definition-level marker on the NEXT rule. There
             // is no call-site form, so `~` is never a valid in-body
             // atom-start: fall through and let the sequence terminate
-            // here, letting `parse_grammar` consume `~name <- ...`.
+            // here, letting `parse_grammar` consume `~name = ...`.
             Some(b'~') => false,
             Some(c) if is_ident_start(c) => !self.looks_like_rule_def(),
             Some(c) => is_atom_start(c),
@@ -644,7 +644,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Look ahead from the current position to determine whether what follows is
-    /// `ident <- ...` (a new rule definition) rather than a non-terminal reference
+    /// `ident = ...` (a new rule definition) rather than a non-terminal reference
     /// in an expression. Does not consume input.
     fn looks_like_rule_def(&self) -> bool {
         let mut p = self.pos;
@@ -669,7 +669,7 @@ impl<'a> Parser<'a> {
             }
             break;
         }
-        p + 1 < self.src.len() && &self.src[p..p + 2] == b"<-"
+        p < self.src.len() && self.src[p] == b'='
     }
 
     fn parse_prefix(&mut self) -> Result<Pattern, ParseError> {
@@ -867,7 +867,7 @@ impl<'a> Parser<'a> {
             Some(b'@') => self.parse_capture(),
             Some(b'\\') => self.parse_backslash_atom(),
             Some(c) if is_ident_start(c) => {
-                // Disambiguation against `name <- ...` is handled by at_prefix_start.
+                // Disambiguation against `name = ...` is handled by at_prefix_start.
                 let name = self.parse_ident()?;
                 Ok(Pattern::NonTerminal { name, span })
             }

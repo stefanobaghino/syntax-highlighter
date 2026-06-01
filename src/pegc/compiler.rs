@@ -410,7 +410,7 @@ pub(crate) fn compile_rules(rules: &HashMap<String, Pattern>) -> Result<Program,
     // Identify left-recursive rules (direct and indirect).
     let lr_rules = analyze_left_recursion(rules)?;
 
-    // Compute the per-rule trivia bit by cascading from any `trivia <- …`
+    // Compute the per-rule trivia bit by cascading from any `trivia = …`
     // reserved-name root the grammar defines. Catch-bearing rules are
     // pinned out of the cascade so their frames stay visible in
     // `pegdb recoveries explain`.

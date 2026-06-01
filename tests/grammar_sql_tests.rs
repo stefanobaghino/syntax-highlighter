@@ -626,7 +626,7 @@ fn attach_with_unknown_key_clause_keeps_prefix_kinded() {
     // ` KEY '';` suffix and must be `recovery`. Pre-fix,
     // `RecoverToScopedMax` phantom-closed every still-open capture in
     // `scoped_saved_above` at `scoped_max_sp`, producing fragments
-    // like `keyword(56,59)="rep"` (from `replace_body <- [rR][eE][pP]
+    // like `keyword(56,59)="rep"` (from `replace_body = [rR][eE][pP]
     // [lL]…` matching half of `repository` in the original SQLite
     // repro). With the unclosed-production filter in
     // `RecoverToScopedMax`, the tail contains only one-byte recovery
