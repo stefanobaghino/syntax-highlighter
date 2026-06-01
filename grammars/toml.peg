@@ -1,13 +1,13 @@
 # TOML v1.0 grammar with highlight annotations.
 #
-# The grammar keeps the `*trivia` adapter so `trivia` auto-insertion
-# is disabled grammar-wide. TOML is line-oriented — entries are
-# newline-separated via `entry_sep`, key-value pairs can't span
-# lines, and arrays / inline tables have their own whitespace
-# disciplines. Auto-inserting a trivia rule that consumes newlines
-# would let `key\n= value` parse as a single pair. Whitespace is
-# threaded explicitly via `inline_space` (horizontal only) and the
-# `entry_sep` rule (newline-terminated).
+# TOML defines no `trivia` rule, so trivia auto-insertion stays off
+# grammar-wide. TOML is line-oriented — entries are newline-separated
+# via `entry_sep`, key-value pairs can't span lines, and arrays /
+# inline tables have their own whitespace disciplines. An
+# auto-inserted rule that consumed newlines would let `key\n= value`
+# parse as a single pair. Whitespace is threaded explicitly: `blank`
+# (whitespace and comments, incl. newlines) and `inline_space`
+# (horizontal only), applied by hand at the points that allow them.
 #
 # Capture kinds used (all present in src/highlight/theme.rs):
 #   comment, property, type, string, number, constant, punctuation.
@@ -23,14 +23,15 @@
 #     kind; revisit when a theme-file is introduced.
 #   - inf / nan are @constant (like true/false), not @number.
 
-# Vertical whitespace: spaces/tabs/newlines plus comments. Each atom
+# `blank`: whitespace (incl. newlines) and comments, threaded by hand
+# — never auto-injected (TOML has no `trivia` rule). Each atom
 # consumes at least one byte, so the enclosing '*' cannot infinite-loop.
-root          <- trivia (entry (entry_sep entry)*)? trivia
+root          <- blank (entry (entry_sep entry)*)? blank
 
-*trivia       <- (comment / \s)*
+blank         <- (comment / \s)*
 
 entry         <- array_of_tables_header / table_header / pair
-entry_sep     <- inline_space comment? \R trivia
+entry_sep     <- inline_space comment? \R blank
 
 # Key-value pair: LHS key as @property, RHS value.
 pair          <- key inline_space @punctuation{'='} inline_space value
@@ -98,8 +99,8 @@ time          <- \d{2} ':' \d{2} ':' \d{2} ('.' \d+)?
 time_offset   <- 'Z' / 'z' / [+\-] \d{2} ':' \d{2}
 
 # --- Arrays (multiline, trailing comma, interior comments allowed) -----
-array         <- @punctuation{'['} trivia array_body? trivia @punctuation{']'}
-array_body    <- value (trivia @punctuation{','} trivia value)* (trivia @punctuation{','})?
+array         <- @punctuation{'['} blank array_body? blank @punctuation{']'}
+array_body    <- value (blank @punctuation{','} blank value)* (blank @punctuation{','})?
 
 # --- Inline tables (no newlines, no trailing comma per v1.0) ----------
 inline_table  <- @punctuation{'{'} inline_space inline_table_body? inline_space @punctuation{'}'}
