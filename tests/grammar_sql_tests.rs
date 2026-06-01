@@ -529,6 +529,32 @@ fn in_list_and_in_subquery() {
 }
 
 #[test]
+fn in_table_name_and_table_function() {
+    // SQLite allows the RHS of IN/NOT IN to be a bare table name or a
+    // table-valued function — `x IN tbl` ≡ `x IN (SELECT * FROM tbl)`
+    // (sqlite.org/lang_expr §IN). The table name captures as `@type`,
+    // a schema prefix too, and a table-valued function as `@function`.
+    let input = "SELECT 1 FROM t WHERE a IN phantom";
+    let (caps, kinds) = assert_complete_full(input);
+    let types = spans_for(&caps, &kinds, "type", input);
+    assert!(
+        types.contains(&"phantom"),
+        "bare table name on IN RHS should capture as type; got {types:?}"
+    );
+
+    assert_complete_full("SELECT 1 FROM t WHERE a NOT IN phantom");
+    assert_complete_full("SELECT 1 FROM t WHERE a IN main.phantom");
+
+    let tvf = "SELECT 1 FROM t WHERE a IN generate_series(1, 10)";
+    let (caps, kinds) = assert_complete_full(tvf);
+    let funcs = spans_for(&caps, &kinds, "function", tvf);
+    assert!(
+        funcs.contains(&"generate_series"),
+        "table-valued function on IN RHS should capture as function; got {funcs:?}"
+    );
+}
+
+#[test]
 fn between_and_like() {
     assert_complete_full("SELECT 1 FROM t WHERE a BETWEEN 1 AND 10");
     assert_complete_full("SELECT 1 FROM t WHERE a LIKE 'x%'");
@@ -1336,48 +1362,67 @@ fn result_column_catch_collapses_garbled_expression_into_one_span() {
 }
 
 #[test]
-fn result_column_catch_handles_unsupported_in_table_syntax() {
-    // SQLite accepts `column IN <table-name>` (set-membership against
-    // a one-column table) but this grammar's expression rules only
-    // support `IN (subquery|list)`. The `result_column` boundary
-    // lookahead turns the partial parse (`blob.rid` matches but `IN
-    // leaf` is dangling) into a `^bad_column` failure: the catch
-    // produces a single `recovery` span for `leaf AS leaf` and the
-    // surrounding column list keeps its normal captures.
+fn insert_select_with_in_table_parses_clean() {
+    // Regression for the `IN <table-name>` gap: SQLite reads
+    // `blob.rid IN leaf` as membership against table `leaf`
+    // (sqlite.org/lang_expr §IN). This used to trip the
+    // `result_column` `^bad_column` catch; it now parses cleanly with
+    // no recovery, `leaf` as a table (`@type`) and the column aliases
+    // as variables.
     let input = "INSERT OR IGNORE INTO timeline SELECT blob.rid AS blobRid, blob.rid IN leaf AS leaf, bgcolor AS bgColor FROM event;\n";
-    let (matched, caps, kinds, complete) = run(input);
-    assert!(complete, "catch should keep the parse complete");
-    assert_eq!(matched, input.len());
+    let (caps, kinds) = assert_complete_full(input);
     let recovery_spans = spans_for(&caps, &kinds, "recovery", input);
-    assert_eq!(
-        recovery_spans,
-        vec!["leaf AS leaf"],
-        "expected one recovery span covering the unsupported `IN <table-name>` tail"
-    );
-    // The `IN` keyword survives the failed attempt via the deepest-
-    // reach splice, and the following column `bgcolor AS bgColor`
-    // keeps its normal captures.
-    let kw_spans = spans_for(&caps, &kinds, "keyword", input);
     assert!(
-        kw_spans.contains(&"IN"),
-        "expected `IN` keyword from deepest-reach splice; got {kw_spans:?}"
+        recovery_spans.is_empty(),
+        "`IN <table-name>` should parse cleanly; got recovery {recovery_spans:?}"
+    );
+    let type_spans = spans_for(&caps, &kinds, "type", input);
+    assert!(
+        type_spans.contains(&"leaf"),
+        "table `leaf` on IN RHS should capture as type; got {type_spans:?}"
     );
     let var_spans = spans_for(&caps, &kinds, "variable", input);
+    for v in ["blobRid", "bgColor"] {
+        assert!(
+            var_spans.contains(&v),
+            "expected `{v}` alias to capture as variable; got {var_spans:?}"
+        );
+    }
+}
+
+#[test]
+fn where_clause_with_in_table_parses_clean() {
+    // Regression for the `NOT IN <table-name>` gap on the WHERE side:
+    // `pid NOT IN phantom` is membership against table `phantom` and
+    // now parses cleanly, with `ORDER BY` continuing normally.
+    let input = "SELECT pid FROM plink WHERE cid=42 AND pid NOT IN phantom ORDER BY isprim DESC;\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let recovery_spans = spans_for(&caps, &kinds, "recovery", input);
     assert!(
-        var_spans.contains(&"bgcolor"),
-        "expected `bgcolor` to parse normally after recovery; got {var_spans:?}"
+        recovery_spans.is_empty(),
+        "`NOT IN <table-name>` should parse cleanly; got recovery {recovery_spans:?}"
     );
+    let type_spans = spans_for(&caps, &kinds, "type", input);
+    assert!(
+        type_spans.contains(&"phantom"),
+        "table `phantom` on IN RHS should capture as type; got {type_spans:?}"
+    );
+    let kw_spans = spans_for(&caps, &kinds, "keyword", input);
+    for kw in ["NOT", "IN", "ORDER", "BY", "DESC"] {
+        assert!(
+            kw_spans.contains(&kw),
+            "expected `{kw}` keyword to be captured; got {kw_spans:?}"
+        );
+    }
 }
 
 #[test]
 fn where_clause_catch_recovers_at_clause_boundary() {
-    // Mirror of the `result_column` catch but on `where_clause`:
-    // SQLite accepts `NOT IN <table-name>`, this grammar doesn't,
-    // and the partial parse leaves `NOT IN phantom ORDER BY …`
-    // dangling. The `^bad_where` catch resyncs at the next clause
-    // keyword (here `ORDER`) so the trailing `ORDER BY isprim DESC`
+    // `where_clause` carries a `^bad_where` catch that resyncs at the
+    // next clause keyword. A garbled predicate (`%%%`) collapses into
+    // a single `recovery` span and the trailing `ORDER BY isprim DESC`
     // parses normally instead of being absorbed into recovery.
-    let input = "SELECT pid FROM plink WHERE cid=42 AND pid NOT IN phantom ORDER BY isprim DESC;\n";
+    let input = "SELECT pid FROM plink WHERE %%% ORDER BY isprim DESC;\n";
     let (matched, caps, kinds, complete) = run(input);
     assert!(complete, "catch should keep the parse complete");
     assert_eq!(matched, input.len());
@@ -1390,7 +1435,7 @@ fn where_clause_catch_recovers_at_clause_boundary() {
     // ORDER BY and its tail should highlight normally after the
     // recovery resyncs.
     let kw_spans = spans_for(&caps, &kinds, "keyword", input);
-    for kw in ["NOT", "IN", "ORDER", "BY", "DESC"] {
+    for kw in ["ORDER", "BY", "DESC"] {
         assert!(
             kw_spans.contains(&kw),
             "expected `{kw}` keyword to be captured; got {kw_spans:?}"

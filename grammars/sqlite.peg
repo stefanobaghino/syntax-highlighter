@@ -327,13 +327,18 @@ sqlite = (statement stmt_sep?)*^[;] {
     cmp_expr = bit_expr cmp_tail* {
         cmp_tail = kw_is (kw_not)? bit_expr
                  / (kw_not)? kw_between bit_expr kw_and bit_expr
-                 / (kw_not)? kw_in @punctuation '(' in_args? @punctuation ')'
+                 / (kw_not)? kw_in (@punctuation '(' in_args? @punctuation ')' / in_table)
                  / (kw_not)? kw_like bit_expr (kw_escape bit_expr)?
                  / (kw_not)? kw_glob bit_expr
                  / (kw_not)? kw_match bit_expr
                  / (kw_not)? kw_regexp bit_expr
                  / cmp_op bit_expr {
             in_args = select_stmt / expr (@punctuation ',' expr)*
+            # RHS of IN may be a bare table name or table-valued function
+            # (sqlite.org/lang_expr §IN): `x IN tbl` ≡ `x IN (SELECT * FROM tbl)`.
+            in_table = (@type bare_ident_nonkw @punctuation '.')?
+                       ( @function bare_ident_nonkw @punctuation '(' in_args? @punctuation ')'
+                       / @type bare_ident_nonkw )
             cmp_op = @operator '==' / @operator '<=' / @operator '>='
                    / @operator '!=' / @operator '<>' / @operator '='
                    / @operator '<' / @operator '>'
