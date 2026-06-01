@@ -34,7 +34,7 @@ pub struct Program {
     /// that don't use labeled failures.
     pub label_kinds: Vec<String>,
     /// Per-rule trivia flags, indexed by `MemoId.0`. `true` when the
-    /// rule is reachable from a `trivia <- …` reserved-name root in
+    /// rule is reachable from a `trivia = …` reserved-name root in
     /// the grammar; a rule containing a recovery catch is pinned out
     /// of inference so the catch's frame stays visible. The
     /// `recoveries` subcommands consult this to drop trailing trivia

@@ -446,8 +446,8 @@ fn recover_repeat_drops_unclosed_capture_from_failed_inner_attempt() {
 
 #[test]
 fn recover_repeat_inside_called_rule_returns_cleanly() {
-    // root <- "PRE" loop
-    // loop  <- "a"*^
+    // root = "PRE" loop
+    // loop  = "a"*^
     //
     // Against "PREaxa": the *^ runs to EOF, then start's Return must
     // pop a Return frame — not a Backtrack frame leaked from the loop.
@@ -784,8 +784,8 @@ fn nested_captures_flow_through_compile() {
 
 #[test]
 fn grammar_with_nonterminals() {
-    // root  <- digit+
-    // digit <- [0-9]
+    // root  = digit+
+    // digit = [0-9]
     // The `root` wrap supplies the implicit end-of-input assertion;
     // trailing non-digits now produce `complete=false`. `matched`
     // reports the deepest position reached: `!.`'s lookahead reads one
@@ -911,7 +911,7 @@ fn recover_repeat_labeled_interns_author_label() {
     // the capture kind at its hardcoded `"recovery"` — the catch
     // scope is renamed (so pegdb recoveries explain clusters under
     // "bad_thing"), but theme styling is unaffected.
-    let prog = syntax_highlighter::pegc::compile("root <- 'a'*^:bad_thing").unwrap();
+    let prog = syntax_highlighter::pegc::compile("root = 'a'*^:bad_thing").unwrap();
     assert_eq!(prog.capture_kinds, vec!["recovery".to_string()]);
     assert_eq!(prog.label_kinds, vec!["bad_thing".to_string()]);
 }
@@ -1000,8 +1000,8 @@ fn sync_set_terminates_cleanly_at_eof_without_delim() {
 
 #[test]
 fn grammar_rules_are_wrapped_in_memo_open_close() {
-    // root  <- "a"
-    // other <- "b"
+    // root  = "a"
+    // other = "b"
     // Layout (root's body wraps with `!.` for the implicit
     // end-of-input assertion: Choice / Any / FailTwice for the
     // NotPredicate):
@@ -1045,7 +1045,7 @@ fn grammar_rules_are_wrapped_in_memo_open_close() {
 
 #[test]
 fn direct_lr_rule_emits_lrbody_lrtail_skeleton() {
-    // root <- root "+" "n" / "n"
+    // root = root "+" "n" / "n"
     // Layout (no MemoClose for an LR rule — LRTail closes the body):
     //   0: Call(2)
     //   1: End
@@ -1110,7 +1110,7 @@ fn direct_lr_rule_emits_lrbody_lrtail_skeleton() {
 
 #[test]
 fn right_recursive_rule_is_not_marked_lr() {
-    // root <- "n" "+" start / "n"
+    // root = "n" "+" start / "n"
     // The recursive call is not in first-call position — "n" consumes
     // input first. Compile must use the standard Memo-kind RuleEnter
     // and MemoClose.
@@ -1146,8 +1146,8 @@ fn right_recursive_rule_is_not_marked_lr() {
 
 #[test]
 fn indirect_lr_cycle_of_2_emits_lrbody_lrtail() {
-    // a <- b "x" / "y"
-    // b <- a "z" / "w"
+    // a = b "x" / "y"
+    // b = a "z" / "w"
     // First-call SCC {a, b}; both rules must be wrapped as LR.
     let mut rules = HashMap::new();
     rules.insert(
@@ -1179,7 +1179,7 @@ fn indirect_lr_cycle_of_2_emits_lrbody_lrtail() {
     assert_eq!(lr_bodies, 2, "both SCC members must emit Lr-kind RuleEnter");
     assert_eq!(lr_tails, 2, "both SCC members must emit LRTail");
     // `a` and `b` (the SCC) must not be Memo-kind. The synthesized
-    // `root <- a` wrapper is itself Memo (root isn't in any cycle); that's
+    // `root = a` wrapper is itself Memo (root isn't in any cycle); that's
     // fine — the assertion is about the cycle members.
     let a_idx = prog.rule_names.iter().position(|n| n == "a").unwrap();
     let b_idx = prog.rule_names.iter().position(|n| n == "b").unwrap();
@@ -1203,9 +1203,9 @@ fn indirect_lr_cycle_of_2_emits_lrbody_lrtail() {
 
 #[test]
 fn indirect_lr_cycle_of_3_emits_lrbody_lrtail() {
-    // a <- b "x" / "p"
-    // b <- c "y" / "q"
-    // c <- a "z" / "r"
+    // a = b "x" / "p"
+    // b = c "y" / "q"
+    // c = a "z" / "r"
     // First-call SCC {a, b, c}; all three rules must be wrapped as LR.
     let mut rules = HashMap::new();
     rules.insert(
@@ -1247,7 +1247,7 @@ fn indirect_lr_cycle_of_3_emits_lrbody_lrtail() {
     );
     assert_eq!(lr_tails, 3, "all three SCC members must emit LRTail");
     // `a`, `b`, `c` (the SCC) must not be Memo-kind; the synthesized
-    // `root <- a` rule is Memo and that's fine.
+    // `root = a` rule is Memo and that's fine.
     let cycle: Vec<usize> = ["a", "b", "c"]
         .iter()
         .map(|n| prog.rule_names.iter().position(|r| r == *n).unwrap())
@@ -1272,8 +1272,8 @@ fn indirect_lr_cycle_of_3_emits_lrbody_lrtail() {
 
 #[test]
 fn right_recursive_two_rule_grammar_is_not_marked_lr() {
-    // a <- "x" b / "y"
-    // b <- "z" a / "w"
+    // a = "x" b / "y"
+    // b = "z" a / "w"
     // Each call site is preceded by a literal — no first-call edges, so
     // no SCC and no LR wrapping. Sanity check that the analysis isn't
     // over-eager about cross-rule recursion.
@@ -1310,8 +1310,8 @@ fn right_recursive_two_rule_grammar_is_not_marked_lr() {
 
 #[test]
 fn lr_through_nullable_prefix_is_detected() {
-    // root <- opt root "+" "n" / "n"
-    // opt   <- "x"?
+    // root = opt root "+" "n" / "n"
+    // opt   = "x"?
     // The recursive call is gated by an optional prefix; nullability
     // analysis must propagate the first-call through `opt`.
     let mut rules = HashMap::new();
@@ -1354,7 +1354,7 @@ fn cap_lit(kind: &str, s: &str) -> FollowElement {
 
 #[test]
 fn follow_set_single_rule_tail() {
-    // root <- a; a <- 'x'
+    // root = a; a = 'x'
     let mut rules = HashMap::new();
     rules.insert("root".into(), Pattern::nt("a"));
     rules.insert("a".into(), Pattern::literal("x"));
@@ -1366,7 +1366,7 @@ fn follow_set_single_rule_tail() {
 
 #[test]
 fn follow_set_sequence_after() {
-    // root <- a 'y'; a <- 'x'
+    // root = a 'y'; a = 'x'
     let mut rules = HashMap::new();
     rules.insert(
         "root".into(),
@@ -1380,7 +1380,7 @@ fn follow_set_sequence_after() {
 
 #[test]
 fn follow_set_choice_tail() {
-    // root <- a / b; a <- 'x'; b <- 'y'
+    // root = a / b; a = 'x'; b = 'y'
     let mut rules = HashMap::new();
     rules.insert(
         "root".into(),
@@ -1397,7 +1397,7 @@ fn follow_set_choice_tail() {
 
 #[test]
 fn follow_set_repeat_self() {
-    // root <- a*; a <- 'x'
+    // root = a*; a = 'x'
     let mut rules = HashMap::new();
     rules.insert("root".into(), Pattern::repeat(Pattern::nt("a")));
     rules.insert("a".into(), Pattern::literal("x"));
@@ -1418,7 +1418,7 @@ fn follow_set_repeat_self() {
 
 #[test]
 fn follow_set_nullable_skip() {
-    // root <- a b 'z'; a <- 'x'; b <- 'y'?
+    // root = a b 'z'; a = 'x'; b = 'y'?
     let mut rules = HashMap::new();
     rules.insert(
         "root".into(),
@@ -1447,7 +1447,7 @@ fn follow_set_nullable_skip() {
 
 #[test]
 fn follow_set_recursive() {
-    // list <- 'x' (',' list)?
+    // list = 'x' (',' list)?
     let mut rules = HashMap::new();
     rules.insert(
         "root".into(),
@@ -1469,7 +1469,7 @@ fn follow_set_recursive() {
 
 #[test]
 fn follow_set_capture_preserved() {
-    // root <- a @punctuation{','}; a <- 'x'
+    // root = a @punctuation{','}; a = 'x'
     let mut rules = HashMap::new();
     rules.insert(
         "root".into(),
@@ -1490,7 +1490,7 @@ fn follow_set_capture_preserved() {
 
 #[test]
 fn follow_set_predicate_lookahead() {
-    // root <- a &'y' 'z'; a <- 'x'
+    // root = a &'y' 'z'; a = 'x'
     let mut rules = HashMap::new();
     rules.insert(
         "root".into(),
@@ -1570,7 +1570,7 @@ fn finding(rule: &str, caller: &str) -> LintFinding {
 
 #[test]
 fn lint_partial_match_trailing_optional_with_eof_validator() {
-    // root <- a; a <- 'x' 'y'?
+    // root = a; a = 'x' 'y'?
     // a is called from the start rule, whose only continuation is Eof.
     // Eof rejects any non-empty leftover bytes — a validator. No flag.
     let mut rules = HashMap::new();
@@ -1588,7 +1588,7 @@ fn lint_partial_match_trailing_optional_with_eof_validator() {
 
 #[test]
 fn lint_partial_match_no_trailing_nullable_skipped() {
-    // root <- a; a <- 'x' 'y' — no trailing optional/nullable.
+    // root = a; a = 'x' 'y' — no trailing optional/nullable.
     let mut rules = HashMap::new();
     rules.insert("root".into(), Pattern::nt("a"));
     rules.insert(
@@ -1601,7 +1601,7 @@ fn lint_partial_match_no_trailing_nullable_skipped() {
 
 #[test]
 fn lint_partial_match_anchored_via_andpredicate() {
-    // root <- a &'y' 'y'; a <- 'x' 'y'?
+    // root = a &'y' 'y'; a = 'x' 'y'?
     // The AndPredicate anchors the call to a even though a's trailing
     // overlaps with what follows.
     let mut rules = HashMap::new();
@@ -1629,7 +1629,7 @@ fn lint_partial_match_anchored_via_andpredicate() {
 
 #[test]
 fn lint_partial_match_validated_by_disjoint_consumer() {
-    // root <- a 'z'; a <- 'x' 'y'?
+    // root = a 'z'; a = 'x' 'y'?
     // 'z' after a is a non-nullable consumer with FIRST={'z'} disjoint
     // from a's trailing {'y'}. The consumer validates.
     let mut rules = HashMap::new();
@@ -1650,8 +1650,8 @@ fn lint_partial_match_validated_by_disjoint_consumer() {
 
 #[test]
 fn lint_partial_match_absorbed_by_outer_catch_flagged() {
-    // root <- (a)*^[;]
-    // a <- 'x' 'y'?
+    // root = (a)*^[;]
+    // a = 'x' 'y'?
     // a's leniency at the call site is absorbed by the *^ recovery
     // wrapper — exactly the PR #101 shape.
     let mut rules = HashMap::new();
@@ -1723,14 +1723,14 @@ fn lint_partial_match_real_sqlite_grammar_unanchored_aliased_expr_flagged() {
     );
 }
 
-// ---- Definition-level lenient marker (~rule_name <- body) -----
+// ---- Definition-level lenient marker (~rule_name = body) -----
 
 #[test]
 fn definition_lenient_marker_wraps_rule_body() {
-    // `~rule <- body` parses the body with a top-level `Pattern::Lenient`
+    // `~rule = body` parses the body with a top-level `Pattern::Lenient`
     // wrap, exposing the intent to the lint via the same AST node the
     // call-site `~p` form produces.
-    let g = parse("~r <- 'a'?").expect("parse");
+    let g = parse("~r = 'a'?").expect("parse");
     assert_eq!(
         g.rules["r"].strip_spans(),
         Pattern::lenient(Pattern::optional(Pattern::literal("a"))),
@@ -1739,7 +1739,7 @@ fn definition_lenient_marker_wraps_rule_body() {
 
 #[test]
 fn definition_lenient_marker_requires_touching_name() {
-    let err = parse("~ r <- 'a'?").expect_err("space between `~` and name must error");
+    let err = parse("~ r = 'a'?").expect_err("space between `~` and name must error");
     assert!(
         err.message.contains("expected identifier"),
         "unexpected error: {}",
@@ -1751,7 +1751,7 @@ fn definition_lenient_marker_requires_touching_name() {
 fn definition_lenient_suppresses_lint_at_every_call_site() {
     // Use the Catch-absorbed shape the lint reliably flags: a
     // top-level `*^[;]` recovery loop calling a trailing-Optional rule.
-    let unmarked = parse("root <- (r)*^[;]\nr <- 'x' 'y'?").expect("parse unmarked");
+    let unmarked = parse("root = (r)*^[;]\nr = 'x' 'y'?").expect("parse unmarked");
     assert!(
         lint_partial_match(&unmarked)
             .iter()
@@ -1759,7 +1759,7 @@ fn definition_lenient_suppresses_lint_at_every_call_site() {
         "baseline: unmarked grammar should flag r"
     );
 
-    let marked = parse("root <- (r)*^[;]\n~r <- 'x' 'y'?").expect("parse marked");
+    let marked = parse("root = (r)*^[;]\n~r = 'x' 'y'?").expect("parse marked");
     let findings = lint_partial_match(&marked);
     assert!(
         !findings.iter().any(|f| f.rule == "r"),
@@ -1769,14 +1769,14 @@ fn definition_lenient_suppresses_lint_at_every_call_site() {
 
 #[test]
 fn definition_lenient_marker_is_runtime_transparent() {
-    // The `~name <-` wrap compiles to the same bytecode as the bare
+    // The `~name =` wrap compiles to the same bytecode as the bare
     // form. The marker rides a non-special helper rule — `root` (like
     // `trivia` / `wb`) rejects every qualifier.
-    let plain = parse("root <- r\nr <- 'x'+")
+    let plain = parse("root = r\nr = 'x'+")
         .expect("parse plain")
         .compile()
         .expect("compile plain");
-    let marked = parse("root <- r\n~r <- 'x'+")
+    let marked = parse("root = r\n~r = 'x'+")
         .expect("parse marked")
         .compile()
         .expect("compile marked");
@@ -1788,7 +1788,7 @@ fn definition_lenient_marker_is_runtime_transparent() {
 #[test]
 fn compile_errors_on_partial_match_leniency() {
     // `*^[;]` Catch-absorbed shape — the lint reliably flags this.
-    let g = parse("root <- (r)*^[;]\nr <- 'x' 'y'?").expect("parse");
+    let g = parse("root = (r)*^[;]\nr = 'x' 'y'?").expect("parse");
     let err = g.compile().expect_err("compile should fail");
     match err {
         syntax_highlighter::pegc::CompileError::PartialMatchLeniency(findings) => {
@@ -1803,7 +1803,7 @@ fn compile_errors_on_partial_match_leniency() {
 
 #[test]
 fn compile_succeeds_with_definition_lenient_on_flagged_rule() {
-    let g = parse("root <- (r)*^[;]\n~r <- 'x' 'y'?").expect("parse");
+    let g = parse("root = (r)*^[;]\n~r = 'x' 'y'?").expect("parse");
     g.compile()
         .expect("compile should succeed with definition-level `~r`");
 }
@@ -1812,7 +1812,7 @@ fn compile_succeeds_with_definition_lenient_on_flagged_rule() {
 fn compile_succeeds_with_boundary_catch_anchor() {
     // `^^bad ';'` lowers to `Catch { Seq(a, &';'), bad, recovery }` —
     // anchoring `a` by lookahead so the lint sees no leniency.
-    let g = parse("root <- (a ^^bad ';')*\na <- 'x' 'y'?").expect("parse");
+    let g = parse("root = (a ^^bad ';')*\na = 'x' 'y'?").expect("parse");
     g.compile()
         .expect("compile should succeed with `^^bad ';'` anchor");
 }
@@ -1823,7 +1823,7 @@ fn compile_succeeds_with_bracketed_close_catch_sugar() {
     // and whose recovery is `Seq(@recovery{(!'}' .)*}, '}')`. The
     // inner ends in `'}'` (a hard terminator), so `lint_partial_match`
     // sees no trailing-nullable shape and compilation succeeds.
-    let g = parse("root <- ('{' a '}' ^^bad ..= '}')*\na <- 'x'+").expect("parse");
+    let g = parse("root = ('{' a '}' ^^bad ..= '}')*\na = 'x'+").expect("parse");
     g.compile()
         .expect("compile should succeed with `^^bad ..= '}'` sugar");
 }
@@ -1837,7 +1837,7 @@ fn bracketed_close_catch_runs_recovery_path() {
     // exercises the recovery: skip captures `garbage` and `}` is
     // captured as `@punctuation`.
     let g = parse(
-        "root <- @punctuation{'{'} (body @punctuation{'}'} ^^bad ..= @punctuation{'}'})\nbody <- 'x'",
+        "root = @punctuation{'{'} (body @punctuation{'}'} ^^bad ..= @punctuation{'}'})\nbody = 'x'",
     )
     .expect("parse");
     let prog = g.compile().expect("compile");
@@ -1858,7 +1858,7 @@ fn bracketed_close_catch_runs_recovery_path() {
 
 #[test]
 fn compile_error_display_lists_findings() {
-    let g = parse("root <- (r)*^[;]\nr <- 'x' 'y'?").expect("parse");
+    let g = parse("root = (r)*^[;]\nr = 'x' 'y'?").expect("parse");
     let err = g.compile().expect_err("compile should fail");
     let msg = format!("{err}");
     assert!(msg.contains("partial-match leniency"));
@@ -1871,7 +1871,7 @@ fn compile_errors_on_uninferable_boundary() {
     // The start rule has no FOLLOW context other than EOF — for a
     // rule with no callers at all, the inferred boundary would be
     // empty. Construct that case via a non-start unreachable rule.
-    let g = parse("root <- 'x'\norphan <- 'a' ^^bad").expect("parse");
+    let g = parse("root = 'x'\norphan = 'a' ^^bad").expect("parse");
     let err = g.compile().expect_err("compile should fail");
     assert!(
         matches!(
@@ -1890,8 +1890,8 @@ fn auto_trivia_handles_inter_repeat_whitespace() {
     // already covers). Without the prepend, ` , 2 , 3` would fail on
     // the second iteration's leading space.
     let prog = parse(
-        "root   <- 'x' (',' 'x')*\n\
-         trivia <- ' '*",
+        "root   = 'x' (',' 'x')*\n\
+         trivia = ' '*",
     )
     .expect("parse")
     .compile()
@@ -1905,7 +1905,7 @@ fn auto_trivia_handles_inter_repeat_whitespace() {
 fn backslash_cap_r_matches_crlf_atomically() {
     // `\R` lowers to `'\r\n' / '\n' / '\r'` — CRLF is matched as one
     // two-byte unit, not two separate line breaks.
-    let g = parse("root <- \\R").expect("parse");
+    let g = parse("root = \\R").expect("parse");
     let prog = g.compile().expect("compile");
     let r = VM::new_from_program(&prog, b"\r\n").run();
     assert!(r.complete, "\\R should match CRLF");
@@ -1924,7 +1924,7 @@ fn backslash_cap_r_matches_crlf_atomically() {
 fn not_any_matches_eof() {
     // `!.` is the explicit end-of-input assertion. Verify it succeeds
     // at end-of-input and fails otherwise.
-    let g = parse("root <- !.").expect("parse");
+    let g = parse("root = !.").expect("parse");
     let prog = g.compile().expect("compile");
     let r = VM::new_from_program(&prog, b"").run();
     assert!(r.complete, "!. should match empty input");
@@ -1940,7 +1940,7 @@ fn repeat_count_matches_exact_length() {
     // produces the same VM behavior as four hand-written `\d`s.
     // The `root` wrap supplies the trailing end-of-input assertion
     // implicitly.
-    let g = parse("root <- \\d{4}").expect("parse");
+    let g = parse("root = \\d{4}").expect("parse");
     let prog = g.compile().expect("compile");
 
     let r = VM::new_from_program(&prog, b"1234").run();
@@ -1986,16 +1986,16 @@ fn all_shipped_grammars_compile_clean() {
 #[test]
 fn partial_match_leniency_carries_call_site_span_in_display() {
     // `(r)*^[;]` is the catch-absorbed shape that reliably flags — the
-    // `r` reference at line 1, col 11 is the call site the lint
+    // `r` reference at line 1, col 9 is the call site the lint
     // surfaces. The rendered Display must include `{line}:{col}` so
     // grammar authors can jump to the unanchored call directly.
-    let src = "root <- (r)*^[;]\nr <- 'x' 'y'?";
+    let src = "root = (r)*^[;]\nr = 'x' 'y'?";
     let g = parse(src).expect("parses");
     let err = g.compile().expect_err("partial-match leniency expected");
     let rendered = format!("{err}");
     assert!(
-        rendered.contains("1:10:"),
-        "expected call-site `1:10:` (the `r` reference on line 1, col 10), got:\n{rendered}",
+        rendered.contains("1:9:"),
+        "expected call-site `1:9:` (the `r` reference on line 1, col 9), got:\n{rendered}",
     );
 }
 
@@ -2005,14 +2005,14 @@ fn partial_match_leniency_finding_carries_call_site_span() {
     // the Display impl is a thin formatting layer over it. Pin the
     // structured field directly so callers (e.g. editor diagnostics)
     // get the same position the rendered text reports.
-    let src = "root <- (r)*^[;]\nr <- 'x' 'y'?";
+    let src = "root = (r)*^[;]\nr = 'x' 'y'?";
     let g = parse(src).expect("parses");
     let findings = lint_partial_match(&g);
     let f = findings
         .iter()
         .find(|f| f.rule == "r" && f.caller == "root")
         .expect("r/root finding present");
-    assert_eq!(f.call_site, Span { line: 1, col: 10 });
+    assert_eq!(f.call_site, Span { line: 1, col: 9 });
 }
 
 #[test]
@@ -2020,21 +2020,21 @@ fn cannot_infer_boundary_carries_placeholder_span_in_display() {
     // The start rule's FOLLOW seeds with EOF, so a top-level `^^lbl`
     // there resolves successfully. An unreachable rule has empty FOLLOW
     // and triggers `CannotInferBoundary` — the placeholder's span at
-    // line 2, col 15 (start of `^^bad`) surfaces through both the
+    // line 2, col 14 (start of `^^bad`) surfaces through both the
     // structured error and its Display rendering.
-    let src = "root <- 'x'\norphan <- 'a' ^^bad";
+    let src = "root = 'x'\norphan = 'a' ^^bad";
     let g = parse(src).expect("parses");
     let err = g.compile().expect_err("CannotInferBoundary expected");
     match &err {
         syntax_highlighter::pegc::CompileError::CannotInferBoundary { span, .. } => {
-            assert_eq!(*span, Span { line: 2, col: 15 });
+            assert_eq!(*span, Span { line: 2, col: 14 });
         }
         other => panic!("expected CannotInferBoundary, got: {other:?}"),
     }
     let rendered = format!("{err}");
     assert!(
-        rendered.starts_with("2:15:"),
-        "expected `2:15:` prefix, got: {rendered}",
+        rendered.starts_with("2:14:"),
+        "expected `2:14:` prefix, got: {rendered}",
     );
 }
 
@@ -2046,22 +2046,22 @@ fn pattern_nodes_carry_parser_set_spans_for_each_variant_family() {
     // Operator: `Optional` span inherits its operand's span.
     // Operator: `Capture` span = position of the `@`.
     // Operator: `Catch` span = position of the leading `^`.
-    let src = "r <- @kind{'a'?} ^lbl 'b'";
+    let src = "r = @kind{'a'?} ^lbl 'b'";
     let g = parse(src).expect("parses");
     let body = &g.rules["r"];
 
-    // Top-level is a `Catch`: span at the `^` (column 18 — `^lbl` follows
+    // Top-level is a `Catch`: span at the `^` (column 17 — `^lbl` follows
     // `@kind{'a'?} `).
     let Pattern::Catch { inner, span, .. } = body else {
         panic!("expected Catch at root, got: {body:?}");
     };
     assert_eq!(
         *span,
-        Span { line: 1, col: 18 },
+        Span { line: 1, col: 17 },
         "Catch span should anchor at `^`"
     );
 
-    // Inner is a `Capture`: span at the `@` (column 6).
+    // Inner is a `Capture`: span at the `@` (column 5).
     let Pattern::Capture {
         inner: cap_inner,
         span: cap_span,
@@ -2072,12 +2072,12 @@ fn pattern_nodes_carry_parser_set_spans_for_each_variant_family() {
     };
     assert_eq!(
         *cap_span,
-        Span { line: 1, col: 6 },
+        Span { line: 1, col: 5 },
         "Capture span should anchor at `@`"
     );
 
     // Inside the capture: `Optional` whose span inherits the operand's
-    // start position — the operand is `'a'` literal at column 12.
+    // start position — the operand is `'a'` literal at column 11.
     let Pattern::Optional {
         inner: opt_inner,
         span: opt_span,
@@ -2087,13 +2087,13 @@ fn pattern_nodes_carry_parser_set_spans_for_each_variant_family() {
     };
     assert_eq!(
         *opt_span,
-        Span { line: 1, col: 12 },
+        Span { line: 1, col: 11 },
         "Optional span should inherit operand's start (the `'`)"
     );
     let Pattern::Literal { span: lit_span, .. } = opt_inner.as_ref() else {
         panic!("expected Literal inside Optional, got: {opt_inner:?}");
     };
-    assert_eq!(*lit_span, Span { line: 1, col: 12 });
+    assert_eq!(*lit_span, Span { line: 1, col: 11 });
 }
 
 // ---- `%` reserved-word sigil + `wb` special rule -------------------
@@ -2119,7 +2119,7 @@ fn run_grammar<'a>(src: &str, input: &'a str) -> Vec<(String, &'a str)> {
 
 #[test]
 fn percent_sigil_populates_percent_and_atomic_sets() {
-    let g = parse("root <- r\ntrivia <- (\\s)*\nwb <- !'x'\n%r <- @keyword{'if'}").expect("parse");
+    let g = parse("root = r\ntrivia = (\\s)*\nwb = !'x'\n%r = @keyword{'if'}").expect("parse");
     assert!(
         g.percent_rules.contains("r"),
         "`%r` should be a percent rule"
@@ -2140,7 +2140,7 @@ fn qualifier_on_special_rule_is_rejected() {
     // not by qualifying it.
     for name in ["root", "trivia", "wb"] {
         for qual in ["*", "~", "%", "%?"] {
-            let src = format!("{qual}{name} <- 'a'");
+            let src = format!("{qual}{name} = 'a'");
             let err = parse(&src).expect_err("a qualifier on a special rule must error");
             assert!(
                 err.message.contains("cannot carry a qualifier"),
@@ -2162,8 +2162,8 @@ fn percent_composes_with_lenient() {
     // `~%name` and `%~name` both parse: `~` (lenient) and `%`
     // (reserved-word) are independent markers.
     for src in [
-        "root <- r\ntrivia <- (\\s)*\nwb <- !'x'\n~%r <- @keyword{'if'}",
-        "root <- r\ntrivia <- (\\s)*\nwb <- !'x'\n%~r <- @keyword{'if'}",
+        "root = r\ntrivia = (\\s)*\nwb = !'x'\n~%r = @keyword{'if'}",
+        "root = r\ntrivia = (\\s)*\nwb = !'x'\n%~r = @keyword{'if'}",
     ] {
         let g = parse(src).unwrap_or_else(|e| panic!("parse {src:?}: {}", e.message));
         assert!(
@@ -2177,13 +2177,13 @@ fn percent_composes_with_lenient() {
 fn percent_rule_appends_wb_inside_capture() {
     // `%kw_if` must match the keyword `if` but not fire on `ifx`, and
     // (the leak guard) must leave no stray `if` capture behind on `ifx`.
-    let src = "root <- (token)*^\n\
-               trivia <- (\\s)*\n\
-               wb <- !ident_body\n\
-               token <- kw_if / @variable{ident}\n\
-               %kw_if <- @keyword{'if'}\n\
-               *ident <- [a-z] ident_body*\n\
-               ident_body <- [a-z0-9_]";
+    let src = "root = (token)*^\n\
+               trivia = (\\s)*\n\
+               wb = !ident_body\n\
+               token = kw_if / @variable{ident}\n\
+               %kw_if = @keyword{'if'}\n\
+               *ident = [a-z] ident_body*\n\
+               ident_body = [a-z0-9_]";
     assert_eq!(
         run_grammar(src, "if ifx if"),
         vec![
@@ -2198,7 +2198,7 @@ fn percent_rule_appends_wb_inside_capture() {
 fn percent_without_wb_errors_undefined_rule() {
     // A `%` rule emits a `NonTerminal("wb")`; with no `wb` defined the
     // reference surfaces as `UndefinedRule("wb")`.
-    let g = parse("root <- r\ntrivia <- (\\s)*\n%r <- @keyword{'if'}").expect("parse");
+    let g = parse("root = r\ntrivia = (\\s)*\n%r = @keyword{'if'}").expect("parse");
     match g.compile().expect_err("compile should fail without wb") {
         syntax_highlighter::pegc::CompileError::UndefinedRule(name) => assert_eq!(name, "wb"),
         other => panic!("expected UndefinedRule(\"wb\"), got: {other:?}"),
@@ -2207,7 +2207,7 @@ fn percent_without_wb_errors_undefined_rule() {
 
 #[test]
 fn percent_and_atomic_combined_is_parse_error() {
-    for src in ["%*r <- 'a'", "*%r <- 'a'"] {
+    for src in ["%*r = 'a'", "*%r = 'a'"] {
         let err = parse(src).expect_err("combining `%` and `*` must error");
         assert!(
             err.message.contains("cannot be combined"),
@@ -2220,7 +2220,7 @@ fn percent_and_atomic_combined_is_parse_error() {
 #[test]
 fn wb_must_sit_in_the_reserved_slots() {
     // `wb` after a non-reserved rule (not contiguous with `root`) errors.
-    let err = parse("root <- r\nr <- 'a'\nwb <- !'x'").expect_err("misplaced wb must error");
+    let err = parse("root = r\nr = 'a'\nwb = !'x'").expect_err("misplaced wb must error");
     assert!(
         err.message.contains("reserved slots"),
         "unexpected error: {}",
@@ -2231,14 +2231,14 @@ fn wb_must_sit_in_the_reserved_slots() {
 #[test]
 fn wb_and_trivia_compose_in_either_order() {
     // Both orderings of the two reserved slots after `root` are accepted.
-    parse("root <- 'a'\ntrivia <- (\\s)*\nwb <- !'x'").expect("trivia then wb");
-    parse("root <- 'a'\nwb <- !'x'\ntrivia <- (\\s)*").expect("wb then trivia");
+    parse("root = 'a'\ntrivia = (\\s)*\nwb = !'x'").expect("trivia then wb");
+    parse("root = 'a'\nwb = !'x'\ntrivia = (\\s)*").expect("wb then trivia");
 }
 
 #[test]
 fn wb_without_trivia_is_valid() {
     // `wb` does not require `trivia`; a grammar may define only `wb`.
-    parse("root <- r\nwb <- !'x'\n%r <- @keyword{'if'}")
+    parse("root = r\nwb = !'x'\n%r = @keyword{'if'}")
         .expect("parse")
         .compile()
         .expect("compile");
@@ -2252,8 +2252,7 @@ fn preferred_sigil_populates_preferred_and_percent_sets() {
     // also in `percent_rules` + `atomic_rules` (it still gets the `wb`
     // boundary; it differs from `%` only in which synthesized set it
     // feeds).
-    let g =
-        parse("root <- r\ntrivia <- (\\s)*\nwb <- !'x'\n%?r <- @keyword{'async'}").expect("parse");
+    let g = parse("root = r\ntrivia = (\\s)*\nwb = !'x'\n%?r = @keyword{'async'}").expect("parse");
     assert!(g.preferred_rules.contains("r"), "`%?r` should be preferred");
     assert!(
         g.percent_rules.contains("r"),
@@ -2264,7 +2263,7 @@ fn preferred_sigil_populates_preferred_and_percent_sets() {
 
 #[test]
 fn preferred_and_atomic_combined_is_parse_error() {
-    for src in ["%?*r <- 'a'", "*%?r <- 'a'"] {
+    for src in ["%?*r = 'a'", "*%?r = 'a'"] {
         let err = parse(src).expect_err("combining `%?` and `*` must error");
         assert!(
             err.message.contains("cannot be combined"),
@@ -2279,10 +2278,10 @@ fn defining_synthesized_rule_is_parse_error() {
     // `reserved` / `preferred` are compiler-generated; an explicit
     // definition (with or without a sigil) is rejected.
     for src in [
-        "reserved <- 'a'",
-        "%reserved <- 'a'",
-        "preferred <- 'a'",
-        "%?preferred <- 'a'",
+        "reserved = 'a'",
+        "%reserved = 'a'",
+        "preferred = 'a'",
+        "%?preferred = 'a'",
     ] {
         let err = parse(src).expect_err("defining a synthesized rule must error");
         assert!(
@@ -2297,7 +2296,7 @@ fn defining_synthesized_rule_is_parse_error() {
 fn reserved_preferred_conflict_errors() {
     // The same literal marked `%` (reserved) in one rule and `%?`
     // (preferred) in another is a contradiction — compile rejects it.
-    let err = parse("root <- 'x'\nwb <- !'y'\n%a <- 'int'\n%?b <- 'int'")
+    let err = parse("root = 'x'\nwb = !'y'\n%a = 'int'\n%?b = 'int'")
         .expect("parse")
         .compile()
         .expect_err("conflicting reserved/preferred must error");
@@ -2316,14 +2315,14 @@ fn synthesized_reserved_trie_and_preferred_membership() {
     // still matches `int8` maximally (#13 fixed structurally). `%?pre`
     // (`len`) is preferred, so it is excluded from `reserved` and stays
     // usable as an identifier.
-    let src = "root <- (token)*^\n\
-               trivia <- (\\s)*\n\
-               wb <- !ident_body\n\
-               token <- @keyword{kw_word} / @variable{ident}\n\
-               %kw_word <- 'int' / 'int8'\n\
-               %?pre <- 'len'\n\
-               *ident <- !reserved [a-z] ident_body*\n\
-               ident_body <- [a-z0-9]";
+    let src = "root = (token)*^\n\
+               trivia = (\\s)*\n\
+               wb = !ident_body\n\
+               token = @keyword{kw_word} / @variable{ident}\n\
+               %kw_word = 'int' / 'int8'\n\
+               %?pre = 'len'\n\
+               *ident = !reserved [a-z] ident_body*\n\
+               ident_body = [a-z0-9]";
     assert_eq!(
         run_grammar(src, "int8 len int"),
         vec![

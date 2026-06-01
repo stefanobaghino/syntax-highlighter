@@ -463,14 +463,14 @@ fn partial_match_captures_survive_backtrack_below_watermark() {
     //  1: CaptureBegin 0
     //  2: Char a
     //  3: Char b
-    //  4: Char c       <- fails here on 'd', sp was 2 → max_sp=2,
+    //  4: Char c       = fails here on 'd', sp was 2 → max_sp=2,
     //                     captures=[{kind:0,start:0,end:None}]
     //  5: CaptureEnd
     //  6: Commit L2 (=11) — unreached; Char c failure triggers Backtrack
     //                         unwind that truncates captures to 0.
     //  7: Char a     (L1, second alternative)
     //  8: Char b
-    //  9: Char x      <- fails here on 'd'
+    //  9: Char x      = fails here on 'd'
     // 10: End        (L2, unreached)
     //
     // Expect: complete=false, matched=2, one capture (kind=0, 0..2).
@@ -497,7 +497,7 @@ fn partial_match_captures_survive_backtrack_below_watermark() {
 // VM-level semantics on a raw program so VM changes can be validated
 // without going through the compiler. Equivalent grammar:
 //
-//     expr <- expr "+" "n" / "n"
+//     expr = expr "+" "n" / "n"
 //
 // Code layout:
 //

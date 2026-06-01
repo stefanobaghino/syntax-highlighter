@@ -21,7 +21,7 @@ fn cap(kind: u16, start: usize, end: usize) -> Capture {
     }
 }
 
-/// `start <- (X "aa") / (X "bb")`, `X <- [a-z]`.
+/// `start = (X "aa") / (X "bb")`, `X = [a-z]`.
 ///
 /// On input "ab" the first alternative fails after X matches at sp=0, the VM
 /// backtracks to sp=0, and the second alternative re-calls X at the same
@@ -86,9 +86,9 @@ fn memo_table_populates_on_success() {
 /// rather than mis-closing a replayed entry.
 ///
 /// Grammar:
-///   start <- outer
-///   outer <- @outer{ Inner Inner }   # two calls to Inner inside a capture
-///   Inner <- @inner{ [a-z] }
+///   start = outer
+///   outer = @outer{ Inner Inner }   # two calls to Inner inside a capture
+///   Inner = @inner{ [a-z] }
 ///
 /// On "aa": first Inner call at sp=0 produces `@inner{"a"}`. Second Inner
 /// call at sp=1 is a distinct entry (different sp) — but the structure
@@ -96,9 +96,9 @@ fn memo_table_populates_on_success() {
 /// @outer correctly.
 ///
 /// To force a true replay at the same sp, we instead use:
-///   start <- outer
-///   outer <- @outer{ (Inner "x") / (Inner "y") }
-///   Inner <- @inner{ [a-z] }
+///   start = outer
+///   outer = @outer{ (Inner "x") / (Inner "y") }
+///   Inner = @inner{ [a-z] }
 /// On "ay": first alternative fails ("ay" doesn't have trailing "x"),
 /// Inner's cached result is reused in the second alternative. The critical
 /// assertion is that the outer capture closes at sp=2 (not at sp=1 — which
@@ -160,7 +160,7 @@ fn memo_hit_inside_outer_capture_preserves_nesting() {
     assert!(stats.hits >= 1, "expected a cache hit, got {}", stats.hits);
 }
 
-/// `start <- (!A "b") / (!A "c")`, `A <- "a"`.
+/// `start = (!A "b") / (!A "c")`, `A = "a"`.
 ///
 /// On input "cx" the first alternative's `!A` succeeds because A fails at
 /// sp=0, but "b" fails at sp=0, forcing backtrack. The second alternative's
@@ -197,7 +197,7 @@ fn cached_failure_short_circuits_not_predicate() {
 }
 
 /// Nested memoized rules both failing must both land failure entries in the
-/// table — not just the innermost one. `outer <- inner "b"`, `inner <- "a"`.
+/// table — not just the innermost one. `outer = inner "b"`, `inner = "a"`.
 /// On input "x": inner fails, outer has no backtrack machinery so it also
 /// fails. Both failures must be cached.
 #[test]
@@ -232,7 +232,7 @@ fn nested_memoized_rule_failures_both_cached() {
 /// (not the `Memo` frame from the successful rule call, which `MemoClose`
 /// has already popped).
 ///
-/// `start <- (&A "z") / (&A "y")`, `A <- [a-z]`. On input "y": &A peeks and
+/// `start = (&A "z") / (&A "y")`, `A = [a-z]`. On input "y": &A peeks and
 /// succeeds at sp=0, "z" fails at sp=0, backtrack to the second alternative,
 /// &A peeks again at sp=0 (memo hit), "y" matches.
 #[test]
@@ -272,8 +272,8 @@ fn lr_converged_seed_persists_across_parses() {
     use syntax_highlighter::pegc;
     use syntax_highlighter::pegvm::MemoCache;
     let src = r#"
-        root <- expr
-        expr <- expr '+' [0-9]+ / [0-9]+
+        root = expr
+        expr = expr '+' [0-9]+ / [0-9]+
     "#;
     let prog = pegc::compile(src).expect("compile");
     let input = b"1+2+3";

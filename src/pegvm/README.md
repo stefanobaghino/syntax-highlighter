@@ -187,7 +187,7 @@ A grammar that opts into the `*^` recovery operator on a top-level repetition ca
 
 ## Left recursion
 
-The compiler detects left-recursive rules — both direct (`A <- A α / β`) and indirect (`A <- B …; B <- A …`) — by finding strongly connected components in the first-call graph (see `analyze_left_recursion` in `src/pegc/analysis.rs`). Every member of any non-trivial SCC, plus any size-1 SCC with a self-edge, emits its `RuleEnter` with `RuleKind::Lr` and closes its body with `LRTail` instead of `MemoClose`. Cross-rule cycles need no extra runtime support: `RuleEnter`'s LR miss-path lookup walks the stack and finds the right `LFrame` regardless of how many other rules sit between the call site and the frame.
+The compiler detects left-recursive rules — both direct (`A = A α / β`) and indirect (`A = B …; B = A …`) — by finding strongly connected components in the first-call graph (see `analyze_left_recursion` in `src/pegc/analysis.rs`). Every member of any non-trivial SCC, plus any size-1 SCC with a self-edge, emits its `RuleEnter` with `RuleKind::Lr` and closes its body with `LRTail` instead of `MemoClose`. Cross-rule cycles need no extra runtime support: `RuleEnter`'s LR miss-path lookup walks the stack and finds the right `LFrame` regardless of how many other rules sit between the call site and the frame.
 
 Bytecode shape for an LR rule:
 

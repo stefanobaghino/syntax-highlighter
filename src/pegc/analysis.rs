@@ -13,7 +13,7 @@ use super::pattern::{Pattern, Span};
 use crate::pegvm::CharSet;
 
 /// Returns the set of rule names that are left-recursive — both direct
-/// (`A <- A α / β`) and indirect (`A <- B …; B <- A …`). Each such rule
+/// (`A = A α / β`) and indirect (`A = B …; B = A …`). Each such rule
 /// is emitted with `RuleEnter(_, RuleKind::Lr, _)` and closed with
 /// `LRTail` instead of `MemoClose`, so its packrat slot isn't written
 /// with a value that depends on an in-progress LR seed of a sibling in
@@ -636,7 +636,7 @@ fn trailing_first(pat: &Pattern, nullable: &HashSet<String>) -> FollowSet {
         Pattern::Catch { inner, .. } => {
             out.extend(trailing_first(inner, nullable));
         }
-        // Definition-level `~name <-` opts the rule out of being a flag
+        // Definition-level `~name =` opts the rule out of being a flag
         // target: its `trailing_first` is empty regardless of body shape.
         Pattern::Lenient { .. } => {}
         _ => {}
@@ -1526,7 +1526,7 @@ pub fn inject_auto_trivia(grammar: &mut Grammar) {
         // The trivia rule itself is exempt: every `trivia_call` from
         // the rewriter calls back into it, so injecting trivia inside
         // its body would recurse the runtime indefinitely. Atomic
-        // rules opt out explicitly via the `*name <-` sigil.
+        // rules opt out explicitly via the `*name =` sigil.
         if atomic.contains(&name) || name == TRIVIA_ROOT_RULE {
             continue;
         }
@@ -1880,7 +1880,7 @@ pub fn synthesize_reserved_preferred(grammar: &mut Grammar) -> Result<(), Compil
 /// shape: a quantifier, wildcard, predicate, catch, or a reference that
 /// cycles or escapes the keyword shape. `NonTerminal`s are resolved
 /// through `rules` (with a `visiting` cycle guard) so wrappers like
-/// `%bool_lit <- @constant{bool_body}` reach their literals.
+/// `%bool_lit = @constant{bool_body}` reach their literals.
 fn keyword_entries(
     pat: &Pattern,
     rules: &HashMap<String, Pattern>,
@@ -1997,13 +1997,13 @@ mod tests {
 
     #[test]
     fn no_trivia_rule_leaves_all_bits_false() {
-        let bits = trivia_bits("root <- 'x'");
+        let bits = trivia_bits("root = 'x'");
         assert!(bits.values().all(|&b| !b));
     }
 
     #[test]
     fn trivia_rule_marks_itself_not_root() {
-        let bits = trivia_bits("root <- trivia 'x'\ntrivia <- ' '*");
+        let bits = trivia_bits("root = trivia 'x'\ntrivia = ' '*");
         assert!(bits["trivia"]);
         assert!(!bits["root"]);
     }
@@ -2011,10 +2011,10 @@ mod tests {
     #[test]
     fn trivia_cascade_reaches_transitive_callees() {
         let bits = trivia_bits(
-            "root <- trivia 'x'\n\
-             trivia <- ws\n\
-             ws <- (comment / ' ')*\n\
-             comment <- '#' (!'\\n' .)*",
+            "root = trivia 'x'\n\
+             trivia = ws\n\
+             ws = (comment / ' ')*\n\
+             comment = '#' (!'\\n' .)*",
         );
         assert!(bits["trivia"] && bits["ws"] && bits["comment"]);
         assert!(!bits["root"]);
@@ -2026,9 +2026,9 @@ mod tests {
         // is pinned out of the cascade — keeping its frame visible in
         // `pegdb recoveries explain`.
         let bits = trivia_bits(
-            "root <- trivia 'x'\n\
-             trivia <- (victim / ' ')*\n\
-             victim <- 'a' ^bad 'b'",
+            "root = trivia 'x'\n\
+             trivia = (victim / ' ')*\n\
+             victim = 'a' ^bad 'b'",
         );
         assert!(bits["trivia"]);
         assert!(!bits["victim"], "catch-bearing rule must not cascade");
@@ -2037,9 +2037,9 @@ mod tests {
     #[test]
     fn trivia_cascade_terminates_on_recursion() {
         let bits = trivia_bits(
-            "root <- trivia 'x'\n\
-             trivia <- ws\n\
-             ws <- (ws / ' ')*",
+            "root = trivia 'x'\n\
+             trivia = ws\n\
+             ws = (ws / ' ')*",
         );
         assert!(bits["trivia"] && bits["ws"]);
     }
@@ -2079,7 +2079,7 @@ mod tests {
 
     #[test]
     fn capture_less_charclass_choice_gets_one_trailing_wb() {
-        // `%t <- [ab] / [cd]` — capture-less but not all-literal, so the
+        // `%t = [ab] / [cd]` — capture-less but not all-literal, so the
         // trie path is skipped and a single trailing `wb` follows the
         // whole choice, not one per branch.
         let body = Pattern::choice(vec![
@@ -2091,7 +2091,7 @@ mod tests {
 
     #[test]
     fn capture_less_literal_choice_factors_into_trie() {
-        // `%t <- 'do' / 'double'` — all-literal, so it folds into a
+        // `%t = 'do' / 'double'` — all-literal, so it folds into a
         // longest-match trie: `do` shared, then `uble` accept vs the bare
         // `do` accept. Two accepts → two `wb`s.
         let body = Pattern::choice(vec![Pattern::literal("do"), Pattern::literal("double")]);
@@ -2108,7 +2108,7 @@ mod tests {
 
     #[test]
     fn capture_choice_distributes_wb_per_branch() {
-        // `%t <- @k{'a'} / @k{'b'}` — each capture must keep `wb` inside
+        // `%t = @k{'a'} / @k{'b'}` — each capture must keep `wb` inside
         // so a committed keyword can't leak through recovery.
         let body = Pattern::choice(vec![
             Pattern::capture("k", Pattern::literal("a")),

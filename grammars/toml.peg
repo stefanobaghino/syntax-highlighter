@@ -26,29 +26,29 @@
 # `blank`: whitespace (incl. newlines) and comments, threaded by hand
 # — never auto-injected (TOML has no `trivia` rule). Each atom
 # consumes at least one byte, so the enclosing '*' cannot infinite-loop.
-root          <- blank (entry (entry_sep entry)*)? blank
+root          =  blank (entry (entry_sep entry)*)? blank
 
-blank         <- (comment / \s)*
+blank         =  (comment / \s)*
 
-entry         <- array_of_tables_header / table_header / pair
-entry_sep     <- inline_space comment? \R blank
+entry         =  array_of_tables_header / table_header / pair
+entry_sep     =  inline_space comment? \R blank
 
 # Key-value pair: LHS key as @property, RHS value.
-pair          <- key inline_space @punctuation{'='} inline_space value
+pair          =  key inline_space @punctuation{'='} inline_space value
 
 # Section headers: path segments as @type.
-table_header              <- @punctuation{'['} inline_space key_path inline_space @punctuation{']'}
-array_of_tables_header    <- @punctuation{'[['} inline_space key_path inline_space @punctuation{']]'}
+table_header              =  @punctuation{'['} inline_space key_path inline_space @punctuation{']'}
+array_of_tables_header    =  @punctuation{'[['} inline_space key_path inline_space @punctuation{']]'}
 
 # Keys. Dotted keys are several segments joined by '.'. The two rules
 # differ only in the capture kind applied to each segment.
-key           <- key_seg_prop (inline_space @punctuation{'.'} inline_space key_seg_prop)*
-key_path      <- key_seg_type (inline_space @punctuation{'.'} inline_space key_seg_type)*
+key           =  key_seg_prop (inline_space @punctuation{'.'} inline_space key_seg_prop)*
+key_path      =  key_seg_type (inline_space @punctuation{'.'} inline_space key_seg_type)*
 
-key_seg_prop  <- @property{key_seg_body}
-key_seg_type  <- @type{key_seg_body}
-key_seg_body  <- bare_key / basic_string / literal_string
-bare_key      <- [A-Za-z\d_\-]+
+key_seg_prop  =  @property{key_seg_body}
+key_seg_type  =  @type{key_seg_body}
+key_seg_body  =  bare_key / basic_string / literal_string
+bare_key      =  [A-Za-z\d_\-]+
 
 # Values. Order matters: try longer-prefixed / more-specific alternatives
 # first so PEG's first-match semantics pick the right one.
@@ -56,7 +56,7 @@ bare_key      <- [A-Za-z\d_\-]+
 #   - inf_nan before number (share the optional sign)
 #   - float before integer (both start with digits; float distinguished
 #     by the frac/exp tail)
-value         <- @string{basic_multiline / literal_multiline / basic_string / literal_string}
+value         =  @string{basic_multiline / literal_multiline / basic_string / literal_string}
                / @constant{[+\-]? ('inf' / 'nan')}
                / @number{full_datetime / local_datetime / local_date / local_time}
                / @number{[+\-]? unsigned_dec (frac exp? / exp)}
@@ -69,44 +69,44 @@ value         <- @string{basic_multiline / literal_multiline / basic_string / li
 # Multi-line forms come first because their opening/closing delimiters
 # are longer than the single-line forms.
 
-basic_string  <- '"' ([^"\\\n\r] / escape)* '"'
-escape        <- '\\' (["\\bfnrt] / 'u' [\da-fA-F]{4} / 'U' [\da-fA-F]{8})
+basic_string  =  '"' ([^"\\\n\r] / escape)* '"'
+escape        =  '\\' (["\\bfnrt] / 'u' [\da-fA-F]{4} / 'U' [\da-fA-F]{8})
 
-basic_multiline <- '"""' ..= '"""'
+basic_multiline =  '"""' ..= '"""'
 
-literal_string  <- "'" [^'\n\r]* "'"
+literal_string  =  "'" [^'\n\r]* "'"
 
-literal_multiline <- "'''" ..= "'''"
+literal_multiline =  "'''" ..= "'''"
 
 # --- Numbers -----------------------------------------------------------
-dec_int       <- [+\-]? unsigned_dec
-unsigned_dec  <- '0' / [1-9] ('_'? \d)*
-hex_int       <- '0x' [\da-fA-F] ('_'? [\da-fA-F])*
-oct_int       <- '0o' [0-7] ('_'? [0-7])*
-bin_int       <- '0b' [01] ('_'? [01])*
+dec_int       =  [+\-]? unsigned_dec
+unsigned_dec  =  '0' / [1-9] ('_'? \d)*
+hex_int       =  '0x' [\da-fA-F] ('_'? [\da-fA-F])*
+oct_int       =  '0o' [0-7] ('_'? [0-7])*
+bin_int       =  '0b' [01] ('_'? [01])*
 
-frac          <- '.' \d ('_'? \d)*
-exp           <- [eE] [+\-]? \d ('_'? \d)*
+frac          =  '.' \d ('_'? \d)*
+exp           =  [eE] [+\-]? \d ('_'? \d)*
 
 # --- Datetime (RFC 3339 subset) ---------------------------------------
-full_datetime <- date date_time_sep time time_offset
-local_datetime <- date date_time_sep time
-local_date    <- date
-local_time    <- time
-date_time_sep <- 'T' / 't' / ' '
-date          <- \d{4} '-' \d{2} '-' \d{2}
-time          <- \d{2} ':' \d{2} ':' \d{2} ('.' \d+)?
-time_offset   <- 'Z' / 'z' / [+\-] \d{2} ':' \d{2}
+full_datetime =  date date_time_sep time time_offset
+local_datetime =  date date_time_sep time
+local_date    =  date
+local_time    =  time
+date_time_sep =  'T' / 't' / ' '
+date          =  \d{4} '-' \d{2} '-' \d{2}
+time          =  \d{2} ':' \d{2} ':' \d{2} ('.' \d+)?
+time_offset   =  'Z' / 'z' / [+\-] \d{2} ':' \d{2}
 
 # --- Arrays (multiline, trailing comma, interior comments allowed) -----
-array         <- @punctuation{'['} blank array_body? blank @punctuation{']'}
-array_body    <- value (blank @punctuation{','} blank value)* (blank @punctuation{','})?
+array         =  @punctuation{'['} blank array_body? blank @punctuation{']'}
+array_body    =  value (blank @punctuation{','} blank value)* (blank @punctuation{','})?
 
 # --- Inline tables (no newlines, no trailing comma per v1.0) ----------
-inline_table  <- @punctuation{'{'} inline_space inline_table_body? inline_space @punctuation{'}'}
-inline_table_body <- inline_pair (inline_space @punctuation{','} inline_space inline_pair)*
-inline_pair   <- key inline_space @punctuation{'='} inline_space value
+inline_table  =  @punctuation{'{'} inline_space inline_table_body? inline_space @punctuation{'}'}
+inline_table_body =  inline_pair (inline_space @punctuation{','} inline_space inline_pair)*
+inline_pair   =  key inline_space @punctuation{'='} inline_space value
 
 # --- Whitespace & comments --------------------------------------------
-inline_space  <- \h*
-comment       <- @comment{'#' .. \R}
+inline_space  =  \h*
+comment       =  @comment{'#' .. \R}

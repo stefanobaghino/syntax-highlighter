@@ -21,8 +21,8 @@ what a grammar author writes. For the compiled-bytecode side
 A `.peg` file is a sequence of rule definitions:
 
 ```peg
-name  <-  body
-name2 <-  body2
+name  =  body
+name2 =  body2
 ```
 
 - Every grammar must define a **`root` rule** — that's the entry
@@ -34,13 +34,13 @@ name2 <-  body2
   between iterations of `*` / `+`. Without a `trivia` rule, no
   auto-insertion happens.
 - An optional **`wb` rule** is the word-boundary target consumed by
-  `%` rules (see below); it is typically `wb <- !ident_body`. Defining
+  `%` rules (see below); it is typically `wb = !ident_body`. Defining
   it is only required when the grammar has at least one `%` rule.
-- Rules may carry **prefix sigils**: `~name <-` for the intentional
-  leniency marker, `*name <-` for the atomic marker (no `trivia`
-  injected inside this rule's body), `%name <-` for the reserved-word
+- Rules may carry **prefix sigils**: `~name =` for the intentional
+  leniency marker, `*name =` for the atomic marker (no `trivia`
+  injected inside this rule's body), `%name =` for the reserved-word
   marker (atomic *and* appends a trailing `wb` call inside the rule's
-  terminal captures), and `%?name <-` for the preferred-word marker (a
+  terminal captures), and `%?name =` for the preferred-word marker (a
   sibling of `%` for identifier-eligible distinguished tokens). `~`
   composes with `*` / `%` / `%?` (`~*name`, `%~name`, …); `*` and
   `%` / `%?` are mutually exclusive — both make a rule atomic. The
@@ -77,9 +77,9 @@ catch      p1 ^label p2      p1 ^^label B      p1 ^^label
 choice     p1 / p2 / p3
 ```
 
-Rule definitions may carry a top-level `~name <-` decorator to mark
+Rule definitions may carry a top-level `~name =` decorator to mark
 the whole rule as intentionally lenient — see
-[`~name <-`](#name----intentional-leniency-marker) below.
+[`~name =`](#name----intentional-leniency-marker) below.
 
 ### Atoms
 
@@ -208,7 +208,7 @@ at compile time; the highlighter resolves it back via
 `Program::capture_kinds`.
 
 ```peg
-string_lit <- @string{ '"' (!'"' .)* '"' }
+string_lit = @string{ '"' (!'"' .)* '"' }
 ```
 
 Capture names may be any valid identifier. The built-in theme
@@ -227,7 +227,7 @@ first malformed sub-element — the mechanism behind multi-statement
 resyncing after a syntax error.
 
 ```peg
-sql_file <- ws (statement)*^ ws !.
+sql_file = ws (statement)*^ ws !.
 ```
 
 `p+^` desugars to `p (p*^)` — one inner success is required, then
@@ -269,7 +269,7 @@ capture is emitted per resync region — covering the skipped bytes plus
 the delimiter — instead of one capture per skipped byte.
 
 ```peg
-sql_file <- ws (statement)*^[;] ws !.
+sql_file = ws (statement)*^[;] ws !.
 ```
 
 On input like `INSERT INTO @@@ garbage @@@; SELECT 1;` the `*^[;]` form
@@ -319,10 +319,10 @@ Two worked examples:
 
 ```peg
 # Non-consuming: the newline is left for outer whitespace handling.
-line_comment <- '//' .. '\n'
+line_comment = '//' .. '\n'
 
 # Consuming: the closing `*/` is part of the comment.
-block_comment <- '/*' ..= '*/'
+block_comment = '/*' ..= '*/'
 ```
 
 Both operators are unary today — the LHS of the skip is always `.`
@@ -343,7 +343,7 @@ captures back into the live buffer (via `RecoverToScopedMax`) and runs
 `inner` fails; on success the catch behaves exactly like its inner.
 
 ```peg
-stmt <- (assign / call) ^bad_stmt @err{ (!';' .)* } ';'
+stmt = (assign / call) ^bad_stmt @err{ (!';' .)* } ';'
 ```
 
 The `label` is mandatory: it tags this scope so `pegdb
@@ -372,8 +372,8 @@ position) and runs recovery from there. Subsumes Yacc-style error
 productions:
 
 ```peg
-stmt <- alt1 / alt2 / error ';'              # error-production style
-stmt <- (alt1 / alt2) ^bad_stmt (!';' .)* ';'  # same idea with `^`
+stmt = alt1 / alt2 / error ';'              # error-production style
+stmt = (alt1 / alt2) ^bad_stmt (!';' .)* ';'  # same idea with `^`
 ```
 
 **Difference from `*^`.** No loop and no synthetic single-byte
@@ -431,7 +431,7 @@ prefix the rule needs to commit to. Writing the operator around the
 whole rule body — e.g.
 
 ```peg
-where_clause <- kw_where ws expr ^^bad_where (ws boundary)
+where_clause = kw_where ws expr ^^bad_where (ws boundary)
 ```
 
 — would let the operator fire even when `kw_where` itself fails (no
@@ -441,7 +441,7 @@ spurious empty `recovery` capture. Push the operator past the
 unconditional prefix:
 
 ```peg
-where_clause <- kw_where ws (expr ^^bad_where (ws boundary))
+where_clause = kw_where ws (expr ^^bad_where (ws boundary))
 ```
 
 so a missing prefix fails the rule cleanly with no catch involved.
@@ -488,7 +488,7 @@ Two ways it differs from `^^lbl B`:
 Worked example (the `block` rule from `grammars/rust.peg`):
 
 ```peg
-block <- @punctuation{'{'} ws (block_body ws @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
+block = @punctuation{'{'} ws (block_body ws @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
 ```
 
 The catch fires when `block_body ws @punctuation{'}'}` fails (a
@@ -502,20 +502,20 @@ only `..=`, not `..` — the catch necessarily consumes its boundary,
 and `^^lbl .. B` would diverge from the standalone `..` non-consuming
 meaning. The parser rejects it with a hint pointing at `..=`.
 
-### `~name <-` — intentional-leniency marker
+### `~name =` — intentional-leniency marker
 
 The static `lint_partial_match` check flags trailing-nullable rules
 called unanchored — but on shipped grammars almost every flag is a
 "partial-match leniency intentionally absorbed by outer `*^`-style
 recovery" that the static analysis can't statically prove safe. The
-`~name <-` marker is the author's intent signal: "yes, this rule's
+`~name =` marker is the author's intent signal: "yes, this rule's
 leniency is known, don't flag any call to it." Wraps the rule's body
 in `Pattern::Lenient`, which the lint walker treats as an opaque
 barrier and the compiler treats as transparent (emits the inner's
 bytecode unchanged).
 
 ```peg
-~opt_semi <- (@punctuation{';'} ws)?
+~opt_semi = (@punctuation{';'} ws)?
 ```
 
 The marker must touch the name (no whitespace between `~` and the
@@ -536,7 +536,7 @@ them accepts a prefix sigil — `*` / `~` / `%` / `%?` on `root`,
   body as `trivia? root_body trivia? !.` so end-of-input is always
   asserted, and a `trivia` rule (when present) pads the leading and
   trailing whitespace. The wrap means a grammar
-  source like `root <- value` parses whole inputs, not just longest
+  source like `root = value` parses whole inputs, not just longest
   prefixes — the implicit `!.` rejects trailing junk.
 
 - **`trivia`** — the optional auto-insertion target. When defined,
@@ -558,8 +558,8 @@ them accepts a prefix sigil — `*` / `~` / `%` / `%?` on `root`,
   rules outside the `trivia` subgraph; only ignorable bytes go in.
 
   ```peg
-  trivia        <- (comment / \s)*
-  comment       <- @comment{'//' .. '\n' / '/*' ..= '*/'}
+  trivia        = (comment / \s)*
+  comment       = @comment{'//' .. '\n' / '/*' ..= '*/'}
   ```
 
   Grammars without a `trivia` rule (e.g. indent-sensitive shapes)
@@ -588,20 +588,20 @@ them accepts a prefix sigil — `*` / `~` / `%` / `%?` on `root`,
   inter-iteration whitespace is sitting in front of it.
 
 - **`wb`** — the optional word-boundary target for `%` / `%?` rules.
-  Its body is a bare boundary predicate (typically `wb <- !ident_body`,
+  Its body is a bare boundary predicate (typically `wb = !ident_body`,
   or `!ident_cont` for a Unicode-aware continuation class). The
   compiler appends a `wb` call inside the terminal captures of every
-  `%` / `%?` rule (see [`%name <-`](#name----reserved-word-marker)); it
+  `%` / `%?` rule (see [`%name =`](#name----reserved-word-marker)); it
   is required only when the grammar has at least one such rule. Like
   `trivia`, `wb` is exempt from trivia auto-insertion and must sit in
   the reserved slots immediately after `root`. It is **not** part of
   the trivia diagnostic cascade.
 
   ```peg
-  wb            <- !ident_body
+  wb            = !ident_body
   ```
 
-### `*name <-` — atomic-rule marker
+### `*name =` — atomic-rule marker
 
 A `*` prefix on the rule name opts the rule out of `trivia`
 auto-insertion: the rewriter walks the body but does not splice
@@ -610,8 +610,8 @@ iterations. The two prefix sigils compose: `~*name` and `*~name`
 are both valid.
 
 ```peg
-*string_lit   <- '"' (str_escape / !'"' .)* '"'
-*ident        <- [A-Za-z_] [A-Za-z0-9_]*
+*string_lit   = '"' (str_escape / !'"' .)* '"'
+*ident        = [A-Za-z_] [A-Za-z0-9_]*
 ```
 
 Used on token-shape rules — string / number / char literals,
@@ -622,10 +622,10 @@ non-atomic rule called from inside an atomic body still gets
 auto-insertion in its own body.
 
 For a keyword rule that also needs a trailing word boundary, prefer
-the [`%name <-`](#name----reserved-word-marker) sibling below — it is
+the [`%name =`](#name----reserved-word-marker) sibling below — it is
 atomic *and* supplies the boundary, so you don't hand-write `!ident_body`.
 
-### `%name <-` — reserved-word marker
+### `%name =` — reserved-word marker
 
 A `%` prefix marks a rule as a **reserved word**: it is compiled
 atomic (like `*`) *and* the compiler appends a call to the `wb` rule
@@ -634,9 +634,9 @@ a word boundary. This keeps a keyword from firing on the prefix of a
 longer identifier — `if` must not match the start of `ifx`.
 
 ```peg
-wb            <- !ident_body
-%kw_if        <- @keyword{'if'}
-%storage_spec <- @keyword{'typedef'} / @keyword{'extern'} / @keyword{'static'}
+wb            = !ident_body
+%kw_if        = @keyword{'if'}
+%storage_spec = @keyword{'typedef'} / @keyword{'extern'} / @keyword{'static'}
 ```
 
 The `wb` call is pushed inside each leaf capture (and distributed
@@ -662,7 +662,7 @@ longest-first so maximal munch still holds.)
   (combining them is a parse error).
 - Rejected on the reserved rules `root` / `trivia` / `wb`.
 
-### `%?name <-` — preferred-word marker
+### `%?name =` — preferred-word marker
 
 A `%?` prefix (the `?` touches the `%`) is the sibling of `%` for
 **preferred words**: identifier-eligible distinguished tokens such as
@@ -674,8 +674,8 @@ synthesized set the rule's literals feed*: a `%?` rule's words go into
 identifiers.
 
 ```peg
-%?predeclared_type <- 'int8' / 'int16' / 'int'   # Go: shadowable
-%?kw_async         <- @keyword{'async'}          # JS: contextual
+%?predeclared_type = 'int8' / 'int16' / 'int'   # Go: shadowable
+%?kw_async         = @keyword{'async'}          # JS: contextual
 ```
 
 - Same requirements / composition / rejections as `%`.
@@ -692,7 +692,7 @@ The compiler synthesizes two rules from the `%` / `%?` rules above:
   identifier position without hand-maintaining a list:
 
   ```peg
-  *ident <- !reserved [A-Za-z_] [A-Za-z0-9_]*
+  *ident = !reserved [A-Za-z_] [A-Za-z0-9_]*
   ```
 
 - **`preferred`** — every literal of a `%?` rule. Materialized for
@@ -704,7 +704,7 @@ maximal-munch: `int` is reserved, but `integer` — a longer word that
 merely starts with it — is not. A rule whose body isn't a fixed keyword
 shape (it has a quantifier / wildcard / predicate, e.g. a number body
 like `'0x' [\da-fA-F]+`) contributes nothing; keep such boundary-only
-helpers as `*name <- … wb` rather than `%`. Authors **reference** these
+helpers as `*name = … wb` rather than `%`. Authors **reference** these
 two names but never **define** them (a definition is a parse error).
 
 ### Reserved syntax
@@ -732,8 +732,8 @@ concrete use case.
   is tried only if `p1` fails.
 - **Predicates consume no input.** `!p` and `&p` rewind any `sp`
   advance `p` would have made, and emit no captures.
-- **Left recursion is supported.** Both direct (`A <- A α / β`) and
-  indirect (`A <- B …; B <- A …`) shapes parse left-associatively via
+- **Left recursion is supported.** Both direct (`A = A α / β`) and
+  indirect (`A = B …; B = A …`) shapes parse left-associatively via
   bounded LR (Medeiros et al. 2014 §5; see
   [`src/pegvm/README.md`](../pegvm/README.md#left-recursion)). The
   compiler wraps every member of any non-trivial first-call SCC with
@@ -758,13 +758,13 @@ concrete use case.
 ## Errors
 
 - **`ParseError`** — source is malformed. Carries line and column.
-  Examples: unterminated string, missing `<-`, duplicate rule,
+  Examples: unterminated string, missing `=`, duplicate rule,
   character-class range out of order, unknown escape.
 - **`CompileError`** — source is well-formed but semantically invalid.
   Examples: `NonTerminal("foo")` with no matching rule, a start rule
   that doesn't exist, partial-match leniency on a call site that's
   neither anchored (`^^lbl B`) nor explicitly marked intentional
-  (`~name <-`), an `^^lbl` whose call-site FOLLOW set is empty
+  (`~name =`), an `^^lbl` whose call-site FOLLOW set is empty
   so no boundary can be inferred.
 - **`Error`** — unified wrapper returned by `pegc::compile(source)`.
   `From<ParseError>` and `From<CompileError>` are provided.

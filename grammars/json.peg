@@ -1,10 +1,10 @@
 # JSON grammar with highlight annotations.
 
-root        <- value
+root        =  value
 
-trivia      <- \s*
+trivia      =  \s*
 
-value       <- @string{string}
+value       =  @string{string}
              / @number{number}
              / object
              / array
@@ -12,22 +12,22 @@ value       <- @string{string}
              / @constant{'false'}
              / @constant{'null'}
 
-object      <- @punctuation{'{'}
+object      =  @punctuation{'{'}
                (pair (@punctuation{','} pair)*)?
                @punctuation{'}'}
 
-pair        <- @property{string} @punctuation{':'} value
+pair        =  @property{string} @punctuation{':'} value
 
-array       <- @punctuation{'['}
+array       =  @punctuation{'['}
                (value (@punctuation{','} value)*)?
                @punctuation{']'}
 
-*string      <- '"' string_char* '"'
-*string_char <- '\\' ["\\/bfnrt]
+*string      =  '"' string_char* '"'
+*string_char =  '\\' ["\\/bfnrt]
               / '\\' 'u' [\da-fA-F]{4}
               / [^"\\]
 
-*number      <- '-'? int frac? exp?
-*int         <- '0' / [1-9] \d*
-*frac        <- '.' \d+
-*exp         <- [eE] [+\-]? \d+
+*number      =  '-'? int frac? exp?
+*int         =  '0' / [1-9] \d*
+*frac        =  '.' \d+
+*exp         =  [eE] [+\-]? \d+

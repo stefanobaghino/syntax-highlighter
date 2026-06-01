@@ -118,7 +118,7 @@ fn stats_json_grammar_emits_expected_record() {
 }
 
 // `tests/fixtures/stats_canary.peg` is a deliberately tiny grammar
-// (`root <- 'a' / @keyword{'b'}`) whose only purpose is pinning
+// (`root = 'a' / @keyword{'b'}`) whose only purpose is pinning
 // `stats`'s scalar output. The instruction count shifts only if pegc's
 // bytecode lowering for literals / alternation / capture wrapping
 // changes — a real signal worth catching. Shipped-grammar drift

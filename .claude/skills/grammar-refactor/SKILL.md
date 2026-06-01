@@ -17,7 +17,7 @@ A periodic cleanup sweep over `grammars/*.peg`. Each sweep tends to harvest a sm
 Each candidate falls into one of four categories. The first two are mechanical, the next two are judgment calls.
 
 1. **Char-class re-aliases (mechanical).** A rule whose body is just `[...]` (one or two character classes in sequence), and the rule name doesn't carry documentary intent beyond "this char class." Inline the class at use sites unless the name appears at many sites — a high-ref alias *is* the documentation.
-2. **Duplicate-body rules (mechanical).** Two atomic rules with byte-identical bodies under different names — e.g. a grammar carrying both `*ident_cont <- [a-zA-Z\d_]` and a separate `*ident_char <- [a-zA-Z\d_]` boundary class. Merge to one name unless the dual naming documents a future divergence.
+2. **Duplicate-body rules (mechanical).** Two atomic rules with byte-identical bodies under different names — e.g. a grammar carrying both `*ident_cont = [a-zA-Z\d_]` and a separate `*ident_char = [a-zA-Z\d_]` boundary class. Merge to one name unless the dual naming documents a future divergence.
 3. **Refs=1 single-use rules (judgment).** Many rules are referenced once. Most are NOT inline candidates — they exist to name a multi-line cascade entry, an alternation, or a spec-significant phrase. Only inline when the body is a single `name+` / `name*` / `name` / `[...]` / literal — i.e. a textbook thin wrapper.
 4. **Name ≥ body (judgment).** When the rule name is at least as long as the body string, the indirection isn't paying its way. Same evaluation as refs=1: only inline trivial wrappers.
 
@@ -42,12 +42,12 @@ The first line of each file is the header (with `instructions` and `rules` total
 **Char-class bodies (single class as the entire rule body):**
 
 ```bash
-grep -n -E '^\s*\*?[a-z_]+\s*<-\s*\[[^]]+\]\s*$' grammars/*.peg
+grep -n -E '^\s*\*?[a-z_]+\s*=\s*\[[^]]+\]\s*$' grammars/*.peg
 ```
 
 **Duplicate atomic-rule bodies (same body, different names):**
 
-Walk each grammar, normalize the body source (strip leading `*` and the `<-`), group by body string, flag groups of size > 1.
+Walk each grammar, normalize the body source (strip leading `*` and the `=`), group by body string, flag groups of size > 1.
 
 **Refs=1 (single-use) and name ≥ body:**
 
@@ -86,7 +86,7 @@ Safe shapes regardless of atomicity:
 
 When the body has internal Sequence elements (e.g. `'foo' bar baz`), inlining is **only safe when source and target rule atomicity match**. Verify by reading the `*` sigil on both rule headers before changing anything.
 
-**`%` / `%?` reserved-word rules are never inline candidates.** A `%name <-` (or `%?name <-`) rule carries an *implicit* trailing `wb` boundary that the compiler appends inside the rule's captures; the boundary is invisible in the rule body, so inlining the body silently drops it — the same class of hazard as the atomic case above, but worse because there's no `!ident_body` in the source to tip you off. The rule's literals are also collected into the synthesized `reserved` / `preferred` sets, so renaming or splitting it shifts what `!reserved` blocks. Leave `%` / `%?` rules (and the `wb` rule itself) alone.
+**`%` / `%?` reserved-word rules are never inline candidates.** A `%name =` (or `%?name =`) rule carries an *implicit* trailing `wb` boundary that the compiler appends inside the rule's captures; the boundary is invisible in the rule body, so inlining the body silently drops it — the same class of hazard as the atomic case above, but worse because there's no `!ident_body` in the source to tip you off. The rule's literals are also collected into the synthesized `reserved` / `preferred` sets, so renaming or splitting it shifts what `!reserved` blocks. Leave `%` / `%?` rules (and the `wb` rule itself) alone.
 
 ### 5. Report
 
@@ -114,5 +114,5 @@ The applied edit is mechanical at this point — the judgment was the previous s
 
 ## Reference PRs
 
-- #123 — the big sweep across all eight grammars (post-#86 / #87 cleanup; collapsed `trivia <- ws`, inlined thin aliases, folded block-comment patterns into `..=`).
+- #123 — the big sweep across all eight grammars (post-#86 / #87 cleanup; collapsed `trivia = ws`, inlined thin aliases, folded block-comment patterns into `..=`).
 - #136 — the small follow-up (four trivial single-use aliases left after #123 and the implicit-`root`/`trivia` PR #132).
