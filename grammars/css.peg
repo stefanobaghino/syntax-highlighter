@@ -1,41 +1,17 @@
-# CSS grammar with highlight annotations.
-#
-# Scope: highlighting, not conformance validation. Covers standard
-# rules, at-rules (`@media`, `@keyframes`, `@import`, ...), nested
-# rules, declarations, selectors (type/class/id/attribute/pseudo/
-# combinators, including the nesting `&`), and value forms including
-# `calc()`, `rgb()`, `var(--x)`, hex colors, and numeric literals
-# with units.
-#
-# Capture kinds used (all present in src/highlight/theme.rs):
-#   keyword, string, number, comment, operator, punctuation, type,
-#   function, constant, property, variable, recovery.
-#
-# Intentionally out of scope:
-#   - `@document`, `@container` advanced preludes (treated as generic
-#     token stream).
-#   - Full selector-list validation; we accept most practical shapes.
-#   - CSS `url(noquote)` with no quotes is supported but not the
-#     full URL whitespace rules.
-#
-# Recovery: top-level uses `*^` so malformed statements don't abort
-# the whole stylesheet; `block` uses a `^block_close` catch so
-# malformed declarations inside a rule/at-rule body resync at the
-# closing `}` instead of failing the enclosing statement.
+# TODO out of scope: `@document` / `@container` advanced preludes (treated
+# as a generic token stream); full selector-list validation (we accept most
+# practical shapes); full `url()` whitespace rules.
 
-root = (statement)*^ {
+css = (statement)*^ {
 
     ignore = (comment / \s)*
 
     statement = at_rule
                / rule
 
-    # --- At-rules --------------------------------------------------------
-
     at_rule = at_name prelude (block / @punctuation ';') {
         at_name: atomic = @keyword ('@' ident_body+)
 
-        # Prelude: tokens up to `{` or `;` — sequences of value-like tokens.
         prelude = prelude_token* {
             prelude_token = string_lit
                            / fn_call
@@ -54,8 +30,6 @@ root = (statement)*^ {
                            / @operator '>'
         }
     }
-
-    # --- Rules -----------------------------------------------------------
 
     rule = selector_list block {
         selector_list = selector (@punctuation ',' selector)* {
@@ -82,15 +56,12 @@ root = (statement)*^ {
         }
     }
 
-    # --- Blocks & declarations ------------------------------------------
-
     block = @punctuation '{' (block_item* @punctuation '}' ^^block_close ..= @punctuation '}') {
         block_item = at_rule
                     / declaration
                     / rule
                     / @punctuation ';'
         {
-            # Trailing `important? (';' / &'}')` leniency is absorbed by `block`'s `^block_close`.
             declaration: partial = @property prop_ident @punctuation ':' value_list
                                    @keyword '!important'? (@punctuation ';' / &'}')
             {
@@ -101,8 +72,6 @@ root = (statement)*^ {
             }
         }
     }
-
-    # --- Values ---------------------------------------------------------
 
     value_term = value_factor+ {
         value_factor = string_lit
@@ -116,7 +85,6 @@ root = (statement)*^ {
                       / @operator '-'
                       / @operator '*'
         {
-            # Unquoted `url(...)` arg — bare text till the closing paren.
             url_unquoted = @function 'url' @punctuation '(' @string (.. ')') @punctuation ')'
         }
     }
@@ -125,12 +93,9 @@ root = (statement)*^ {
         fn_args = value_term (@punctuation ',' value_term)*
     }
 
-    # --- Literals -------------------------------------------------------
-
     hex_color: atomic = @constant ('#' [\da-fA-F]+)
 
     number_with_unit = @number num_body {
-        # Trailing `num_unit?` leniency: unitless numbers stop at the next non-unit byte; outer recovery handles malformed values.
         num_body: partial atomic = [+\-]? (num_float / \d+) num_unit? {
             num_float: atomic = \d* '.' \d+
                                / \d+ '.' \d*
@@ -145,28 +110,14 @@ root = (statement)*^ {
         str_escape: atomic = '\\' .
     }
 
-    # --- Identifiers ----------------------------------------------------
-
-    # Per CSS Syntax Module L3 §4.6: ident-start = letter | _ | non-ASCII
-    # code point (≥ U+0080) | css_escape; ident code point = ident-start |
-    # digit | -. The escape is `\` followed by 1-6 hex digits and an
-    # optional trailing whitespace (consumed by the escape, not the ident).
     ident: atomic = (ident_start_char / css_escape) (ident_body_char / css_escape)* {
         ident_start_char = [A-Za-z_\-\u{80}-\u{10FFFF}]
     }
     ident_body_char = [A-Za-z\d_\-\u{80}-\u{10FFFF}]
     ident_body = ident_body_char / css_escape
-    # Per CSS Syntax Module L3 §4.6 an escape is `\\` followed by either
-    # 1-6 hex digits (plus optional trailing whitespace) or any non-newline
-    # code point. The broader "any non-newline byte" form covers both
-    # cases for highlighter purposes; encoding the hex-digit-count
-    # refinement separately would force a partial-match call site that
-    # trips the lint.
+    # Broad "any non-newline byte" escape: the precise hex-digit-count form
+    # would force a partial-match call site that trips the lint.
     css_escape: atomic = '\\' !\R .
-
-    # --- Whitespace / comments -----------------------------------------
-    #
-    # CSS has only block comments.
 
     comment: atomic = @comment ('/*' ..= '*/')
 }

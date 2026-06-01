@@ -1,36 +1,8 @@
-# TOML v1.0 grammar with highlight annotations.
-#
-# TOML defines no `ignore` rule, so ignore auto-insertion stays off
-# grammar-wide. TOML is line-oriented — entries are newline-separated
-# via `entry_sep`, key-value pairs can't span lines, and arrays /
-# inline tables have their own whitespace disciplines. An
-# auto-inserted rule that consumed newlines would let `key\n= value`
-# parse as a single pair. Whitespace is threaded explicitly: `blank`
-# (whitespace and comments, incl. newlines) and `inline_space`
-# (horizontal only), applied by hand at the points that allow them.
-#
-# Capture kinds used (all present in src/highlight/theme.rs):
-#   comment, property, type, string, number, constant, punctuation.
-#
-# Scope: the complete TOML v1.0 surface. The only deferred item is
-# semantic duplicate-key detection, which is a parser concern and not
-# expressible in PEG.
-#
-# Capture-kind notes:
-#   - Dotted key segments on the LHS of '=' are @property (cyan).
-#   - Section-header path segments inside [ ] and [[ ]] are @type (yellow).
-#   - Datetime literals are @number — the hardcoded theme has no @date
-#     kind; revisit when a theme-file is introduced.
-#   - inf / nan are @constant (like true/false), not @number.
-#
-# Lexical scoping: helper rules nest under the construct that owns them;
-# only cross-referenced rules (key, value, the string forms, the
-# whitespace threads) stay at root scope.
+# TOML defines no `ignore` rule: it's line-oriented, so auto-inserted
+# newline-skipping would let `key\n= value` parse as one pair. Whitespace
+# is threaded by hand via `blank` (incl. newlines) and `inline_space`.
 
-# `blank`: whitespace (incl. newlines) and comments, threaded by hand
-# — never auto-injected (TOML has no `ignore` rule). Each atom
-# consumes at least one byte, so the enclosing '*' cannot infinite-loop.
-root = blank (entry (entry_sep entry)*)? blank {
+toml = blank (entry (entry_sep entry)*)? blank {
 
     blank = (comment / \s)*
     inline_space = \h*
@@ -39,10 +11,8 @@ root = blank (entry (entry_sep entry)*)? blank {
     entry_sep = inline_space comment? \R blank
 
     entry = array_of_tables_header / table_header / pair {
-        # Key-value pair: LHS key as @property, RHS value.
         pair = key inline_space @punctuation '=' inline_space value
 
-        # Section headers: path segments as @type.
         table_header = @punctuation '[' inline_space key_path inline_space @punctuation ']'
         array_of_tables_header = @punctuation '[[' inline_space key_path inline_space @punctuation ']]'
 
@@ -51,8 +21,6 @@ root = blank (entry (entry_sep entry)*)? blank {
         }
     }
 
-    # Keys. Dotted keys are several segments joined by '.'. `key` and
-    # `key_path` differ only in the capture kind applied to each segment.
     key = key_seg_prop (inline_space @punctuation '.' inline_space key_seg_prop)* {
         key_seg_prop = @property key_seg_body
     }
@@ -61,21 +29,13 @@ root = blank (entry (entry_sep entry)*)? blank {
         bare_key = [A-Za-z\d_\-]+
     }
 
-    # --- Strings -------------------------------------------------------
-    # Multi-line forms come first because their opening/closing
-    # delimiters are longer than the single-line forms.
     basic_string = '"' ([^"\\\n\r] / escape)* '"' {
         escape = '\\' (["\\bfnrt] / 'u' [\da-fA-F]{4} / 'U' [\da-fA-F]{8})
     }
     literal_string = "'" [^'\n\r]* "'"
 
-    # Values. Order matters: try longer-prefixed / more-specific
-    # alternatives first so PEG's first-match semantics pick the right
-    # one.
-    #   - datetime before number (both start with digits)
-    #   - inf_nan before number (share the optional sign)
-    #   - float before integer (both start with digits; float
-    #     distinguished by the frac/exp tail)
+    # First-match hazard: multiline strings before single-line, datetime
+    # before number, and float before integer (all share a prefix).
     value = @string (basic_multiline / literal_multiline / basic_string / literal_string)
           / @constant ([+\-]? ('inf' / 'nan'))
           / @number (full_datetime / local_datetime / local_date / local_time)
@@ -88,7 +48,6 @@ root = blank (entry (entry_sep entry)*)? blank {
         basic_multiline = '"""' ..= '"""'
         literal_multiline = "'''" ..= "'''"
 
-        # --- Numbers ---------------------------------------------------
         dec_int = [+\-]? unsigned_dec
         unsigned_dec = '0' / [1-9] ('_'? \d)*
         hex_int = '0x' [\da-fA-F] ('_'? [\da-fA-F])*
@@ -98,7 +57,6 @@ root = blank (entry (entry_sep entry)*)? blank {
         frac = '.' \d ('_'? \d)*
         exp = [eE] [+\-]? \d ('_'? \d)*
 
-        # --- Datetime (RFC 3339 subset) --------------------------------
         full_datetime = date date_time_sep time time_offset
         local_datetime = date date_time_sep time
         local_date = date
@@ -108,12 +66,10 @@ root = blank (entry (entry_sep entry)*)? blank {
         time = \d{2} ':' \d{2} ':' \d{2} ('.' \d+)?
         time_offset = 'Z' / 'z' / [+\-] \d{2} ':' \d{2}
 
-        # --- Arrays (multiline, trailing comma, interior comments) -----
         array = @punctuation '[' blank array_body? blank @punctuation ']' {
             array_body = value (blank @punctuation ',' blank value)* (blank @punctuation ',')?
         }
 
-        # --- Inline tables (no newlines, no trailing comma per v1.0) ---
         inline_table = @punctuation '{' inline_space inline_table_body? inline_space @punctuation '}' {
             inline_table_body = inline_pair (inline_space @punctuation ',' inline_space inline_pair)*
             inline_pair = key inline_space @punctuation '=' inline_space value

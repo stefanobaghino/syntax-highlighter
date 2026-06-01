@@ -1,175 +1,94 @@
-# Go (pragmatic subset) grammar with highlight annotations.
-#
-# Scope: highlighting, not compilation. Parses real-world Go at the
-# token/declaration level. Precedence is flattened and semantic
-# constraints (type checking, method set resolution, package lookup)
-# are not enforced. Composite literals in control-flow headers are
-# disambiguated by a dedicated `expr_no_compound` path that Go's
-# actual grammar also needs.
-#
-# Capture kinds used (all present in src/highlight/theme.rs):
-#   keyword, string, number, comment, operator, punctuation, type,
-#   function, constant, property, variable, recovery.
-#
-# Intentionally out of scope:
-#   - Generics with type parameters are accepted structurally
-#     (`func F[T any](x T) T`) but no constraint checking.
-#   - Build tags and line directives are skipped as comments.
-#   - Raw identifier-vs-type semantic disambiguation (we color by
-#     shape: predeclared names → @type, PascalCase → @type,
-#     lowercase → @variable or @function by context).
-#
-# Recovery: top-level uses `*^` so malformed top-level declarations
-# don't abort the whole file; `block` uses a `^block_close` catch so
-# malformed function/control-flow bodies resync at the closing `}`
-# instead of failing the enclosing declaration.
+# TODO out of scope: generics constraint checking (type params accepted
+# structurally); build tags / line directives (skipped as comments);
+# identifier-vs-type semantic resolution (coloured by shape instead).
 
-root = package_clause import_decl* (top_decl)*^ {
+go = package_clause import_decl* (top_decl)*^ {
 
     ignore = (comment / \s)* {
-
         comment: atomic = @comment ('//' .. '\n' / '/*' ..= '*/')
-
     }
 
-    # Word boundary for `%` reserved-word rules: a keyword can't be the
-    # prefix of a longer identifier (Go spec identifier-continue).
     boundary = !ident_body
 
     kw_type: reserved = @keyword 'type'
-
     kw_map: reserved = @keyword 'map'
-
     kw_func: reserved = @keyword 'func'
-
     kw_struct: reserved = @keyword 'struct'
-
     kw_case: reserved = @keyword 'case'
-
     kw_default: reserved = @keyword 'default'
 
-    # --- Package / imports ----------------------------------------------
-
     package_clause = kw_package @variable ident opt_semi {
-
-        # --- Keyword tokens --------------------------------------------------
-        #
-        # One `%` reserved-word rule per keyword, referenced wherever the
-        # keyword appears so the `boundary` boundary is applied uniformly: a keyword
-        # can't fire on a longer identifier that starts with it (`funcx`).
         kw_package: reserved = @keyword 'package'
-
     }
 
     import_decl = kw_import import_spec_group opt_semi
                 / kw_import import_spec opt_semi {
-
         kw_import: reserved = @keyword 'import'
-
         import_spec_group = @punctuation '(' (import_spec opt_semi)* @punctuation ')'
-
     }
 
     import_spec = import_alias? string_lit {
-
         import_alias = @punctuation '.'
                      / @variable ident
-
     }
-
-    # --- Top-level declarations -----------------------------------------
 
     top_decl = decl
                / func_decl
                / method_decl {
-
-        # Trailing `block?` absorbed by `*^` / `^block_close`.
         func_decl: partial = kw_func @function ident type_params? fn_signature block?
 
         method_decl: partial = kw_func method_receiver @function ident fn_signature block? {
-
             method_receiver = @punctuation '(' (@variable ident)? type_expr @punctuation ')'
-
         }
-
     }
 
-    # Every alt below has trailing-optional leniency (opt_semi or block?)
-    # absorbed by `go_file`'s `*^` and `block`'s `^block_close`.
     decl: partial = kw_var var_spec_group
                   / kw_var var_spec opt_semi
                   / kw_const const_spec_group
                   / kw_const const_spec opt_semi
                   / kw_type type_spec_group
                   / kw_type type_spec opt_semi {
-
         kw_var: reserved = @keyword 'var'
-
         kw_const: reserved = @keyword 'const'
-
         var_spec_group = @punctuation '(' (var_spec opt_semi)* @punctuation ')'
-
         const_spec_group = @punctuation '(' (const_spec opt_semi)* @punctuation ')'
-
         type_spec_group = @punctuation '(' (type_spec opt_semi)* @punctuation ')'
-
     }
 
     var_spec = ident_list type_expr @operator '=' expr_list
              / ident_list type_expr
              / ident_list @operator '=' expr_list
 
-    # Trailing `(= expr)?` absorbed by outer recovery.
     const_spec: partial = const_ident_list type_expr? (@operator '=' expr_list)? {
-
         const_ident_list = @constant ident (@punctuation ',' @constant ident)*
-
     }
 
     type_spec = @type ident type_params? @operator '='? type_expr
 
-    # Generics type parameters: `[T any, U comparable]`.
     type_params = @punctuation '[' type_param_list @punctuation ']' {
-
         type_param_list = type_param (@punctuation ',' type_param)* (@punctuation ',')? {
-
             type_param = ident_list type_constraint {
-
                 type_constraint = type_union {
-
                     type_union = type_term (@operator '|' type_term)*
-
                 }
-
             }
-
         }
-
     }
 
     type_term = @operator '~' type_expr
               / type_expr
 
-    # Trailing `fn_result?` absorbed by outer recovery.
     fn_signature: partial = fn_params fn_result? {
-
         fn_result = fn_params
                   / type_expr
-
     }
 
     fn_params = @punctuation '(' fn_param_list? @punctuation ')' {
-
         fn_param_list = fn_param (@punctuation ',' fn_param)* (@punctuation ',')? {
-
             fn_param = ident_list @operator '...'? type_expr
                      / @operator '...'? type_expr
-
         }
-
     }
-
-    # --- Types -----------------------------------------------------------
 
     type_expr = type_ptr
               / type_slice_or_array
@@ -180,65 +99,43 @@ root = package_clause import_decl* (top_decl)*^ {
               / type_interface
               / type_paren
               / type_name {
-
         type_ptr = @operator '*' type_expr
-
         type_slice_or_array = @punctuation '[' (@operator '...' / expr)? @punctuation ']' type_expr
-
         type_map = kw_map @punctuation '[' type_expr @punctuation ']' type_expr
 
         type_chan = @operator '<-' kw_chan type_expr
                   / kw_chan @operator '<-' type_expr
                   / kw_chan type_expr {
-
             kw_chan: reserved = @keyword 'chan'
-
         }
 
         type_func = kw_func fn_signature
-
         type_struct = kw_struct @punctuation '{' struct_field_list? @punctuation '}'
 
         type_interface = kw_interface @punctuation '{' interface_members? @punctuation '}' {
-
             kw_interface: reserved = @keyword 'interface'
 
             interface_members = interface_member (opt_semi interface_member)* opt_semi? {
-
                 interface_member = @function ident fn_signature
                                  / type_term
-
             }
-
         }
 
         type_paren = @punctuation '(' type_expr @punctuation ')'
-
     }
 
     struct_field_list = struct_field (opt_semi struct_field)* opt_semi? {
-
         struct_field = @property ident (@punctuation ',' @property ident)* type_expr string_lit?
-                     / @operator '*'? type_name string_lit?       # embedded field
-
+                     / @operator '*'? type_name string_lit?
     }
 
-    # Trailing `type_args?` leniency absorbed by outer recovery.
     type_name: partial = @type qualified_ident type_args? {
-
         type_args = @punctuation '[' type_arg_list @punctuation ']' {
-
             type_arg_list = type_expr (@punctuation ',' type_expr)* (@punctuation ',')?
-
         }
-
     }
 
-    # `pkg.Name` or `Name`.
-    # Trailing `(.ident)?` leniency absorbed by outer recovery.
     qualified_ident: partial = ident (@punctuation '.' ident)?
-
-    # --- Statements ------------------------------------------------------
 
     block = @punctuation '{' (stmt* @punctuation '}' ^^block_close ..= @punctuation '}')
 
@@ -258,53 +155,38 @@ root = package_clause import_decl* (top_decl)*^ {
          / fallthrough_stmt
          / simple_stmt opt_semi
          / empty_stmt {
-
         empty_stmt = @punctuation ';'
-
         labeled_stmt = @variable ident @punctuation ':' stmt
 
-        # Trailing `(else (if | block))?` leniency absorbed by outer recovery.
         if_stmt: partial = kw_if (simple_stmt @punctuation ';')? expr_no_compound block
                            (kw_else (if_stmt / block))? {
-
             kw_if: reserved = @keyword 'if'
-
             kw_else: reserved = @keyword 'else'
-
         }
 
         for_stmt = kw_for for_header? block {
-
             kw_for: reserved = @keyword 'for'
 
             for_header = for_range
                        / for_c_style
                        / expr_no_compound {
-
                 for_range = (ident_list (@operator '=' / @operator ':='))? kw_range expr_no_compound {
-
                     kw_range: reserved = @keyword 'range'
-
                 }
 
                 for_c_style = simple_stmt? @punctuation ';' expr_no_compound? @punctuation ';' simple_stmt?
-
             }
-
         }
 
         switch_stmt = kw_switch type_switch_header @punctuation '{' type_case* @punctuation '}'
                     / kw_switch expr_switch_header @punctuation '{' expr_case* @punctuation '}' {
-
             kw_switch: reserved = @keyword 'switch'
 
             expr_switch_header = (simple_stmt @punctuation ';')? expr_no_compound?
                           / ''
 
             type_switch_header = (simple_stmt @punctuation ';')? type_switch_guard {
-
                 type_switch_guard = (@variable ident @operator ':=')? expr_no_compound @punctuation '.' @punctuation '(' kw_type @punctuation ')'
-
             }
 
             expr_case = kw_case expr_list @punctuation ':' stmt*
@@ -312,74 +194,49 @@ root = package_clause import_decl* (top_decl)*^ {
 
             type_case = kw_case type_list @punctuation ':' stmt*
                       / kw_default @punctuation ':' stmt* {
-
                 type_list = type_expr (@punctuation ',' type_expr)*
-
             }
-
         }
 
         select_stmt = kw_select @punctuation '{' comm_case* @punctuation '}' {
-
             kw_select: reserved = @keyword 'select'
 
             comm_case = kw_case comm_clause @punctuation ':' stmt*
                       / kw_default @punctuation ':' stmt* {
-
                 comm_clause = send_stmt
                             / recv_stmt {
-
                     recv_stmt = (ident_list (@operator '=' / @operator ':='))? expr_no_compound
-
                 }
-
             }
-
         }
 
         go_stmt = kw_go expr {
-
             kw_go: reserved = @keyword 'go'
-
         }
 
         defer_stmt = kw_defer expr {
-
             kw_defer: reserved = @keyword 'defer'
-
         }
 
-        # Trailing-optional leniency absorbed by outer recovery.
         return_stmt: partial = kw_return expr_list? {
-
             kw_return: reserved = @keyword 'return'
-
         }
 
         break_stmt: partial = kw_break (@variable ident)? {
-
             kw_break: reserved = @keyword 'break'
-
         }
 
         continue_stmt: partial = kw_continue (@variable ident)? {
-
             kw_continue: reserved = @keyword 'continue'
-
         }
 
         goto_stmt = kw_goto @variable ident {
-
             kw_goto: reserved = @keyword 'goto'
-
         }
 
         fallthrough_stmt = kw_fallthrough {
-
             kw_fallthrough: reserved = @keyword 'fallthrough'
-
         }
-
     }
 
     simple_stmt = send_stmt
@@ -387,59 +244,33 @@ root = package_clause import_decl* (top_decl)*^ {
                 / assignment
                 / short_var_decl
                 / expr_stmt {
-
         inc_dec_stmt = expr_no_compound (@operator '++' / @operator '--')
-
         short_var_decl = ident_list @operator ':=' expr_list
 
         assignment = expr_no_compound_list assign_op expr_list {
-
             assign_op = @operator '+=' / @operator '-=' / @operator '*=' / @operator '/='
                       / @operator '%=' / @operator '&=' / @operator '|=' / @operator '^='
                       / @operator '<<=' / @operator '>>=' / @operator '&^='
                       / @operator '=' !'='
 
             expr_no_compound_list = expr_no_compound (@punctuation ',' expr_no_compound)*
-
         }
 
         expr_stmt = expr_no_compound
-
     }
 
     send_stmt = expr_no_compound @operator '<-' expr_no_compound
 
-    # --- Expressions -----------------------------------------------------
-    #
-    # Two tracks: `expr` allows composite literals (`T{...}`); in
-    # control-flow headers and simple statements we use `expr_no_compound`
-    # to avoid parsing `y { z }` as `y{z}` a la composite literal. Mirrors
-    # Go's own disambiguation (see go/parser for `exprLev`).
-    #
-    # Precedence is encoded by direct left recursion: each binary level is
-    # `expr_LEVEL =  expr_LEVEL OP expr_NEXT / expr_NEXT`, mirroring Go's
-    # spec (5 levels: `||`, `&&`, comparison, additive, multiplicative).
-    # The `_nc` track is a parallel ladder descending into `expr_unary_nc`
-    # at the bottom. Cross-level ambiguities (`<` vs `<<`, `&` vs `&&`,
-    # `&` vs `&^`, `|` vs `||`) need explicit `!`-lookaheads — within a
-    # level, longer operators come first.
-
+    # The `_nc` track mirrors `expr` but drops composite literals, so a
+    # control-flow header's `y { z }` parses as `y` + block, not `y{z}`.
     expr = expr_lor {
-
         expr_lor = expr_lor @operator '||' expr_land / expr_land {
-
             expr_land = expr_land @operator '&&' expr_rel / expr_rel {
-
                 expr_rel = expr_rel (@operator '==' / @operator '!=' / @operator '<=' / @operator '>=' / @operator '<' !'<' / @operator '>' !'>') expr_add / expr_add {
-
                     expr_add = expr_add (@operator '+' !'=' / @operator '-' !'=' / @operator '|' !'|' !'=' / @operator '^' !'=') expr_mul / expr_mul {
-
                         expr_mul = expr_mul (@operator '<<' !'=' / @operator '>>' !'=' / @operator '&^' !'=' / @operator '*' !'=' / @operator '/' !'=' / @operator '%' !'=' / @operator '&' !'&' !'^' !'=') expr_unary / expr_unary {
-
                             expr_unary = unary_op* expr_postfix {
-
                                 expr_postfix = expr_primary postfix_op* {
-
                                     postfix_op = @punctuation '.' postfix_selector
                                                / @punctuation '[' slice_or_index @punctuation ']'
                                                / @punctuation '(' call_args? @punctuation ')'
@@ -456,51 +287,30 @@ root = package_clause import_decl* (top_decl)*^ {
                                                  / @function predeclared_fn &(@punctuation '(')
                                                  / @variable lower_ident
                                                  / paren_expr {
-
-                                        # Composite literal: `T{...}` where T is a named/qualified type.
                                         composite_lit = @type qualified_ident composite_body
                                                       / kw_map @punctuation '[' type_expr @punctuation ']' type_expr composite_body
                                                       / @punctuation '[' (@operator '...' / expr)? @punctuation ']' type_expr composite_body
                                                       / kw_struct type_struct_body composite_body {
-
                                             type_struct_body = @punctuation '{' struct_field_list? @punctuation '}'
-
                                         }
-
                                     }
-
                                 }
-
                             }
-
                         }
-
                     }
-
                 }
-
             }
-
         }
-
     }
 
     expr_no_compound = expr_lor_nc {
-
         expr_lor_nc = expr_lor_nc @operator '||' expr_land_nc / expr_land_nc {
-
             expr_land_nc = expr_land_nc @operator '&&' expr_rel_nc / expr_rel_nc {
-
                 expr_rel_nc = expr_rel_nc (@operator '==' / @operator '!=' / @operator '<=' / @operator '>=' / @operator '<' !'<' / @operator '>' !'>') expr_add_nc / expr_add_nc {
-
                     expr_add_nc = expr_add_nc (@operator '+' !'=' / @operator '-' !'=' / @operator '|' !'|' !'=' / @operator '^' !'=') expr_mul_nc / expr_mul_nc {
-
                         expr_mul_nc = expr_mul_nc (@operator '<<' !'=' / @operator '>>' !'=' / @operator '&^' !'=' / @operator '*' !'=' / @operator '/' !'=' / @operator '%' !'=' / @operator '&' !'&' !'^' !'=') expr_unary_nc / expr_unary_nc {
-
                             expr_unary_nc = unary_op* expr_postfix_nc {
-
                                 expr_postfix_nc = expr_primary_nc postfix_op_nc* {
-
                                     postfix_op_nc = @punctuation '.' postfix_selector
                                                   / @punctuation '[' slice_or_index @punctuation ']'
                                                   / @punctuation '(' call_args? @punctuation ')'
@@ -515,54 +325,38 @@ root = package_clause import_decl* (top_decl)*^ {
                                                     / @function predeclared_fn &(@punctuation '(')
                                                     / @variable lower_ident
                                                     / paren_expr
-
                                 }
-
                             }
-
                         }
-
                     }
-
                 }
-
             }
-
         }
-
     }
 
     unary_op = @operator '!' / @operator '+' / @operator '-'
              / @operator '^' / @operator '*' / @operator '&'
              / @operator '<-'
 
-    postfix_selector = @punctuation '(' type_expr @punctuation ')'                   # x.(T) type assertion
+    # `x.(type)` is deliberately omitted: it is matched explicitly by
+    # `type_switch_guard`, and a postfix alt here would starve that guard.
+    postfix_selector = @punctuation '(' type_expr @punctuation ')'
                      / @function ident &(@punctuation '(')
                      / @property ident
 
-    # `x.(type)` is intentionally not a postfix here: it is only valid inside
-    # a `type_switch_guard`, where the `.(type)` tail is matched explicitly.
-    # Letting `postfix_selector` swallow it would leave nothing for the guard
-    # to match, causing the enclosing `switch_stmt` (and `func_decl`) to fail.
     slice_or_index = expr? @punctuation ':' expr? (@punctuation ':' expr)?
                   / expr
 
     call_args = arg (@punctuation ',' arg)* (@punctuation ',')? {
-
         arg = expr @operator '...'
             / expr
             / type_expr
-
     }
 
-    # Composite literal body: `{ ... }` after a type expression.
     composite_body = @punctuation '{' composite_elems? @punctuation '}' {
-
         composite_elems = composite_elem (@punctuation ',' composite_elem)* (@punctuation ',')? {
-
             composite_elem = composite_key @punctuation ':' composite_value
                           / composite_value {
-
                 composite_key = @property ident
                               / @punctuation '[' expr @punctuation ']'
                               / string_lit
@@ -570,20 +364,14 @@ root = package_clause import_decl* (top_decl)*^ {
 
                 composite_value = composite_body
                                 / expr
-
             }
-
         }
-
     }
 
     paren_expr = @punctuation '(' expr @punctuation ')'
 
-    # Type conversion: `T(x)` where T is a named type — only triggers if
-    # immediately followed by `(`.
     type_conv = @type predeclared_type @punctuation '(' expr @punctuation ')'
 
-    # Function literal.
     fn_lit = kw_func fn_signature block
 
     call_ident = @function ident &(@punctuation '(')
@@ -592,29 +380,19 @@ root = package_clause import_decl* (top_decl)*^ {
 
     expr_list = expr (@punctuation ',' expr)*
 
-    # --- Literals -------------------------------------------------------
-
     literal = string_lit / number_lit / rune_lit / lit_const {
-
-        # Predeclared constants as a `%?` preferred-word alternation so the `boundary`
-        # boundary keeps `trueish` / `nilish` from matching the prefix.
         lit_const: preferred = @constant 'true' / @constant 'false'
                              / @constant 'nil' / @constant 'iota'
 
         rune_lit: atomic = @string ("'" ('\\' . / !"'" .)* "'")
-
     }
 
     string_lit = @string (raw_string / interp_string) {
-
         raw_string: atomic = '`' ..= '`'
-
         interp_string: atomic = '"' ('\\' . / !'"' !'\n' .)* '"'
-
     }
 
     number_lit = @number num_body {
-
         num_body: atomic = '0x' hex_digits ('.' hex_digits?)? ([pP] [+\-]? \d+)? 'i'?
                          / '0X' hex_digits ('.' hex_digits?)? ([pP] [+\-]? \d+)? 'i'?
                          / '0o' oct_digits 'i'?
@@ -622,43 +400,21 @@ root = package_clause import_decl* (top_decl)*^ {
                          / digit_seq '.' digit_seq? exp_part? 'i'?
                          / '.' digit_seq exp_part? 'i'?
                          / digit_seq exp_part? 'i'? {
-
             digit_seq: atomic = \d ([\d_])*
-
             hex_digits: atomic = [\da-fA-F] [\da-fA-F_]*
-
             oct_digits: atomic = [0-7] [0-7_]*
-
             bin_digits: atomic = [01] [01_]*
-
             exp_part: atomic = [eE] [+\-]? \d+
-
         }
-
     }
 
-    # --- Identifiers / predeclared names ---------------------------------
-
-    # Per Go spec "Identifiers": identifier = letter { letter | unicode_digit };
-    # letter = unicode_letter | "_"; unicode_letter = General_Category L;
-    # unicode_digit = General_Category Nd.
-    #
-    # `upper_ident` / `lower_ident` keep their ASCII-only start because
-    # they encode a case-based naming convention used by the highlighter
-    # (exported names start uppercase). Admitting non-ASCII letters into
-    # both ranges would collapse the distinction; refine with `\p{Lu}` /
-    # `\p{Ll}` in a follow-on if needed.
+    # `upper_ident` / `lower_ident` stay ASCII-only on purpose: they encode
+    # the exported-name (uppercase) convention, which `\p{L}` would erase.
     ident: atomic = !reserved [\p{L}_] ident_body*
-
     upper_ident: atomic = !reserved [A-Z] ident_body*
-
     lower_ident: atomic = !reserved [a-z_] ident_body*
-
     ident_body = [\p{L}\p{Nd}_]
 
-    # Predeclared constants / types / builtin funcs — matched as whole
-    # identifiers so colouring is consistent without contextual
-    # resolution.
     predeclared_const: preferred = 'true' / 'false' / 'nil' / 'iota'
 
     predeclared_type: preferred = 'uint8' / 'uint16' / 'uint32' / 'uint64' / 'uint'
@@ -671,11 +427,5 @@ root = package_clause import_decl* (top_decl)*^ {
                              / 'delete' / 'imag' / 'len' / 'make' / 'new' / 'panic'
                              / 'print' / 'println' / 'real' / 'recover'
 
-    # --- Whitespace / comments / semicolon handling ----------------------
-
-    # Go uses newlines as statement terminators (lexer-inserted `;`); here
-    # we accept optional explicit `;` and let `ignore` eat whitespace.
-    # `~`-marked: ASI absorption is intentional everywhere this is called.
     opt_semi: partial = @punctuation ';'?
-
 }

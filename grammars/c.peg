@@ -1,43 +1,12 @@
-# C (pragmatic subset) grammar with highlight annotations.
-#
-# Scope: highlighting, not compilation. The classic C grammar
-# ambiguity between `typedef-name IDENT` and `IDENT * IDENT` (is `a *
-# b` a declaration or multiplication?) cannot be resolved without a
-# symbol table; this grammar sidesteps it by requiring at least one
-# type-keyword or storage-class-specifier to trigger a declaration,
-# and falling back to an expression statement otherwise. Typedef'd
-# names (e.g. `size_t`) still highlight as variables — a fair trade
-# for a schema-less lexer.
-#
-# Preprocessor lines (`#include`, `#define`, ...) are captured as
-# `@keyword` — the directive itself isn't tokenized further, but the
-# whole line stays visually distinct from real comments.
-#
-# Capture kinds used (all present in src/highlight/theme.rs):
-#   keyword, string, number, comment, operator, punctuation, type,
-#   function, constant, property, variable, recovery.
-#
-# Intentionally out of scope:
-#   - Typedef-name-vs-identifier resolution.
-#   - C23 / attribute spec / _Generic payload beyond being accepted
-#     structurally.
-#   - Full preprocessor expansion: the grammar treats `#foo ...`
-#     up to the end of logical line as a single comment.
-#
-# Recovery: top-level uses `*^` so malformed external declarations
-# don't abort the whole translation unit; `compound_stmt` uses a
-# `^block_close` catch so malformed function bodies resync at the
-# closing `}` instead of failing the enclosing `fn_def`.
+# TODO out of scope: typedef-name-vs-identifier resolution; C23 /
+# attribute spec / _Generic payload beyond being accepted structurally;
+# full preprocessor expansion (a `#foo ...` line is one opaque token).
 
-root = (external_decl)*^ {
+c = (external_decl)*^ {
 
     ignore = (comment / \s)*
 
-    # Word boundary for `%` reserved-word rules: a keyword can't be the
-    # prefix of a longer identifier. Per C11 §6.4.2.1 identifier-continue.
     boundary = !ident_body
-
-    # --- Preprocessor directives (absorbed as @comment) ------------------
 
     pp_line = @keyword pp_body {
         pp_body: atomic = '#' (pp_cont / [^\n])* {
@@ -46,18 +15,12 @@ root = (external_decl)*^ {
         }
     }
 
-    # --- External declarations -------------------------------------------
-
     external_decl = pp_line
                   / fn_def
                   / decl
 
-    # Type-specifier + declarator + block.
     fn_def = decl_spec_list declarator decl* compound_stmt
 
-    # Declarations end in `;`. Must start with at least one specifier
-    # (storage/qualifier/type keyword, `typedef`, `struct`, `union`,
-    # `enum`) so we don't accidentally parse `a * b;` as a declaration.
     decl = decl_spec_list init_declarator_list? @punctuation ';'
 
     decl_spec_list = decl_spec+
@@ -66,10 +29,6 @@ root = (external_decl)*^ {
               / type_spec
               / fn_spec
 
-    # `%` reserved-word rules: compiled atomic, with a `boundary` boundary call
-    # appended inside each keyword capture. A keyword can't fire on a longer
-    # identifier that merely starts with it (`static MyType`, `typedefx`),
-    # and a rejected keyword leaves no stray capture for recovery to surface.
     storage_spec: reserved = @keyword 'typedef'
                            / @keyword 'extern'
                            / @keyword 'static'
@@ -83,8 +42,6 @@ root = (external_decl)*^ {
     fn_spec: reserved = @keyword 'inline'
                       / @keyword '_Noreturn'
 
-    # Embedded keyword tokens: one `%` rule per keyword, referenced wherever
-    # the keyword appears so the `boundary` boundary is applied uniformly.
     kw_struct: reserved = @keyword 'struct'
     kw_union: reserved = @keyword 'union'
     kw_enum: reserved = @keyword 'enum'
@@ -113,11 +70,8 @@ root = (external_decl)*^ {
                                / 'int' / 'float' / 'double' / 'signed' / 'unsigned'
                                / '_Bool' / '_Complex' / '_Imaginary'
 
-    # Heuristic typedef-name: PascalCase or `*_t` tail. If this mismatches
-    # an actual declaration, the decl path will fail and we fall back to
-    # expression statement. The `_t` arm uses the standard PEG non-greedy
-    # idiom `(!end_t ident_body)*` because PEG `*` is possessive — a
-    # greedy `ident_body*` would swallow the trailing `_t`.
+    # Heuristic typedef-name: PascalCase or `*_t` tail; misses fall back to
+    # an expression statement.
     typedef_name: atomic = [A-Z] ident_body*
                          / [a-z_] (!typedef_t_end ident_body)* typedef_t_end {
         typedef_t_end: atomic = '_t' boundary
@@ -142,8 +96,6 @@ root = (external_decl)*^ {
             enum_item = @constant ident (@operator '=' expr_cond)?
         }
     }
-
-    # --- Declarators -----------------------------------------------------
 
     init_declarator_list = init_declarator (@punctuation ',' init_declarator)*
     init_declarator = declarator (@operator '=' initializer)?
@@ -175,8 +127,6 @@ root = (external_decl)*^ {
     designator = @punctuation '[' expr_cond @punctuation ']'
                / @punctuation '.' @property ident
 
-    # --- Statements ------------------------------------------------------
-
     compound_stmt = @punctuation '{' (block_item* @punctuation '}' ^^block_close ..= @punctuation '}')
     block_item = pp_line
                / decl
@@ -199,7 +149,6 @@ root = (external_decl)*^ {
     labeled_stmt = @variable ident @punctuation ':' stmt
                  / kw_case expr_cond @punctuation ':' stmt
                  / kw_default @punctuation ':' stmt
-    # Trailing `(else stmt)?` leniency absorbed by top-level `*^` and `^block_close`.
     if_stmt: partial = kw_if @punctuation '(' expr @punctuation ')' stmt
                        (kw_else stmt)?
     for_stmt = kw_for @punctuation '(' for_init expr? @punctuation ';' expr? @punctuation ')' stmt
@@ -215,16 +164,6 @@ root = (external_decl)*^ {
     empty_stmt = @punctuation ';'
     expr_stmt = expr @punctuation ';'
 
-    # --- Expressions ----------------------------------------------------
-    #
-    # Precedence is encoded by direct left recursion: each binary level is
-    # `expr_LEVEL =  expr_LEVEL OP expr_NEXT / expr_NEXT`. Each level inlines
-    # its own operator alternation. Within a level, longer operators come
-    # first; cross-level ambiguities (`<` vs `<<=`, `&` vs `&&`, `+` vs
-    # `+=`, …) need explicit `!`-lookaheads so a lower-precedence level
-    # doesn't eat a fragment of a longer operator that belongs higher up.
-    # Assignment (right-associative) and ternary stay outside the LR ladder.
-
     expr = expr_assign (@punctuation ',' expr_assign)*
     expr_assign = expr_unary assign_op expr_assign
                 / expr_cond {
@@ -235,7 +174,6 @@ root = (external_decl)*^ {
                   / @operator '=' !'='
     }
 
-    # Trailing ternary `?` leniency absorbed by top-level `*^`.
     expr_cond: partial = expr_lor (@operator '?' expr @punctuation ':' expr_assign)?
 
     expr_lor = expr_lor @operator '||' expr_land / expr_land
@@ -249,13 +187,9 @@ root = (external_decl)*^ {
     expr_add = expr_add (@operator '+' !'=' / @operator '-' !'=') expr_mul / expr_mul
     expr_mul = expr_mul (@operator '*' !'=' / @operator '/' !'=' / @operator '%' !'=') expr_unary / expr_unary
 
-    # `sizeof_type` is tried before the generic prefix loop so that
-    # `sizeof(struct X)` / `sizeof(union X)` / `sizeof(counter_size_t)`
-    # parse: otherwise the prefix loop grabs `sizeof` and the `(...)` has
-    # to fit `cast_or_paren`, which only works when the contents also
-    # happen to be an `expr_primary` (e.g. `sizeof(int)`). On failure we
-    # fall back to the prefix path so `sizeof expr` and `sizeof(expr)`
-    # still parse.
+    # `sizeof_type` must precede the prefix loop, else `sizeof(struct X)`
+    # etc. fail because the loop grabs `sizeof` and `(...)` has to fit
+    # `cast_or_paren`.
     expr_unary = sizeof_type
                / unary_prefix* expr_postfix {
         unary_prefix = @operator '++' / @operator '--'
@@ -287,26 +221,20 @@ root = (external_decl)*^ {
                  / lit_const
                  / @variable ident
     {
-        # Boolean / null constants as a `%?` preferred-word alternation so the
-        # `boundary` boundary keeps `trueish` / `NULLify` from matching the prefix.
         lit_const: preferred = @constant 'true'
                              / @constant 'false'
                              / @constant 'NULL'
 
-        # `(T)expr` vs `(expr)` — try cast first (uses decl_spec which
-        # requires a type keyword/qualifier, making the distinction
-        # unambiguous for real-world C).
+        # `(T)expr` vs `(expr)`: cast first; `type_name` needs a type
+        # keyword/qualifier, so the two don't collide on real-world C.
         cast_or_paren = @punctuation '(' type_name @punctuation ')' expr_unary
                       / @punctuation '(' expr @punctuation ')'
 
         call_ident = @function ident &(@punctuation '(')
     }
 
-    # `sizeof(T)` must eat the whole type-name expression as a sizeof argument.
     sizeof_type = kw_sizeof @punctuation '(' type_name @punctuation ')'
     type_name = decl_spec_list abstract_declarator?
-
-    # --- Literals --------------------------------------------------------
 
     string_lit = @string (string_piece+) {
         string_piece: atomic = ('L' / 'u8' / 'u' / 'U')? '"' ('\\' . / !'"' !'\n' .)* '"'
@@ -334,17 +262,9 @@ root = (external_decl)*^ {
         }
     }
 
-    # --- Identifiers ----------------------------------------------------
-
-    # Per C11 §6.4.2.1: identifier = identifier-nondigit (identifier-nondigit
-    # | digit)*; nondigit = `_ A-Z a-z` | universal-character-name (UCN);
-    # UCNs are `\uHHHH` (4 hex) or `\UHHHHHHHH` (8 hex). C23 §6.4.3 also
-    # admits raw non-ASCII letters (General_Category=L) directly.
     ident: atomic = !reserved ([\p{L}_] / ucn) ident_body*
     ident_body = [\p{L}\p{Nd}_] / ucn
     ucn = '\\u' [0-9A-Fa-f]{4} / '\\U' [0-9A-Fa-f]{8}
-
-    # --- Whitespace / comments ------------------------------------------
 
     comment: atomic = @comment ('//' .. '\n' / '/*' ..= '*/')
 }

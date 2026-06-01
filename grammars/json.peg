@@ -1,6 +1,4 @@
-# JSON grammar with highlight annotations.
-
-root = value {
+json = value {
 
     ignore = \s*
 

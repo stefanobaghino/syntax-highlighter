@@ -1,56 +1,16 @@
-# JavaScript (pragmatic subset) grammar with highlight annotations.
-#
-# Scope: highlighting, not execution. Parses ES2020-ish JavaScript at
-# the token level. Precedence is not enforced and semantic constraints
-# (binding rules, strict-mode, generator-vs-function context) are not
-# checked. The bench value lives in the shared-prefix backtracking
-# induced by arrow-fn-vs-paren-expr and template-literal expression
-# splicing.
-#
-# ASI (automatic semicolon insertion) is handled loosely: `;` is
-# accepted but not required at statement boundaries. Tokens that
-# would be invalid under a real ASI pass are still accepted here
-# because highlighting does not need to agree with the engine.
-#
-# Capture kinds used (all present in src/highlight/theme.rs):
-#   keyword, string, number, comment, operator, punctuation, type,
-#   function, constant, property, variable, recovery.
-#
-# Intentionally out of scope:
-#   - JSX. Requires its own expression/statement mode.
-#   - Regex literals. Disambiguation from division requires parser
-#     state the VM does not carry; `/re/` is rare enough that giving
-#     up on it is a fair trade.
-#   - Decorator proposals.
-#   - TypeScript type annotations.
-#
-# Recovery: top-level uses `*^` so malformed statements don't abort
-# the whole file; `block` uses a `^block_close` catch so malformed
-# function/control-flow bodies resync at the closing `}` instead of
-# failing the enclosing statement.
-#
-# Lexical scoping: the mutually-recursive statement/expression/pattern
-# core stays at root scope, alongside the cross-referenced literal,
-# identifier, and keyword rules. Only clear single-owner leaf helpers
-# (string forms, number digit groups, template-literal parts) nest
-# under the rule that owns them.
+# TODO out of scope: JSX (needs its own expression/statement mode);
+# regex literals (`/re/` vs division needs parser state the VM lacks);
+# decorator proposals; TypeScript type annotations.
 
-root = (stmt)*^ {
+javascript = (stmt)*^ {
 
     ignore = (comment / \s)*
 
-    # Word boundary for `%` reserved-word rules: a keyword can't be the
-    # prefix of a longer identifier (ECMAScript IdentifierPartChar).
     boundary = !ident_body
 
-    # --- Keyword tokens ---------------------------------------------------
-    #
-    # One `%` reserved-word rule per keyword, referenced wherever the
-    # keyword appears so the `boundary` boundary is applied uniformly. This
-    # matters most for the contextual keywords (`async`, `as`, `of`,
-    # `from`, `get`, `set`, `static`, `yield`) deliberately kept out of
-    # `reserved` so they remain usable as identifiers: `{ asyncFoo() {} }`
-    # must stay one method name.
+    # Contextual keywords (`async`, `as`, `of`, `from`, `get`, `set`,
+    # `static`, `yield`, `let`) are `preferred` not `reserved` so they
+    # stay usable as identifiers: `{ asyncFoo() {} }` is one method name.
     kw_import: reserved = @keyword 'import'
     kw_from: preferred = @keyword 'from'
     kw_as: preferred = @keyword 'as'
@@ -93,12 +53,8 @@ root = (stmt)*^ {
     kw_this: reserved = @keyword 'this'
     kw_super: reserved = @keyword 'super'
 
-    # --- Statements -------------------------------------------------------
-    #
-    # Order matters (PEG first-match). Declaration-shaped items precede
-    # expression-statements so their leading keywords aren't misparsed as
-    # identifiers.
-
+    # Order matters: declaration-shaped items precede expression-statements
+    # so their leading keywords aren't misparsed as identifiers.
     stmt = import_decl
          / export_decl
          / fn_decl
@@ -120,14 +76,9 @@ root = (stmt)*^ {
          / empty_stmt
          / expr opt_semi
 
-    # Definition-level `~` on `~opt_semi` covers every ASI call site; the
-    # missing-else / missing-catch / missing-finally leniency on the other
-    # `~`-marked stmts below is absorbed by stmt-level `*^` and
-    # `block`'s `^block_close` recovery.
+    # ASI: `;` accepted but never required at statement boundaries.
     opt_semi: partial = @punctuation ';'?
     empty_stmt = @punctuation ';'
-
-    # --- Imports / exports ------------------------------------------------
 
     import_decl = kw_import import_body opt_semi {
         import_body = import_clause kw_from string_lit
@@ -154,15 +105,12 @@ root = (stmt)*^ {
         export_default_body = fn_decl
                             / class_decl
                             / expr opt_semi
-        # Trailing `opt_semi` on `~export_named` is absorbed by stmt-level recovery.
         export_named: partial = @punctuation '{' export_specifier_list? @punctuation '}' (kw_from string_lit)? opt_semi {
             export_specifier_list = export_specifier (@punctuation ',' export_specifier)* (@punctuation ',')?
             export_specifier = @variable ident_name kw_as @variable ident_name
                              / @variable ident
         }
     }
-
-    # --- Function / class declarations ------------------------------------
 
     fn_decl = kw_async fn_decl_core
             / fn_decl_core {
@@ -185,17 +133,11 @@ root = (stmt)*^ {
                 / string_lit
                 / number_lit
 
-    # --- Variable declarations -------------------------------------------
-
     var_decl = (kw_var / kw_let / kw_const) var_declarator_list {
         var_declarator_list = var_declarator (@punctuation ',' var_declarator)*
-        # Trailing `(= expr)?` absorbed by enclosing stmt recovery.
         var_declarator: partial = pattern (@operator '=' expr_no_comma)?
     }
 
-    # --- Control flow -----------------------------------------------------
-
-    # Trailing `(else stmt)?` leniency absorbed by stmt-level recovery.
     if_stmt: partial = kw_if @punctuation '(' expr @punctuation ')' stmt
                        (kw_else stmt)?
     for_stmt = kw_for kw_await? @punctuation '(' for_head @punctuation ')' stmt {
@@ -217,13 +159,11 @@ root = (stmt)*^ {
                     / kw_default @punctuation ':' (!switch_case_term stmt)*
         switch_case_term = kw_case / kw_default / @punctuation '}'
     }
-    # Trailing `(catch)? (finally)?` absorbed by stmt-level recovery.
     try_stmt: partial = kw_try block catch_clause? finally_clause? {
         catch_clause = kw_catch (@punctuation '(' pattern @punctuation ')')? block
         finally_clause = kw_finally block
     }
     throw_stmt = kw_throw expr opt_semi
-    # Trailing `expr?` leniency on `~return_stmt` absorbed by stmt recovery.
     return_stmt: partial = kw_return expr? opt_semi
     break_stmt: partial = kw_break (@variable ident)? opt_semi
     continue_stmt: partial = kw_continue (@variable ident)? opt_semi
@@ -231,15 +171,11 @@ root = (stmt)*^ {
     labeled_stmt = @variable ident @punctuation ':' stmt
     block = @punctuation '{' (stmt* @punctuation '}' ^^block_close ..= @punctuation '}')
 
-    # --- Function params and patterns -------------------------------------
-
     fn_params = @punctuation '(' fn_param_list? @punctuation ')'
     fn_param_list = fn_param (@punctuation ',' fn_param)* (@punctuation ',')? {
         fn_param = @operator '...' pattern
                  / pattern (@operator '=' expr_no_comma)?
     }
-
-    # --- Destructuring patterns ------------------------------------------
 
     pattern = array_pattern / object_pattern / @variable ident {
         array_pattern = @punctuation '[' array_pattern_list? @punctuation ']' {
@@ -258,8 +194,6 @@ root = (stmt)*^ {
 
     computed_prop = @punctuation '[' expr @punctuation ']'
 
-    # --- Expressions ------------------------------------------------------
-
     expr = expr_no_comma (@punctuation ',' expr_no_comma)*
     expr_no_comma = expr_assign
     expr_assign = expr_arrow
@@ -272,8 +206,8 @@ root = (stmt)*^ {
                   / @operator '%=' / @operator '&=' / @operator '|=' / @operator '^='
                   / @operator '=' !'='
 
-        # Arrow functions tried first. `async x => ...`, `x => ...`,
-        # `(a, b) => ...`, `() => ...`.
+        # Tried before `expr_conditional`: `(a, b) =>` shares its prefix
+        # with a parenthesized expression and must win.
         expr_arrow = arrow_head @operator '=>' arrow_body {
             arrow_head = kw_async arrow_params
                        / arrow_params
@@ -284,17 +218,9 @@ root = (stmt)*^ {
                        / expr_no_comma
         }
 
-        # Trailing `(*)? (expr_assign)?` absorbed by stmt-level recovery.
         expr_yield: partial = kw_yield @operator '*'? expr_assign?
     }
 
-    # Ternary. Below the ternary, precedence is encoded by direct left
-    # recursion — `level_n =  level_n OP level_{n+1} / level_{n+1}` per
-    # level — except `expr_pow` (`**`) which stays right-recursive to
-    # preserve right-associativity. Each level inlines its operator
-    # alternation; cross-level ambiguities (`<` vs `<<`, `&` vs `&&`,
-    # operator vs compound-assign, …) need explicit `!`-lookaheads.
-    # Trailing ternary leniency absorbed by stmt-level recovery.
     expr_conditional: partial = expr_nullish (@operator '?' expr_no_comma @punctuation ':' expr_no_comma)?
 
     expr_nullish = expr_nullish @operator '??' !'=' expr_lor / expr_lor
@@ -321,7 +247,6 @@ root = (stmt)*^ {
              / @operator '+' / @operator '-'
              / @operator '!' / @operator '~'
 
-    # Postfix: calls, member, optional chain, index, `++`/`--`.
     expr_postfix = expr_lhs postfix_op*
     postfix_op = @operator '++'
                / @operator '--'
@@ -385,15 +310,11 @@ root = (stmt)*^ {
         expr_paren = @punctuation '(' expr @punctuation ')'
     }
 
-    # --- Literals ---------------------------------------------------------
-
     literal = template_lit
             / string_lit
             / number_lit
             / lit_const
             / lit_undefined {
-        # Boolean / null / undefined constants; the `boundary` boundary keeps
-        # `trueish` / `nullish` from matching the prefix.
         lit_const: reserved = @constant 'true' / @constant 'false' / @constant 'null'
         lit_undefined: preferred = @constant 'undefined'
     }
@@ -403,9 +324,6 @@ root = (stmt)*^ {
         dq_string: atomic = '"' ('\\' . / !'"' !'\n' .)* '"'
     }
 
-    # Template literals with ${...} interpolation. Chunks outside the
-    # interpolations get @string; the interpolation braces stay
-    # @punctuation and the inner expression is parsed as normal.
     template_lit: atomic = @string '`' template_body @string '`' {
         template_body: atomic = (template_chunk / template_interp)* {
             template_chunk: atomic = @string (('\\' . / !'`' !'${' .)+)
@@ -429,35 +347,18 @@ root = (stmt)*^ {
         bin_digits: atomic = [01] [01_]*
     }
 
-    # --- Identifiers / reserved words ------------------------------------
-
-    # Per ECMAScript 2024 §12.7.1: IdentifierStartChar = ID_Start | $ | _;
-    # IdentifierPartChar = ID_Continue | $ | ZWNJ (U+200C) | ZWJ (U+200D).
-    # `_` is in ID_Start, but `$` is not (it's ASCII punctuation outside
-    # Unicode's identifier properties); same for the ZWNJ/ZWJ continuation
-    # extras. Escape forms `\uHHHH` and `\u{H..}` are admitted in both
-    # positions.
     ident: atomic = !reserved ([\p{ID_Start}_$] / js_uesc) ident_body_part*
-    # `ident_name` mirrors ECMA's `IdentifierName`: like `ident`, but the
-    # `!reserved` guard is dropped so reserved words are accepted. Use at
-    # positions where ES allows IdentifierName but not BindingIdentifier
-    # (member access after `.` / `?.`, property keys, imported/exported
-    # names that aren't local bindings).
+    # Like `ident` but drops the `!reserved` guard: used where ES allows
+    # IdentifierName but not BindingIdentifier (member access, property
+    # keys, non-binding import/export names).
     ident_name: atomic = ([\p{ID_Start}_$] / js_uesc) ident_body_part*
-    # Per §12.7.1 UnicodeEscapeSequence: 4 fixed hex digits or `{H..}` for
-    # 1-6 hex digits inside braces. Atomic so the prefix-then-fail shape
-    # stays internal.
     js_uesc: atomic = '\\u{' [0-9A-Fa-f]+ '}' / '\\u' [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]
-    # `upper_ident` / `lower_ident` keep their ASCII-only start so the
-    # case-based shape gate (PascalCase → @type, etc.) doesn't dissolve
-    # into "any ID_Start letter". Future refinement via `\p{Lu}` /
-    # `\p{Ll}` if a non-ASCII-aware variant is needed.
+    # `upper_ident` / `lower_ident` stay ASCII-only so the case-based shape
+    # gate (PascalCase → @type) doesn't dissolve into any ID_Start letter.
     upper_ident: atomic = !reserved [A-Z] ident_body_part*
     lower_ident: atomic = !reserved [a-z_$] ident_body_part*
     ident_body_part = ident_body / js_uesc
     ident_body = [\p{ID_Continue}$\u{200C}\u{200D}]
-
-    # --- Whitespace / comments --------------------------------------------
 
     comment: atomic = @comment ('//' .. '\n' / '/*' ..= '*/')
 }
