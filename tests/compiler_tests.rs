@@ -1704,19 +1704,22 @@ fn lint_partial_match_real_sqlite_grammar_unanchored_aliased_expr_flagged() {
     let source =
         std::fs::read_to_string("grammars/sqlite.peg").expect("sqlite.peg fixture present");
     let mut g = parse(&source).expect("sqlite.peg parses");
-    // Replace result_column's body with an unanchored version.
+    // Replace result_column's body with an unanchored version. Under
+    // lexical scoping `table_star` / `aliased_expr` nest inside
+    // `result_column`, so their flat keys are the mangled
+    // `result_column::…` names — reference those so the choice resolves.
     g.rules.insert(
         "result_column".into(),
         Pattern::choice(vec![
-            Pattern::nt("table_star"),
+            Pattern::nt("result_column::table_star"),
             Pattern::capture("operator", Pattern::literal("*")),
-            Pattern::nt("aliased_expr"),
+            Pattern::nt("result_column::aliased_expr"),
         ]),
     );
     let findings = lint_partial_match(&g);
     let hit = findings
         .iter()
-        .find(|f| f.rule == "aliased_expr" && f.caller == "result_column");
+        .find(|f| f.rule == "result_column::aliased_expr" && f.caller == "result_column");
     assert!(
         hit.is_some(),
         "load-bearing PR #101 case must be flagged when anchor is stripped; findings: {findings:?}"
@@ -1728,8 +1731,10 @@ fn lint_partial_match_real_sqlite_grammar_unanchored_aliased_expr_flagged() {
 #[test]
 fn partial_ascription_wraps_rule_body() {
     // `name: partial = body` parses the body with a top-level
-    // `Pattern::Lenient` wrap, exposing the intent to the lint.
-    let g = parse("r: partial = 'a'?").expect("parse");
+    // `Pattern::Lenient` wrap, exposing the intent to the lint. The
+    // ascription rides a non-root child (the top-level root rejects
+    // every ascription), so `r` nests under `root`.
+    let g = parse("root = r {\nr: partial = 'a'?\n}").expect("parse");
     assert_eq!(
         g.rules["r"].strip_spans(),
         Pattern::lenient(Pattern::optional(Pattern::literal("a"))),
@@ -1739,9 +1744,12 @@ fn partial_ascription_wraps_rule_body() {
 #[test]
 fn partial_must_precede_main_ascription() {
     // `partial` composes with `atomic` / `reserved` / `preferred` but
-    // must be written first; the reversed order is a parse error.
-    parse("r: partial atomic = 'a'").expect("partial-first order parses");
-    let err = parse("r: atomic partial = 'a'").expect_err("partial after main must error");
+    // must be written first; the reversed order is a parse error. The
+    // ascription rides a non-root child (the top-level root rejects
+    // every ascription).
+    parse("root = r {\nr: partial atomic = 'a'\n}").expect("partial-first order parses");
+    let err =
+        parse("root = r {\nr: atomic partial = 'a'\n}").expect_err("partial after main must error");
     assert!(
         err.message.contains("`partial` must come before"),
         "unexpected error: {}",
@@ -1753,7 +1761,7 @@ fn partial_must_precede_main_ascription() {
 fn definition_lenient_suppresses_lint_at_every_call_site() {
     // Use the Catch-absorbed shape the lint reliably flags: a
     // top-level `*^[;]` recovery loop calling a trailing-Optional rule.
-    let unmarked = parse("root = (r)*^[;]\nr = 'x' 'y'?").expect("parse unmarked");
+    let unmarked = parse("root = (r)*^[;] {\nr = 'x' 'y'?\n}").expect("parse unmarked");
     assert!(
         lint_partial_match(&unmarked)
             .iter()
@@ -1761,7 +1769,7 @@ fn definition_lenient_suppresses_lint_at_every_call_site() {
         "baseline: unmarked grammar should flag r"
     );
 
-    let marked = parse("root = (r)*^[;]\nr: partial = 'x' 'y'?").expect("parse marked");
+    let marked = parse("root = (r)*^[;] {\nr: partial = 'x' 'y'?\n}").expect("parse marked");
     let findings = lint_partial_match(&marked);
     assert!(
         !findings.iter().any(|f| f.rule == "r"),
@@ -1774,11 +1782,11 @@ fn definition_lenient_marker_is_runtime_transparent() {
     // The `name: partial =` wrap compiles to the same bytecode as the
     // bare form. The marker rides a non-special helper rule — `root`
     // (like `ignore` / `boundary`) rejects every ascription.
-    let plain = parse("root = r\nr = 'x'+")
+    let plain = parse("root = r {\nr = 'x'+\n}")
         .expect("parse plain")
         .compile()
         .expect("compile plain");
-    let marked = parse("root = r\nr: partial = 'x'+")
+    let marked = parse("root = r {\nr: partial = 'x'+\n}")
         .expect("parse marked")
         .compile()
         .expect("compile marked");
@@ -1790,7 +1798,7 @@ fn definition_lenient_marker_is_runtime_transparent() {
 #[test]
 fn compile_errors_on_partial_match_leniency() {
     // `*^[;]` Catch-absorbed shape — the lint reliably flags this.
-    let g = parse("root = (r)*^[;]\nr = 'x' 'y'?").expect("parse");
+    let g = parse("root = (r)*^[;] {\nr = 'x' 'y'?\n}").expect("parse");
     let err = g.compile().expect_err("compile should fail");
     match err {
         syntax_highlighter::pegc::CompileError::PartialMatchLeniency(findings) => {
@@ -1805,7 +1813,7 @@ fn compile_errors_on_partial_match_leniency() {
 
 #[test]
 fn compile_succeeds_with_definition_lenient_on_flagged_rule() {
-    let g = parse("root = (r)*^[;]\nr: partial = 'x' 'y'?").expect("parse");
+    let g = parse("root = (r)*^[;] {\nr: partial = 'x' 'y'?\n}").expect("parse");
     g.compile()
         .expect("compile should succeed with definition-level `r: partial`");
 }
@@ -1814,7 +1822,7 @@ fn compile_succeeds_with_definition_lenient_on_flagged_rule() {
 fn compile_succeeds_with_boundary_catch_anchor() {
     // `^^bad ';'` lowers to `Catch { Seq(a, &';'), bad, recovery }` —
     // anchoring `a` by lookahead so the lint sees no leniency.
-    let g = parse("root = (a ^^bad ';')*\na = 'x' 'y'?").expect("parse");
+    let g = parse("root = (a ^^bad ';')* {\na = 'x' 'y'?\n}").expect("parse");
     g.compile()
         .expect("compile should succeed with `^^bad ';'` anchor");
 }
@@ -1825,7 +1833,7 @@ fn compile_succeeds_with_bracketed_close_catch_sugar() {
     // and whose recovery is `Seq(@recovery ((!'}' .)*), '}')`. The
     // inner ends in `'}'` (a hard terminator), so `lint_partial_match`
     // sees no trailing-nullable shape and compilation succeeds.
-    let g = parse("root = ('{' a '}' ^^bad ..= '}')*\na = 'x'+").expect("parse");
+    let g = parse("root = ('{' a '}' ^^bad ..= '}')* {\na = 'x'+\n}").expect("parse");
     g.compile()
         .expect("compile should succeed with `^^bad ..= '}'` sugar");
 }
@@ -1839,7 +1847,7 @@ fn bracketed_close_catch_runs_recovery_path() {
     // exercises the recovery: skip captures `garbage` and `}` is
     // captured as `@punctuation`.
     let g = parse(
-        "root = @punctuation '{' (body @punctuation '}' ^^bad ..= @punctuation '}')\nbody = 'x'",
+        "root = @punctuation '{' (body @punctuation '}' ^^bad ..= @punctuation '}') {\nbody = 'x'\n}",
     )
     .expect("parse");
     let prog = g.compile().expect("compile");
@@ -1860,7 +1868,7 @@ fn bracketed_close_catch_runs_recovery_path() {
 
 #[test]
 fn compile_error_display_lists_findings() {
-    let g = parse("root = (r)*^[;]\nr = 'x' 'y'?").expect("parse");
+    let g = parse("root = (r)*^[;] {\nr = 'x' 'y'?\n}").expect("parse");
     let err = g.compile().expect_err("compile should fail");
     let msg = format!("{err}");
     assert!(msg.contains("partial-match leniency"));
@@ -1873,7 +1881,7 @@ fn compile_errors_on_uninferable_boundary() {
     // The start rule has no FOLLOW context other than EOF — for a
     // rule with no callers at all, the inferred boundary would be
     // empty. Construct that case via a non-start unreachable rule.
-    let g = parse("root = 'x'\norphan = 'a' ^^bad").expect("parse");
+    let g = parse("root = 'x' {\norphan = 'a' ^^bad\n}").expect("parse");
     let err = g.compile().expect_err("compile should fail");
     assert!(
         matches!(
@@ -1892,8 +1900,9 @@ fn auto_ignore_handles_inter_repeat_whitespace() {
     // already covers). Without the prepend, ` , 2 , 3` would fail on
     // the second iteration's leading space.
     let prog = parse(
-        "root   = 'x' (',' 'x')*\n\
-         ignore = ' '*",
+        "root = 'x' (',' 'x')* {\n\
+         ignore = ' '*\n\
+         }",
     )
     .expect("parse")
     .compile()
@@ -1991,7 +2000,7 @@ fn partial_match_leniency_carries_call_site_span_in_display() {
     // `r` reference at line 1, col 9 is the call site the lint
     // surfaces. The rendered Display must include `{line}:{col}` so
     // grammar authors can jump to the unanchored call directly.
-    let src = "root = (r)*^[;]\nr = 'x' 'y'?";
+    let src = "root = (r)*^[;] {\nr = 'x' 'y'?\n}";
     let g = parse(src).expect("parses");
     let err = g.compile().expect_err("partial-match leniency expected");
     let rendered = format!("{err}");
@@ -2007,7 +2016,7 @@ fn partial_match_leniency_finding_carries_call_site_span() {
     // the Display impl is a thin formatting layer over it. Pin the
     // structured field directly so callers (e.g. editor diagnostics)
     // get the same position the rendered text reports.
-    let src = "root = (r)*^[;]\nr = 'x' 'y'?";
+    let src = "root = (r)*^[;] {\nr = 'x' 'y'?\n}";
     let g = parse(src).expect("parses");
     let findings = lint_partial_match(&g);
     let f = findings
@@ -2024,7 +2033,7 @@ fn cannot_infer_boundary_carries_placeholder_span_in_display() {
     // and triggers `CannotInferBoundary` — the placeholder's span at
     // line 2, col 14 (start of `^^bad`) surfaces through both the
     // structured error and its Display rendering.
-    let src = "root = 'x'\norphan = 'a' ^^bad";
+    let src = "root = 'x' {\norphan = 'a' ^^bad\n}";
     let g = parse(src).expect("parses");
     let err = g.compile().expect_err("CannotInferBoundary expected");
     match &err {
@@ -2121,7 +2130,7 @@ fn run_grammar<'a>(src: &str, input: &'a str) -> Vec<(String, &'a str)> {
 
 #[test]
 fn reserved_ascription_populates_percent_and_atomic_sets() {
-    let g = parse("root = r\nignore = (\\s)*\nboundary = !'x'\nr: reserved = @keyword 'if'")
+    let g = parse("root = r {\nignore = (\\s)*\nboundary = !'x'\nr: reserved = @keyword 'if'\n}")
         .expect("parse");
     assert!(
         g.percent_rules.contains("r"),
@@ -2164,7 +2173,8 @@ fn ascription_on_special_rule_is_rejected() {
 fn partial_composes_with_reserved() {
     // `partial reserved` combines the leniency marker with the
     // reserved-word ascription (partial written first).
-    let src = "root = r\nignore = (\\s)*\nboundary = !'x'\nr: partial reserved = @keyword 'if'";
+    let src =
+        "root = r {\nignore = (\\s)*\nboundary = !'x'\nr: partial reserved = @keyword 'if'\n}";
     let g = parse(src).unwrap_or_else(|e| panic!("parse {src:?}: {}", e.message));
     assert!(
         g.percent_rules.contains("r"),
@@ -2181,13 +2191,14 @@ fn percent_rule_appends_boundary_inside_capture() {
     // `kw_if: reserved` must match the keyword `if` but not fire on
     // `ifx`, and (the leak guard) must leave no stray `if` capture
     // behind on `ifx`.
-    let src = "root = (token)*^\n\
+    let src = "root = (token)*^ {\n\
                ignore = (\\s)*\n\
                boundary = !ident_body\n\
                token = kw_if / @variable ident\n\
                kw_if: reserved = @keyword 'if'\n\
                ident: atomic = [a-z] ident_body*\n\
-               ident_body = [a-z0-9_]";
+               ident_body = [a-z0-9_]\n\
+               }";
     assert_eq!(
         run_grammar(src, "if ifx if"),
         vec![
@@ -2202,7 +2213,7 @@ fn percent_rule_appends_boundary_inside_capture() {
 fn percent_without_boundary_errors_undefined_rule() {
     // A `reserved` rule emits a `NonTerminal("boundary")`; with no `boundary`
     // defined the reference surfaces as `UndefinedRule("boundary")`.
-    let g = parse("root = r\nignore = (\\s)*\nr: reserved = @keyword 'if'").expect("parse");
+    let g = parse("root = r {\nignore = (\\s)*\nr: reserved = @keyword 'if'\n}").expect("parse");
     match g
         .compile()
         .expect_err("compile should fail without boundary")
@@ -2225,28 +2236,26 @@ fn reserved_and_atomic_combined_is_parse_error() {
 }
 
 #[test]
-fn boundary_must_sit_in_the_reserved_slots() {
-    // `boundary` after a non-reserved rule (not contiguous with `root`) errors.
-    let err =
-        parse("root = r\nr = 'a'\nboundary = !'x'").expect_err("misplaced boundary must error");
-    assert!(
-        err.message.contains("reserved slots"),
-        "unexpected error: {}",
-        err.message
-    );
+fn boundary_can_sit_anywhere_among_root_children() {
+    // The old "boundary must sit in the reserved slots immediately after
+    // root" rule is gone: `ignore` / `boundary` are now ordinary
+    // root-scope children, so `boundary` may follow any other rule in
+    // the scope block (here after a plain `r`).
+    parse("root = r {\nr = 'a'\nboundary = !'x'\n}")
+        .expect("boundary after a non-reserved root-scope child is accepted");
 }
 
 #[test]
 fn boundary_and_ignore_compose_in_either_order() {
     // Both orderings of the two reserved slots after `root` are accepted.
-    parse("root = 'a'\nignore = (\\s)*\nboundary = !'x'").expect("ignore then boundary");
-    parse("root = 'a'\nboundary = !'x'\nignore = (\\s)*").expect("boundary then ignore");
+    parse("root = 'a' {\nignore = (\\s)*\nboundary = !'x'\n}").expect("ignore then boundary");
+    parse("root = 'a' {\nboundary = !'x'\nignore = (\\s)*\n}").expect("boundary then ignore");
 }
 
 #[test]
 fn boundary_without_ignore_is_valid() {
     // `boundary` does not require `ignore`; a grammar may define only `boundary`.
-    parse("root = r\nboundary = !'x'\nr: reserved = @keyword 'if'")
+    parse("root = r {\nboundary = !'x'\nr: reserved = @keyword 'if'\n}")
         .expect("parse")
         .compile()
         .expect("compile");
@@ -2260,8 +2269,9 @@ fn preferred_ascription_populates_preferred_and_percent_sets() {
     // `preferred_rules`, and also in `percent_rules` + `atomic_rules`
     // (it still gets the `boundary` boundary; it differs from `reserved` only
     // in which synthesized set it feeds).
-    let g = parse("root = r\nignore = (\\s)*\nboundary = !'x'\nr: preferred = @keyword 'async'")
-        .expect("parse");
+    let g =
+        parse("root = r {\nignore = (\\s)*\nboundary = !'x'\nr: preferred = @keyword 'async'\n}")
+            .expect("parse");
     assert!(
         g.preferred_rules.contains("r"),
         "`r: preferred` should be preferred"
@@ -2311,7 +2321,7 @@ fn defining_synthesized_rule_is_parse_error() {
 fn reserved_preferred_conflict_errors() {
     // The same literal marked `reserved` in one rule and `preferred`
     // in another is a contradiction — compile rejects it.
-    let err = parse("root = 'x'\nboundary = !'y'\na: reserved = 'int'\nb: preferred = 'int'")
+    let err = parse("root = 'x' {\nboundary = !'y'\na: reserved = 'int'\nb: preferred = 'int'\n}")
         .expect("parse")
         .compile()
         .expect_err("conflicting reserved/preferred must error");
@@ -2330,20 +2340,191 @@ fn synthesized_reserved_trie_and_preferred_membership() {
     // matches `int8` maximally (#13 fixed structurally). `pre: preferred`
     // (`len`) is excluded from `reserved` and stays usable as an
     // identifier.
-    let src = "root = (token)*^\n\
+    let src = "root = (token)*^ {\n\
                ignore = (\\s)*\n\
                boundary = !ident_body\n\
                token = @keyword kw_word / @variable ident\n\
                kw_word: reserved = 'int' / 'int8'\n\
                pre: preferred = 'len'\n\
                ident: atomic = !reserved [a-z] ident_body*\n\
-               ident_body = [a-z0-9]";
+               ident_body = [a-z0-9]\n\
+               }";
     assert_eq!(
         run_grammar(src, "int8 len int"),
         vec![
             ("keyword".to_string(), "int8"),
             ("variable".to_string(), "len"),
             ("keyword".to_string(), "int"),
+        ]
+    );
+}
+
+// --- Lexical scoping + single-root model ------------------------------
+//
+// These exercise the surface-syntax change where a grammar is exactly
+// one top-level declaration (the root) and every other rule nests in a
+// `{ … }` scope block. Resolution rewrites each `NonTerminal` to the
+// unique flat key it resolves to (nearest enclosing scope wins); root
+// and its direct children keep bare names, deeper rules are mangled
+// `parent::child`.
+
+#[test]
+fn nested_rule_resolves_and_runs() {
+    // `value` is a root-scope global; `string`/`number` are private to
+    // `value`'s block and still reachable from `value`'s body.
+    let src = "root = value {\n\
+               value = @string string / @number number\n\
+               {\n\
+               string: atomic = '\"' [^\"]* '\"'\n\
+               number: atomic = [0-9]+\n\
+               }\n\
+               }";
+    assert_eq!(
+        run_grammar(src, "\"hi\""),
+        vec![("string".to_string(), "\"hi\"")]
+    );
+    assert_eq!(run_grammar(src, "42"), vec![("number".to_string(), "42")]);
+}
+
+#[test]
+fn inner_scope_shadows_outer() {
+    // Two rules named `x` live in different scopes. `root`'s body sees
+    // the root-scope `x` (@a); `mid`'s body sees its own private `x`
+    // (@b). Same spelling, different rules — proof that resolution is
+    // lexical, not a flat-namespace collision.
+    let src = "root = x mid {\n\
+               x = @a 'A'\n\
+               mid = x {\n\
+               x = @b 'B'\n\
+               }\n\
+               }";
+    assert_eq!(
+        run_grammar(src, "AB"),
+        vec![("a".to_string(), "A"), ("b".to_string(), "B")]
+    );
+}
+
+#[test]
+fn sibling_scopes_are_isolated() {
+    // `a` (a root-scope rule) references `b`, but `b` is private to
+    // `other`'s block. `a` cannot see into a sibling's scope, so `b`
+    // stays unresolved and surfaces as an undefined-rule error.
+    let src = "root = a {\n\
+               a = b\n\
+               other = 'z' {\n\
+               b = 'B'\n\
+               }\n\
+               }";
+    let g = parse(src).expect("grammar parses");
+    let err = g
+        .compile()
+        .expect_err("a reference into a sibling's private scope is undefined");
+    assert!(
+        matches!(err, syntax_highlighter::pegc::CompileError::UndefinedRule(ref n) if n == "b"),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn deeply_nested_rule_gets_mangled_flat_name() {
+    // Root and its direct children keep bare names; a grandchild is
+    // mangled with its parent's flat name as prefix.
+    let src = "root = a {\n\
+               a = 'x' b {\n\
+               b = 'y'\n\
+               }\n\
+               }";
+    let g = parse(src).expect("grammar parses");
+    assert!(g.rules.contains_key("root"), "root keeps its bare name");
+    assert!(
+        g.rules.contains_key("a"),
+        "a root-child keeps its bare name"
+    );
+    assert!(
+        g.rules.contains_key("a::b"),
+        "a grandchild is mangled `a::b`; keys: {:?}",
+        g.rules.keys().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn multiple_top_level_declarations_rejected() {
+    // The single-root model permits exactly one top-level declaration.
+    let err = parse("root = 'a'\nextra = 'b'").expect_err("two top-level declarations must error");
+    assert!(
+        err.message.contains("exactly one top-level declaration"),
+        "unexpected error: {:?}",
+        err.message
+    );
+}
+
+#[test]
+fn duplicate_rule_in_same_scope_rejected() {
+    let err = parse("root = a {\na = 'x'\na = 'y'\n}")
+        .expect_err("two rules with the same name in one scope must error");
+    assert!(
+        err.message.contains("defined twice in the same scope"),
+        "unexpected error: {:?}",
+        err.message
+    );
+}
+
+#[test]
+fn nested_ignore_or_boundary_is_rejected() {
+    // `ignore` / `boundary` are root-scope singletons: defining either
+    // inside a nested block is an error.
+    for special in ["ignore", "boundary"] {
+        let src = format!("root = 'a' {{\nmid = 'b' {{\n{special} = 'c'\n}}\n}}");
+        let err = parse(&src).expect_err("a nested special rule must error");
+        assert!(
+            err.message.contains("root-scope singleton"),
+            "{src:?}: unexpected error {:?}",
+            err.message
+        );
+    }
+}
+
+#[test]
+fn brace_disambiguates_count_quantifier_from_scope_block() {
+    // A `{` led by a digit is the exact-count quantifier; otherwise it
+    // opens a scope block. Both forms parse and behave.
+    assert_eq!(
+        run_grammar("root = 'x'{2}", "xx"),
+        Vec::<(String, &str)>::new()
+    );
+    // Scope-block form: root body is the bare literal, helper unused.
+    assert_eq!(
+        run_grammar("root = @p 'x' {\nhelper = 'y'\n}", "x"),
+        vec![("p".to_string(), "x")]
+    );
+}
+
+#[test]
+fn reserved_collected_across_nested_scopes() {
+    // A `reserved` rule nested deep in the scope tree still feeds the
+    // grammar-wide synthesized `reserved` set, so `!reserved` resolves
+    // and bars the keyword from identifier position. (Scope governs name
+    // resolution only, not set membership.)
+    let src = "root = (token)*^ {\n\
+               ignore = (\\s)*\n\
+               boundary = !ident_body\n\
+               ident_body = [a-z]\n\
+               token = kw_if / @variable ident {\n\
+               kw_if: reserved = @keyword 'if'\n\
+               }\n\
+               ident: atomic = !reserved [a-z]+\n\
+               }";
+    let g = parse(src).expect("grammar parses");
+    assert!(
+        g.percent_rules.contains("token::kw_if"),
+        "the nested reserved rule is tracked under its mangled name; got {:?}",
+        g.percent_rules
+    );
+    assert_eq!(
+        run_grammar(src, "if box"),
+        vec![
+            ("keyword".to_string(), "if"),
+            ("variable".to_string(), "box"),
         ]
     );
 }

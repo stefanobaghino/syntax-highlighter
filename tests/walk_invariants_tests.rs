@@ -13,8 +13,9 @@ use common::segments;
 /// `start = @outer body`, `body = 'aaa' @inner 'bbb'`.
 /// On input `aaabbb`, outer covers 0..6 and inner covers 3..6.
 const SHARED_END_GRAMMAR: &str = "\
-root = @outer body
+root = @outer body {
 body = 'aaa' @inner 'bbb'
+}
 ";
 
 #[test]

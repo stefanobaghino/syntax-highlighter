@@ -77,6 +77,13 @@ const MAX_REPEAT_COUNT: usize = 1024;
 #[derive(Debug, Clone)]
 pub struct Grammar {
     pub rules: HashMap<String, Pattern>,
+    /// Flat name of the grammar's entry rule. Under the single-root
+    /// model this is the one top-level declaration's name (e.g.
+    /// `json`); hand-built grammars from [`Grammar::new`] default it to
+    /// [`ROOT_RULE`]. The compiler wraps this rule's body to assert
+    /// end-of-input and splice optional `ignore` calls, and uses it as
+    /// the bytecode entry point.
+    pub root: String,
     /// Names of rules ascribed `atomic`. The auto-insertion rewriter
     /// skips these rules: `Sequence` items inside an atomic body don't
     /// get a synthesized `ignore` call spliced between them. The `ignore`
@@ -121,6 +128,29 @@ pub struct RuleHeader {
     pub body_byte_end: usize,
 }
 
+/// One node of the parsed scope tree, before name resolution. A rule
+/// owns its body and the nested rules declared in its `{ … }` block.
+/// [`Parser::resolve_scopes`] flattens the tree into [`Grammar::rules`].
+struct ParsedRule {
+    name: String,
+    /// Source span of the rule's name, for scope-resolution diagnostics.
+    name_span: Span,
+    name_byte: usize,
+    body_byte_start: usize,
+    body_byte_end: usize,
+    /// The rule body, with `Pattern::Lenient` already wrapped when the
+    /// rule was ascribed `partial`. `NonTerminal` names are still the
+    /// authored short names; resolution rewrites them to flat keys.
+    body: Pattern,
+    atomic: bool,
+    percent: bool,
+    preferred: bool,
+    /// True iff any ascription (`partial` / `atomic` / `reserved` /
+    /// `preferred`) was present. Used to reject ascriptions on the root.
+    has_ascription: bool,
+    children: Vec<ParsedRule>,
+}
+
 impl Grammar {
     /// Construct a grammar from a hand-built rule map. Useful for
     /// tests that build `Pattern` trees directly without going
@@ -133,6 +163,7 @@ impl Grammar {
     pub fn new(rules: HashMap<String, Pattern>) -> Self {
         Grammar {
             rules,
+            root: ROOT_RULE.to_string(),
             atomic_rules: HashSet::new(),
             percent_rules: HashSet::new(),
             preferred_rules: HashSet::new(),
@@ -146,6 +177,7 @@ impl Grammar {
     pub fn with_atomic(rules: HashMap<String, Pattern>, atomic_rules: HashSet<String>) -> Self {
         Grammar {
             rules,
+            root: ROOT_RULE.to_string(),
             atomic_rules,
             percent_rules: HashSet::new(),
             preferred_rules: HashSet::new(),
@@ -177,28 +209,12 @@ impl Grammar {
     /// both, so synthesized `ignore` calls and the EOF assertion can't
     /// confuse the lint walker or the FOLLOW set.
     pub fn compile(&self) -> Result<Program, CompileError> {
-        if !self.rules.contains_key(ROOT_RULE) {
+        if !self.rules.contains_key(&self.root) {
             return Err(CompileError::MissingRootRule);
-        }
-        // When the grammar was parsed from source, enforce that `root`
-        // is the first rule and `ignore` — when present — is the
-        // second. Hand-built grammars from `Grammar::new` skip this —
-        // `rule_headers` is empty for them.
-        if !self.rule_headers.is_empty() {
-            let root_pos = self
-                .rule_headers
-                .iter()
-                .position(|h| h.name == ROOT_RULE)
-                .expect("ROOT_RULE presence checked above");
-            if root_pos != 0 {
-                return Err(CompileError::RootRulePosition {
-                    expected_pos: 0,
-                    has_ignore: self.rules.contains_key(IGNORE_RULE),
-                });
-            }
         }
         let mut resolved = Grammar {
             rules: self.rules.clone(),
+            root: self.root.clone(),
             atomic_rules: self.atomic_rules.clone(),
             percent_rules: self.percent_rules.clone(),
             preferred_rules: self.preferred_rules.clone(),
@@ -223,7 +239,7 @@ impl Grammar {
         // `CompileError::UndefinedRule("boundary")` from `compile_rules`.
         append_boundary_check(&mut resolved);
         wrap_root(&mut resolved);
-        compile_rules(&resolved.rules)
+        compile_rules(&resolved.rules, &resolved.root)
     }
 }
 
@@ -300,202 +316,403 @@ impl<'a> Parser<'a> {
         self.span_at(self.pos)
     }
 
+    /// Parse a whole grammar: exactly one top-level declaration (the
+    /// grammar root), with every other rule nested under it via
+    /// `{ … }` scope blocks. The parsed scope tree is then
+    /// [resolved](Self::resolve_scopes) to the flat rule map the
+    /// compiler pipeline consumes.
     fn parse_grammar(&mut self) -> Result<Grammar, ParseError> {
         self.skip_ws();
-        let mut rules = HashMap::new();
-        let mut atomic_rules: HashSet<String> = HashSet::new();
-        let mut percent_rules: HashSet<String> = HashSet::new();
-        let mut preferred_rules: HashSet<String> = HashSet::new();
-        let mut rule_headers: Vec<RuleHeader> = Vec::new();
-        while self.pos < self.src.len() {
-            // Rule definitions may carry postfix **ascriptions** between
-            // the name and `=`: `name: kw [kw ...] = body`. The keywords
-            // are contextual — recognized only in this slot, and usable as
-            // ordinary rule names / references everywhere else.
-            //
-            // - `partial` declares every call to the rule intentionally
-            //   lenient, suppressing `lint_partial_match` findings at its
-            //   call sites; the body is wrapped in `Pattern::Lenient` so
-            //   the lint walker sees the same shape as a per-call-site
-            //   leniency.
-            // - `atomic` opts the rule out of `ignore` auto-insertion (no
-            //   `ignore` spliced between `Sequence` items).
-            // - `reserved` implies `atomic` and additionally appends a
-            //   `boundary` boundary call inside the rule's terminal captures
-            //   (see `append_boundary_check`); its literals seed the synthesized
-            //   `reserved` set.
-            // - `preferred` is the sibling of `reserved` (same atomic +
-            //   `boundary` behavior) whose literals feed `preferred` instead and
-            //   stay identifier-eligible.
-            //
-            // `atomic` / `reserved` / `preferred` are mutually exclusive
-            // (each makes the rule atomic); `partial` composes with any
-            // and, when present, must be written first.
-            let name_byte = self.pos;
-            let name = self.parse_ident()?;
-            self.skip_ws();
-            let mut lenient_span: Option<Span> = None;
-            let mut definition_atomic = false;
-            let mut definition_percent = false;
-            let mut definition_preferred = false;
-            if self.peek() == Some(b':') {
-                self.pos += 1;
-                let mut count = 0usize;
-                loop {
-                    self.skip_ws();
-                    if !matches!(self.peek(), Some(c) if is_ident_start(c)) {
-                        break;
-                    }
-                    let kw_span = self.span();
-                    let kw = self.parse_ident()?;
-                    match kw.as_str() {
-                        "partial" => {
-                            if lenient_span.is_some() {
-                                return Err(self.err("duplicate `partial` ascription".into()));
-                            }
-                            if definition_atomic || definition_percent {
-                                return Err(self.err(
-                                    "`partial` must come before `atomic` / `reserved` / `preferred`"
-                                        .into(),
-                                ));
-                            }
-                            lenient_span = Some(kw_span);
-                        }
-                        "atomic" | "reserved" | "preferred" => {
-                            if definition_atomic || definition_percent {
-                                return Err(self.err(
-                                    "`atomic`, `reserved`, and `preferred` are mutually exclusive"
-                                        .into(),
-                                ));
-                            }
-                            definition_atomic = kw == "atomic";
-                            definition_percent = kw != "atomic";
-                            definition_preferred = kw == "preferred";
-                        }
-                        other => {
-                            return Err(self.err(format!(
-                                "unknown ascription `{other}`; expected `partial`, `atomic`, \
-                                 `reserved`, or `preferred`"
-                            )));
-                        }
-                    }
-                    count += 1;
-                }
-                if count == 0 {
-                    return Err(self.err(
-                        "`:` must be followed by at least one ascription (`partial`, \
-                         `atomic`, `reserved`, `preferred`)"
-                            .into(),
-                    ));
-                }
-            }
-            let definition_lenient = lenient_span.is_some();
-            self.skip_ws();
-            self.expect_str("=")?;
-            self.skip_ws();
-            let body_byte_start = self.pos;
-            let mut pat = self.parse_choice()?;
-            let body_byte_end = self.pos;
-            if let Some(span) = lenient_span {
-                pat = Pattern::Lenient {
-                    inner: Box::new(pat),
-                    span,
-                };
-            }
-            // `reserved` and `preferred` are compiler-generated (see
-            // `synthesize_reserved_preferred`); an author definition would
-            // be silently overwritten, so reject it outright. Grammars may
-            // still *reference* them (`!reserved`).
-            if name == RESERVED_RULE || name == PREFERRED_RULE {
-                return Err(self.err(format!(
-                    "`{name}` is a compiler-generated rule (synthesized from the `reserved` / \
-                     `preferred` ascriptions) and cannot be defined explicitly; reference it \
-                     (e.g. `!{name}`) instead"
-                )));
-            }
-            // The three special rules — the start rule `root` and the two
-            // auto-insertion targets `ignore` (whitespace) and `boundary` (word
-            // boundary) — are structural slots wrapped or injected by the
-            // compiler, not lexable tokens, so every ascription
-            // (`partial`, `atomic`, `reserved`, `preferred`) is meaningless
-            // on them and rejected. Disabling whitespace auto-insertion is
-            // done by omitting `ignore`, not by ascribing it.
-            if (definition_atomic
-                || definition_percent
-                || definition_preferred
-                || definition_lenient)
-                && (name == ROOT_RULE || name == IGNORE_RULE || name == BOUNDARY_RULE)
-            {
-                let disable_hint = if name == IGNORE_RULE {
-                    "; to disable auto-insertion, omit `ignore` and thread \
-                     whitespace through a plainly-named rule"
-                } else {
-                    ""
-                };
-                return Err(self.err(format!(
-                    "the `{name}` rule cannot carry an ascription (`partial`, `atomic`, \
-                     `reserved`, `preferred`){disable_hint}"
-                )));
-            }
-            if definition_percent {
-                percent_rules.insert(name.clone());
-            }
-            if definition_preferred {
-                preferred_rules.insert(name.clone());
-            }
-            if definition_atomic || definition_percent {
-                atomic_rules.insert(name.clone());
-            }
-            if rules.insert(name.clone(), pat).is_some() {
-                return Err(self.err(format!("rule '{}' defined twice", name)));
-            }
-            rule_headers.push(RuleHeader {
-                name,
-                name_byte,
-                body_byte_start,
-                body_byte_end,
-            });
-            self.skip_ws();
-        }
-        if rule_headers.is_empty() {
+        if self.pos >= self.src.len() {
             return Err(self.err("grammar has no rules".into()));
         }
-        // Reserved-name enforcement for the special rules' positions is
-        // parse-time so the error points at the offending source
-        // location. `root`'s presence (and the requirement that `root`
-        // itself sits at the top) is enforced by `Grammar::compile` —
-        // that lets AST-only parser tests build fixtures with arbitrary
-        // rule names without inventing a `root` placeholder.
+        let root = self.parse_rule_def()?;
+        self.skip_ws();
+        if self.pos < self.src.len() {
+            return Err(self.err(
+                "a grammar must have exactly one top-level declaration (the root); nest every \
+                 other rule inside its `{ … }` scope block"
+                    .into(),
+            ));
+        }
+        // The root is a structural slot (its body is wrapped with the
+        // EOF assertion and optional `ignore` calls), so it carries no
+        // ascription — same rule the special targets follow.
+        if root.has_ascription {
+            return Err(self.err_at(
+                root.name_span,
+                format!(
+                    "the top-level rule `{}` is the grammar root and cannot carry an ascription \
+                     (`partial`, `atomic`, `reserved`, `preferred`)",
+                    root.name
+                ),
+            ));
+        }
+        self.resolve_scopes(root)
+    }
+
+    /// Parse one rule definition and its optional `{ … }` scope block of
+    /// nested rules. Recursive: a nested rule may own its own block.
+    fn parse_rule_def(&mut self) -> Result<ParsedRule, ParseError> {
+        // Rule definitions may carry postfix **ascriptions** between the
+        // name and `=`: `name: kw [kw ...] = body`. The keywords are
+        // contextual — recognized only in this slot, usable as ordinary
+        // rule names / references everywhere else.
         //
-        // `ignore` and `boundary`, when present, occupy the contiguous slots
-        // immediately after `root` (positions 1..=n in either order),
-        // where n is how many of them the grammar defines.
-        let specials = [IGNORE_RULE, BOUNDARY_RULE];
-        let n_special = rule_headers
-            .iter()
-            .filter(|h| specials.contains(&h.name.as_str()))
-            .count();
-        for (pos, h) in rule_headers.iter().enumerate() {
-            if specials.contains(&h.name.as_str()) && !(1..=n_special).contains(&pos) {
-                return Err(self.err(format!(
-                    "`{}` must appear in the reserved slots immediately after `{ROOT_RULE}` (before any other rule)",
-                    h.name
-                )));
+        // - `partial` declares every call to the rule intentionally
+        //   lenient, suppressing `lint_partial_match` findings at its
+        //   call sites; the body is wrapped in `Pattern::Lenient`.
+        // - `atomic` opts the rule out of `ignore` auto-insertion.
+        // - `reserved` implies `atomic` and appends a `boundary` call
+        //   inside the rule's terminal captures; its literals seed the
+        //   synthesized `reserved` set.
+        // - `preferred` is the sibling of `reserved` whose literals feed
+        //   `preferred` instead and stay identifier-eligible.
+        //
+        // `atomic` / `reserved` / `preferred` are mutually exclusive;
+        // `partial` composes with any and, when present, must be first.
+        let name_span = self.span();
+        let name_byte = self.pos;
+        let name = self.parse_ident()?;
+        self.skip_ws();
+        let mut lenient_span: Option<Span> = None;
+        let mut definition_atomic = false;
+        let mut definition_percent = false;
+        let mut definition_preferred = false;
+        if self.peek() == Some(b':') {
+            self.pos += 1;
+            let mut count = 0usize;
+            loop {
+                self.skip_ws();
+                if !matches!(self.peek(), Some(c) if is_ident_start(c)) {
+                    break;
+                }
+                let kw_span = self.span();
+                let kw = self.parse_ident()?;
+                match kw.as_str() {
+                    "partial" => {
+                        if lenient_span.is_some() {
+                            return Err(self.err("duplicate `partial` ascription".into()));
+                        }
+                        if definition_atomic || definition_percent {
+                            return Err(self.err(
+                                "`partial` must come before `atomic` / `reserved` / `preferred`"
+                                    .into(),
+                            ));
+                        }
+                        lenient_span = Some(kw_span);
+                    }
+                    "atomic" | "reserved" | "preferred" => {
+                        if definition_atomic || definition_percent {
+                            return Err(self.err(
+                                "`atomic`, `reserved`, and `preferred` are mutually exclusive"
+                                    .into(),
+                            ));
+                        }
+                        definition_atomic = kw == "atomic";
+                        definition_percent = kw != "atomic";
+                        definition_preferred = kw == "preferred";
+                    }
+                    other => {
+                        return Err(self.err(format!(
+                            "unknown ascription `{other}`; expected `partial`, `atomic`, \
+                             `reserved`, or `preferred`"
+                        )));
+                    }
+                }
+                count += 1;
+            }
+            if count == 0 {
+                return Err(self.err(
+                    "`:` must be followed by at least one ascription (`partial`, \
+                     `atomic`, `reserved`, `preferred`)"
+                        .into(),
+                ));
             }
         }
-        // `boundary`, like `ignore`, is exempt from ignore auto-insertion: its
-        // body is a bare boundary predicate that must stay adjacent to
-        // the keyword it follows.
-        if rules.contains_key(BOUNDARY_RULE) {
-            atomic_rules.insert(BOUNDARY_RULE.to_string());
+        let definition_lenient = lenient_span.is_some();
+        self.skip_ws();
+        self.expect_str("=")?;
+        self.skip_ws();
+        let body_byte_start = self.pos;
+        let mut body = self.parse_choice()?;
+        let body_byte_end = self.pos;
+        if let Some(span) = lenient_span {
+            body = Pattern::Lenient {
+                inner: Box::new(body),
+                span,
+            };
         }
+        // `reserved` and `preferred` are compiler-generated (see
+        // `synthesize_reserved_preferred`); an author definition would be
+        // silently overwritten, so reject it outright. Grammars may still
+        // *reference* them (`!reserved`).
+        if name == RESERVED_RULE || name == PREFERRED_RULE {
+            return Err(self.err(format!(
+                "`{name}` is a compiler-generated rule (synthesized from the `reserved` / \
+                 `preferred` ascriptions) and cannot be defined explicitly; reference it \
+                 (e.g. `!{name}`) instead"
+            )));
+        }
+        // The two auto-insertion targets `ignore` (whitespace) and
+        // `boundary` (word boundary) are structural slots injected by the
+        // compiler, so every ascription is meaningless on them and
+        // rejected. Disabling whitespace auto-insertion is done by
+        // omitting `ignore`, not by ascribing it.
+        if (definition_atomic || definition_percent || definition_preferred || definition_lenient)
+            && (name == IGNORE_RULE || name == BOUNDARY_RULE)
+        {
+            let disable_hint = if name == IGNORE_RULE {
+                "; to disable auto-insertion, omit `ignore` and thread \
+                 whitespace through a plainly-named rule"
+            } else {
+                ""
+            };
+            return Err(self.err(format!(
+                "the `{name}` rule cannot carry an ascription (`partial`, `atomic`, \
+                 `reserved`, `preferred`){disable_hint}"
+            )));
+        }
+        // Optional `{ … }` scope block of nested rules. A `{` here is
+        // unambiguous: the exact-count quantifier `{n}` is digit-led and
+        // consumed inside `parse_postfix`, so any `{` that reaches this
+        // point opens a scope.
+        self.skip_ws();
+        let children = if self.peek() == Some(b'{') {
+            self.pos += 1;
+            let mut kids = Vec::new();
+            loop {
+                self.skip_ws();
+                match self.peek() {
+                    Some(b'}') => {
+                        self.pos += 1;
+                        break;
+                    }
+                    None => {
+                        return Err(self.err(format!(
+                            "unterminated scope block for rule `{name}`: expected `}}`"
+                        )));
+                    }
+                    // A scope-block member starting with a digit is almost
+                    // always a repeat count that lost its tight binding: the
+                    // `{n}` quantifier is recognized only when `{` touches its
+                    // atom *and* a digit follows immediately, so `x{ 4 }` or
+                    // `x {4}` fall through to here as a (malformed) scope. Name
+                    // the real mistake instead of a bare "expected identifier".
+                    Some(c) if c.is_ascii_digit() => {
+                        return Err(self.err(
+                            "expected a rule definition inside the scope block; if you meant a \
+                             repeat count, write `{n}` with the brace touching its atom and no \
+                             spaces (e.g. `x{4}`)"
+                                .into(),
+                        ));
+                    }
+                    _ => kids.push(self.parse_rule_def()?),
+                }
+            }
+            kids
+        } else {
+            Vec::new()
+        };
+        Ok(ParsedRule {
+            name,
+            name_span,
+            name_byte,
+            body_byte_start,
+            body_byte_end,
+            body,
+            atomic: definition_atomic,
+            percent: definition_percent,
+            preferred: definition_preferred,
+            has_ascription: definition_atomic
+                || definition_percent
+                || definition_preferred
+                || definition_lenient,
+            children,
+        })
+    }
+
+    /// Resolve a parsed scope tree into the flat [`Grammar`] the compiler
+    /// pipeline consumes. Lexical name resolution and mangling happen
+    /// here: every `NonTerminal` is rewritten to the unique flat name it
+    /// resolves to (nearest enclosing scope wins), after which scoping no
+    /// longer exists — the downstream passes see one flat namespace.
+    fn resolve_scopes(&self, root: ParsedRule) -> Result<Grammar, ParseError> {
+        let mut out: HashMap<String, Pattern> = HashMap::new();
+        let mut atomic: HashSet<String> = HashSet::new();
+        let mut percent: HashSet<String> = HashSet::new();
+        let mut preferred: HashSet<String> = HashSet::new();
+        let mut rule_headers: Vec<RuleHeader> = Vec::new();
+
+        let root_flat = root.name.clone();
+        // Base frame: the root rule itself, visible everywhere (so the
+        // grammar can recurse into / reference its entry rule).
+        let mut stack: Vec<HashMap<String, String>> =
+            vec![HashMap::from([(root.name.clone(), root_flat.clone())])];
+        self.resolve_rule(
+            root,
+            root_flat.clone(),
+            true,
+            &mut stack,
+            &mut out,
+            &mut atomic,
+            &mut percent,
+            &mut preferred,
+            &mut rule_headers,
+        )?;
+
+        // `boundary`, like `ignore`, is exempt from ignore auto-insertion:
+        // its body is a bare boundary predicate that must stay adjacent to
+        // the keyword it follows. (`ignore` is exempted by name inside
+        // `inject_auto_ignore`.)
+        if out.contains_key(BOUNDARY_RULE) {
+            atomic.insert(BOUNDARY_RULE.to_string());
+        }
+
         Ok(Grammar {
-            rules,
-            atomic_rules,
-            percent_rules,
-            preferred_rules,
+            rules: out,
+            root: root_flat,
+            atomic_rules: atomic,
+            percent_rules: percent,
+            preferred_rules: preferred,
             rule_headers,
         })
+    }
+
+    /// Resolve a single rule and recurse into its scope. `flat_name` is
+    /// the rule's unique key; `is_root` marks the top-level declaration,
+    /// whose direct children are the grammar's globals (bare names);
+    /// deeper rules are mangled `parent::name`.
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_rule(
+        &self,
+        rule: ParsedRule,
+        flat_name: String,
+        is_root: bool,
+        stack: &mut Vec<HashMap<String, String>>,
+        out: &mut HashMap<String, Pattern>,
+        atomic: &mut HashSet<String>,
+        percent: &mut HashSet<String>,
+        preferred: &mut HashSet<String>,
+        headers: &mut Vec<RuleHeader>,
+    ) -> Result<(), ParseError> {
+        // Build the child scope frame (name → flat key) before resolving
+        // any body, so sibling references and forward references resolve.
+        let mut frame: HashMap<String, String> = HashMap::new();
+        for child in &rule.children {
+            // `ignore` / `boundary` are root-scope singletons.
+            if !is_root && (child.name == IGNORE_RULE || child.name == BOUNDARY_RULE) {
+                return Err(self.err_at(
+                    child.name_span,
+                    format!(
+                        "the `{}` rule is a root-scope singleton and cannot be defined inside a \
+                         nested scope; declare it as a direct child of the top-level rule",
+                        child.name
+                    ),
+                ));
+            }
+            let child_flat = if is_root {
+                child.name.clone()
+            } else {
+                format!("{flat_name}::{}", child.name)
+            };
+            if frame.insert(child.name.clone(), child_flat).is_some() {
+                return Err(self.err_at(
+                    child.name_span,
+                    format!("rule `{}` is defined twice in the same scope", child.name),
+                ));
+            }
+        }
+        stack.push(frame);
+
+        let mut body = rule.body;
+        Self::rewrite_refs(&mut body, stack);
+        if out.insert(flat_name.clone(), body).is_some() {
+            return Err(self.err_at(
+                rule.name_span,
+                format!(
+                    "rule `{}` collides with another rule's flat name",
+                    rule.name
+                ),
+            ));
+        }
+        if rule.percent {
+            percent.insert(flat_name.clone());
+        }
+        if rule.preferred {
+            preferred.insert(flat_name.clone());
+        }
+        if rule.atomic || rule.percent {
+            atomic.insert(flat_name.clone());
+        }
+        headers.push(RuleHeader {
+            name: flat_name,
+            name_byte: rule.name_byte,
+            body_byte_start: rule.body_byte_start,
+            body_byte_end: rule.body_byte_end,
+        });
+
+        for child in rule.children {
+            let child_flat = stack
+                .last()
+                .expect("child frame pushed above")
+                .get(&child.name)
+                .expect("child registered in frame above")
+                .clone();
+            self.resolve_rule(
+                child, child_flat, false, stack, out, atomic, percent, preferred, headers,
+            )?;
+        }
+        stack.pop();
+        Ok(())
+    }
+
+    /// Rewrite every `NonTerminal` name in `pat` to the flat key it
+    /// resolves to under `stack` (innermost frame first). Names not found
+    /// in any frame are left bare: that covers the reserved globals
+    /// `reserved` / `preferred` (synthesized later, never in the tree)
+    /// and genuinely undefined references (caught at emit time as
+    /// `CompileError::UndefinedRule`).
+    fn rewrite_refs(pat: &mut Pattern, stack: &[HashMap<String, String>]) {
+        match pat {
+            Pattern::NonTerminal { name, .. } => {
+                if let Some(flat) = Self::lookup(stack, name) {
+                    *name = flat;
+                }
+            }
+            Pattern::Sequence { items, .. } => {
+                for it in items {
+                    Self::rewrite_refs(it, stack);
+                }
+            }
+            Pattern::OrderedChoice { alts, .. } => {
+                for a in alts {
+                    Self::rewrite_refs(a, stack);
+                }
+            }
+            Pattern::Repeat { inner, .. }
+            | Pattern::RepeatOne { inner, .. }
+            | Pattern::Optional { inner, .. }
+            | Pattern::NotPredicate { inner, .. }
+            | Pattern::AndPredicate { inner, .. }
+            | Pattern::Capture { inner, .. }
+            | Pattern::Lenient { inner, .. }
+            | Pattern::InferBoundaryCatch { inner, .. } => Self::rewrite_refs(inner, stack),
+            Pattern::Catch {
+                inner, recovery, ..
+            } => {
+                Self::rewrite_refs(inner, stack);
+                Self::rewrite_refs(recovery, stack);
+            }
+            Pattern::Literal { .. } | Pattern::CharClass { .. } | Pattern::AnyChar { .. } => {}
+        }
+    }
+
+    fn lookup(stack: &[HashMap<String, String>], name: &str) -> Option<String> {
+        stack
+            .iter()
+            .rev()
+            .find_map(|frame| frame.get(name).cloned())
     }
 
     fn parse_choice(&mut self) -> Result<Pattern, ParseError> {
@@ -747,7 +964,10 @@ impl<'a> Parser<'a> {
                     self.pos += 1;
                     atom = Pattern::optional(atom);
                 }
-                Some(b'{') => {
+                // Exact-count quantifier `{n}` is digit-led; the guard
+                // keeps a non-digit `{` (a scope block opener) out of the
+                // postfix loop so it reaches `parse_rule_def`.
+                Some(b'{') if matches!(self.peek_at(1), Some(d) if d.is_ascii_digit()) => {
                     self.pos += 1;
                     let n = self.parse_repeat_count()?;
                     self.expect(b'}')?;
@@ -1430,6 +1650,17 @@ impl<'a> Parser<'a> {
     fn err(&self, message: String) -> ParseError {
         let Span { line, col } = self.span();
         ParseError { message, line, col }
+    }
+
+    /// Build a `ParseError` anchored at an arbitrary span rather than the
+    /// current cursor — used by scope resolution, which reports against a
+    /// rule's recorded name span after its body has been consumed.
+    fn err_at(&self, span: Span, message: String) -> ParseError {
+        ParseError {
+            message,
+            line: span.line,
+            col: span.col,
+        }
     }
 }
 

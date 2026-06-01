@@ -379,7 +379,7 @@ pub fn compute_follow(grammar: &Grammar) -> HashMap<String, FollowSet> {
         .keys()
         .map(|n| (n.clone(), FollowSet::new()))
         .collect();
-    if let Some(entry) = follow.get_mut(super::parser::ROOT_RULE) {
+    if let Some(entry) = follow.get_mut(&grammar.root) {
         entry.insert(FollowElement::Eof);
     }
     loop {
@@ -801,7 +801,7 @@ fn leniency_reaches_unguarded(
     let mut rule_names: Vec<&String> = ctx.grammar.rules.keys().collect();
     rule_names.sort();
 
-    if caller == super::parser::ROOT_RULE && !target_trailing.contains(&FollowElement::Eof) {
+    if caller == ctx.grammar.root && !target_trailing.contains(&FollowElement::Eof) {
         visited_callers.remove(caller);
         return inside_catch;
     }
@@ -1612,7 +1612,8 @@ fn inject_ignore_in(pat: &mut Pattern) {
 /// assertion uniformly.
 pub fn wrap_root(grammar: &mut Grammar) {
     let active = auto_insertion_active(grammar);
-    let Some(body) = grammar.rules.remove(super::parser::ROOT_RULE) else {
+    let root = grammar.root.clone();
+    let Some(body) = grammar.rules.remove(&root) else {
         return;
     };
     let mut items: Vec<Pattern> = Vec::with_capacity(4);
@@ -1624,9 +1625,7 @@ pub fn wrap_root(grammar: &mut Grammar) {
         items.push(Pattern::optional(ignore_call()));
     }
     items.push(Pattern::not_predicate(Pattern::any_char()));
-    grammar
-        .rules
-        .insert(super::parser::ROOT_RULE.to_string(), Pattern::seq(items));
+    grammar.rules.insert(root, Pattern::seq(items));
 }
 
 fn ignore_call() -> Pattern {
@@ -2006,7 +2005,7 @@ mod tests {
 
     #[test]
     fn ignore_rule_marks_itself_not_root() {
-        let bits = ignore_bits("root = ignore 'x'\nignore = ' '*");
+        let bits = ignore_bits("root = ignore 'x' {\nignore = ' '*\n}");
         assert!(bits["ignore"]);
         assert!(!bits["root"]);
     }
@@ -2014,10 +2013,11 @@ mod tests {
     #[test]
     fn ignore_cascade_reaches_transitive_callees() {
         let bits = ignore_bits(
-            "root = ignore 'x'\n\
+            "root = ignore 'x' {\n\
              ignore = ws\n\
              ws = (comment / ' ')*\n\
-             comment = '#' (!'\\n' .)*",
+             comment = '#' (!'\\n' .)*\n\
+             }",
         );
         assert!(bits["ignore"] && bits["ws"] && bits["comment"]);
         assert!(!bits["root"]);
@@ -2029,9 +2029,10 @@ mod tests {
         // is pinned out of the cascade — keeping its frame visible in
         // `pegdb recoveries explain`.
         let bits = ignore_bits(
-            "root = ignore 'x'\n\
+            "root = ignore 'x' {\n\
              ignore = (victim / ' ')*\n\
-             victim = 'a' ^bad 'b'",
+             victim = 'a' ^bad 'b'\n\
+             }",
         );
         assert!(bits["ignore"]);
         assert!(!bits["victim"], "catch-bearing rule must not cascade");
@@ -2040,9 +2041,10 @@ mod tests {
     #[test]
     fn ignore_cascade_terminates_on_recursion() {
         let bits = ignore_bits(
-            "root = ignore 'x'\n\
+            "root = ignore 'x' {\n\
              ignore = ws\n\
-             ws = (ws / ' ')*",
+             ws = (ws / ' ')*\n\
+             }",
         );
         assert!(bits["ignore"] && bits["ws"]);
     }

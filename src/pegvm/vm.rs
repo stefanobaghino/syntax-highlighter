@@ -2029,9 +2029,10 @@ mod recovery_diagnostic_tests {
         // reached deepest *inside* `inner`, so the recorded rule_stack
         // must include `inner`.
         let src = "\
-            root = (item)*^\n\
+            root = (item)*^ {\n\
             item = inner\n\
-            inner = [a-z]+\n";
+            inner = [a-z]+\n\
+            }\n";
         let prog = pegc::compile(src).unwrap();
         let result = VM::new_from_program(&prog, b"abc!!def")
             .with_track_recovery_diagnostics(true)

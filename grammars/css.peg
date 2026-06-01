@@ -1,154 +1,123 @@
-# CSS grammar with highlight annotations.
-#
-# Scope: highlighting, not conformance validation. Covers standard
-# rules, at-rules (`@media`, `@keyframes`, `@import`, ...), nested
-# rules, declarations, selectors (type/class/id/attribute/pseudo/
-# combinators, including the nesting `&`), and value forms including
-# `calc()`, `rgb()`, `var(--x)`, hex colors, and numeric literals
-# with units.
-#
-# Capture kinds used (all present in src/highlight/theme.rs):
-#   keyword, string, number, comment, operator, punctuation, type,
-#   function, constant, property, variable, recovery.
-#
-# Intentionally out of scope:
-#   - `@document`, `@container` advanced preludes (treated as generic
-#     token stream).
-#   - Full selector-list validation; we accept most practical shapes.
-#   - CSS `url(noquote)` with no quotes is supported but not the
-#     full URL whitespace rules.
-#
-# Recovery: top-level uses `*^` so malformed statements don't abort
-# the whole stylesheet; `block` uses a `^block_close` catch so
-# malformed declarations inside a rule/at-rule body resync at the
-# closing `}` instead of failing the enclosing statement.
+# TODO out of scope: `@document` / `@container` advanced preludes (treated
+# as a generic token stream); full selector-list validation (we accept most
+# practical shapes); full `url()` whitespace rules.
 
-root = (statement)*^
+css = (statement)*^ {
 
-ignore = (comment / \s)*
+    ignore = (comment / \s)*
 
-statement = at_rule
-           / rule
+    statement = at_rule
+               / rule
 
-# --- At-rules --------------------------------------------------------
+    at_rule = at_name prelude (block / @punctuation ';') {
+        at_name: atomic = @keyword ('@' ident_body+)
 
-at_rule = at_name prelude (block / @punctuation ';')
-at_name: atomic = @keyword ('@' ident_body+)
+        prelude = prelude_token* {
+            prelude_token = string_lit
+                           / fn_call
+                           / hex_color
+                           / number_with_unit
+                           / @keyword '!important'
+                           / @type ident
+                           / @punctuation '(' prelude @punctuation ')'
+                           / @punctuation ','
+                           / @punctuation ':'
+                           / @operator '='
+                           / @operator '+'
+                           / @operator '-'
+                           / @operator '*'
+                           / @operator '/'
+                           / @operator '>'
+        }
+    }
 
-# Prelude: tokens up to `{` or `;` — sequences of value-like tokens.
-prelude = prelude_token*
-prelude_token = string_lit
-               / fn_call
-               / hex_color
-               / number_with_unit
-               / @keyword '!important'
-               / @type ident
-               / @punctuation '(' prelude @punctuation ')'
-               / @punctuation ','
-               / @punctuation ':'
-               / @operator '='
-               / @operator '+'
-               / @operator '-'
-               / @operator '*'
-               / @operator '/'
-               / @operator '>'
+    rule = selector_list block {
+        selector_list = selector (@punctuation ',' selector)* {
+            selector = compound_selector combinator_and_next* {
+                combinator_and_next = @operator '>' compound_selector
+                                    / @operator '+' compound_selector
+                                    / @operator '~' compound_selector
+                                    / compound_selector
 
-# --- Rules -----------------------------------------------------------
+                compound_selector = selector_atom+ {
+                    selector_atom: atomic = @property ('.' ident)
+                                          / @constant ('#' ident)
+                                          / @function ('::' ident pseudo_args?)
+                                          / @function (':' ident pseudo_args?)
+                                          / @punctuation '[' (.. ']') @punctuation ']'
+                                          / @punctuation '&'
+                                          / @punctuation '*'
+                                          / @type ident
+                    {
+                        pseudo_args: atomic = '(' ..= ')'
+                    }
+                }
+            }
+        }
+    }
 
-rule = selector_list block
-selector_list = selector (@punctuation ',' selector)*
-selector = compound_selector combinator_and_next*
-combinator_and_next = @operator '>' compound_selector
-                    / @operator '+' compound_selector
-                    / @operator '~' compound_selector
-                    / compound_selector
+    block = @punctuation '{' (block_item* @punctuation '}' ^^block_close ..= @punctuation '}') {
+        block_item = at_rule
+                    / declaration
+                    / rule
+                    / @punctuation ';'
+        {
+            declaration: partial = @property prop_ident @punctuation ':' value_list
+                                   @keyword '!important'? (@punctuation ';' / &'}')
+            {
+                prop_ident: atomic = '--' ident_body+
+                                    / '-'? ident
 
-compound_selector = selector_atom+
-selector_atom: atomic = @property ('.' ident)
-                      / @constant ('#' ident)
-                      / @function ('::' ident pseudo_args?)
-                      / @function (':' ident pseudo_args?)
-                      / @punctuation '[' (.. ']') @punctuation ']'
-                      / @punctuation '&'
-                      / @punctuation '*'
-                      / @type ident
+                value_list = value_term (@punctuation ',' value_term)*
+            }
+        }
+    }
 
-pseudo_args: atomic = '(' ..= ')'
+    value_term = value_factor+ {
+        value_factor = string_lit
+                      / fn_call
+                      / hex_color
+                      / number_with_unit
+                      / url_unquoted
+                      / @variable ident
+                      / @operator '/'
+                      / @operator '+'
+                      / @operator '-'
+                      / @operator '*'
+        {
+            url_unquoted = @function 'url' @punctuation '(' @string (.. ')') @punctuation ')'
+        }
+    }
 
-# --- Blocks & declarations ------------------------------------------
+    fn_call = @function ident @punctuation '(' fn_args? @punctuation ')' {
+        fn_args = value_term (@punctuation ',' value_term)*
+    }
 
-block = @punctuation '{' (block_item* @punctuation '}' ^^block_close ..= @punctuation '}')
-block_item = at_rule
-            / declaration
-            / rule
-            / @punctuation ';'
+    hex_color: atomic = @constant ('#' [\da-fA-F]+)
 
-# Trailing `important? (';' / &'}')` leniency is absorbed by `block`'s `^block_close`.
-declaration: partial = @property prop_ident @punctuation ':' value_list
-                       @keyword '!important'? (@punctuation ';' / &'}')
+    number_with_unit = @number num_body {
+        num_body: partial atomic = [+\-]? (num_float / \d+) num_unit? {
+            num_float: atomic = \d* '.' \d+
+                               / \d+ '.' \d*
+            num_unit = '%'
+                      / ident
+        }
+    }
 
-prop_ident: atomic = '--' ident_body+
-                    / '-'? ident
+    string_lit = @string (dq_string / sq_string) {
+        dq_string: atomic = '"' (str_escape / !'"' !'\n' .)* '"'
+        sq_string: atomic = "'" (str_escape / !"'" !'\n' .)* "'"
+        str_escape: atomic = '\\' .
+    }
 
-# --- Values ---------------------------------------------------------
+    ident: atomic = (ident_start_char / css_escape) (ident_body_char / css_escape)* {
+        ident_start_char = [A-Za-z_\-\u{80}-\u{10FFFF}]
+    }
+    ident_body_char = [A-Za-z\d_\-\u{80}-\u{10FFFF}]
+    ident_body = ident_body_char / css_escape
+    # Broad "any non-newline byte" escape: the precise hex-digit-count form
+    # would force a partial-match call site that trips the lint.
+    css_escape: atomic = '\\' !\R .
 
-value_list = value_term (@punctuation ',' value_term)*
-value_term = value_factor+
-value_factor = string_lit
-              / fn_call
-              / hex_color
-              / number_with_unit
-              / url_unquoted
-              / @variable ident
-              / @operator '/'
-              / @operator '+'
-              / @operator '-'
-              / @operator '*'
-
-fn_call = @function ident @punctuation '(' fn_args? @punctuation ')'
-fn_args = value_term (@punctuation ',' value_term)*
-
-# Unquoted `url(...)` arg — bare text till the closing paren.
-url_unquoted = @function 'url' @punctuation '(' @string (.. ')') @punctuation ')'
-
-# --- Literals -------------------------------------------------------
-
-hex_color: atomic = @constant ('#' [\da-fA-F]+)
-
-number_with_unit = @number num_body
-
-# Trailing `num_unit?` leniency: unitless numbers stop at the next non-unit byte; outer recovery handles malformed values.
-num_body: partial atomic = [+\-]? (num_float / \d+) num_unit?
-num_float: atomic = \d* '.' \d+
-                   / \d+ '.' \d*
-num_unit = '%'
-          / ident
-
-string_lit = @string (dq_string / sq_string)
-dq_string: atomic = '"' (str_escape / !'"' !'\n' .)* '"'
-sq_string: atomic = "'" (str_escape / !"'" !'\n' .)* "'"
-str_escape: atomic = '\\' .
-
-# --- Identifiers ----------------------------------------------------
-
-# Per CSS Syntax Module L3 §4.6: ident-start = letter | _ | non-ASCII
-# code point (≥ U+0080) | css_escape; ident code point = ident-start |
-# digit | -. The escape is `\` followed by 1-6 hex digits and an
-# optional trailing whitespace (consumed by the escape, not the ident).
-ident: atomic = (ident_start_char / css_escape) (ident_body_char / css_escape)*
-ident_start_char = [A-Za-z_\-\u{80}-\u{10FFFF}]
-ident_body_char = [A-Za-z\d_\-\u{80}-\u{10FFFF}]
-ident_body = ident_body_char / css_escape
-# Per CSS Syntax Module L3 §4.6 an escape is `\\` followed by either
-# 1-6 hex digits (plus optional trailing whitespace) or any non-newline
-# code point. The broader "any non-newline byte" form covers both
-# cases for highlighter purposes; encoding the hex-digit-count
-# refinement separately would force a partial-match call site that
-# trips the lint.
-css_escape: atomic = '\\' !\R .
-
-# --- Whitespace / comments -----------------------------------------
-#
-# CSS has only block comments.
-
-comment: atomic = @comment ('/*' ..= '*/')
+    comment: atomic = @comment ('/*' ..= '*/')
+}

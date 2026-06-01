@@ -18,16 +18,24 @@ what a grammar author writes. For the compiled-bytecode side
 
 ## Source structure
 
-A `.peg` file is a sequence of rule definitions:
+A `.peg` file is **exactly one top-level declaration** — the grammar
+root — with every other rule nested inside `{ … }` scope blocks:
 
 ```peg
-name  =  body
-name2 =  body2
+root = body {
+    helper  = ...
+    other   = ... {
+        # private to `other`'s scope
+        inner = ...
+    }
+}
 ```
 
-- Every grammar must define a **`root` rule** — that's the entry
-  point. The compiler wraps its body as `ignore? root_body ignore? !.`
-  so end-of-input is implicit (any trailing junk fails the parse).
+- The single top-level rule is the **entry point** (conventionally
+  named `root`). The compiler wraps its body as
+  `ignore? root_body ignore? !.` so end-of-input is implicit (any
+  trailing junk fails the parse). More than one top-level declaration
+  is a parse error — nest the rest under the root.
 - An optional **`ignore` rule** acts as the auto-insertion target:
   when present, the compiler splices a `ignore` call between every
   pair of consecutive items in non-atomic rule bodies, including
@@ -47,23 +55,47 @@ name2 =  body2
   names elsewhere. `atomic` / `reserved` / `preferred` are mutually
   exclusive (each makes a rule atomic); `partial` composes with any and,
   when present, must be written first (`name: partial atomic =`). The
-  three special rules `root`, `ignore`, and `boundary` carry no ascriptions at
-  all (any ascription on them is a parse error); whitespace
-  auto-insertion is disabled by omitting `ignore`, not by ascribing it.
+  root rule and the special rules `ignore` and `boundary` carry no
+  ascriptions at all (any ascription on them is a parse error);
+  whitespace auto-insertion is disabled by omitting `ignore`, not by
+  ascribing it.
 - Two special rules, **`reserved`** and **`preferred`**, are
   *synthesized* by the compiler from the `reserved` / `preferred` rules
   (see below) — a grammar references them (`!reserved`) but never
   defines them.
-- **Position constraint:** `root` is always the first rule. The
-  optional special rules `ignore` and `boundary` occupy the contiguous slots
-  immediately after `root` (positions 1..2, in either order). Other
-  rules follow in any order.
+- **Root-scope singletons:** `ignore` and `boundary` (and the
+  synthesized `reserved` / `preferred`) live in the root scope —
+  direct children of the top-level rule. Defining `ignore` or
+  `boundary` inside a nested scope is an error.
 - **Identifiers** are ASCII `[A-Za-z_][A-Za-z0-9_]*`.
 - **Whitespace** (space, tab, newline, carriage return) separates
   tokens but is otherwise ignored.
 - **Comments** run from `#` to end of line.
-- **Duplicate rule definitions** and **empty grammars** are parse
-  errors.
+- **Duplicate rule definitions in the same scope** (two rules sharing a
+  name within one block) and **empty grammars** are parse errors. The
+  same name *may* appear in two different scopes (see below).
+
+### Lexical scoping
+
+A rule may own a `{ … }` block of nested rules. Those rules are
+visible to the owner's body, to each other, and to every deeper
+descendant; outer/ancestor and root-scope rules stay visible too.
+Resolution is lexical — a `NonTerminal` resolves to the nearest
+enclosing scope that declares it, so an inner rule may **shadow** a
+same-named outer one, and two sibling scopes are isolated (neither sees
+the other's private rules). This is purely a *source-language* concern:
+the parser resolves every reference and flattens the scope tree to a
+single namespace before any compile pass runs, so scoping costs the
+downstream pipeline nothing.
+
+Flat keys after resolution: the root and its direct children keep their
+bare names (they are the grammar's globals); a more deeply nested rule
+is mangled `parent::child` (e.g. `value::string_char`). These mangled
+names surface only in `pegdb` dumps and error messages — captures and
+behavior are unaffected by where a rule is nested.
+
+`{` disambiguation: the exact-count quantifier `p{n}` is digit-led, so
+a `{` *not* followed by a digit opens a scope block.
 
 Full shipped example: [`grammars/json.peg`](../../grammars/json.peg).
 
@@ -536,17 +568,19 @@ planned tightening.
 
 ### Reserved rule names
 
-Three rule names get compile-time treatment. All three are structural
-slots the compiler wraps or injects, not lexable tokens, so none of
-them accepts an ascription — `partial` / `atomic` / `reserved` /
-`preferred` on `root`, `ignore`, or `boundary` is a parse error.
+The grammar's entry rule and two rule *names* get compile-time
+treatment. All are structural slots the compiler wraps or injects, not
+lexable tokens, so none accepts an ascription — `partial` / `atomic` /
+`reserved` / `preferred` on the root rule, `ignore`, or `boundary` is a
+parse error.
 
-- **`root`** — the start rule (mandatory). The compiler wraps its
-  body as `ignore? root_body ignore? !.` so end-of-input is always
-  asserted, and a `ignore` rule (when present) pads the leading and
-  trailing whitespace. The wrap means a grammar
-  source like `root = value` parses whole inputs, not just longest
-  prefixes — the implicit `!.` rejects trailing junk.
+- **the root** — the single top-level declaration (conventionally
+  named `root`); it is the entry by position, not by name. The
+  compiler wraps its body as `ignore? root_body ignore? !.` so
+  end-of-input is always asserted, and a `ignore` rule (when present)
+  pads the leading and trailing whitespace. The wrap means a grammar
+  source like `root = value { … }` parses whole inputs, not just
+  longest prefixes — the implicit `!.` rejects trailing junk.
 
 - **`ignore`** — the optional auto-insertion target. When defined,
   the compiler injects a call to `ignore` between
@@ -603,9 +637,10 @@ them accepts an ascription — `partial` / `atomic` / `reserved` /
   of every `reserved` / `preferred` rule (see
   [`name: reserved`](#name-reserved--reserved-word-ascription)); it
   is required only when the grammar has at least one such rule. Like
-  `ignore`, `boundary` is exempt from ignore auto-insertion and must sit in
-  the reserved slots immediately after `root`. It is **not** part of
-  the ignore diagnostic cascade.
+  `ignore`, `boundary` is exempt from ignore auto-insertion and is a
+  root-scope singleton (a direct child of the top-level rule; defining
+  it in a nested scope is an error). It is **not** part of the ignore
+  diagnostic cascade.
 
   ```peg
   boundary            = !ident_body
