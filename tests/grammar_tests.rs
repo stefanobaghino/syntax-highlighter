@@ -1178,8 +1178,10 @@ fn end_to_end_inferred_catch_clean_input_no_recovery() {
 #[test]
 fn end_to_end_lenient_marker_is_runtime_transparent() {
     use syntax_highlighter::pegvm::VM;
-    let plain = parse("root <- 'x'+").compile().unwrap();
-    let lenient = parse("~root <- 'x'+").compile().unwrap();
+    // The marker rides a non-special helper rule — `root` (like
+    // `trivia` / `wb`) rejects every qualifier.
+    let plain = parse("root <- r\nr <- 'x'+").compile().unwrap();
+    let lenient = parse("root <- r\n~r <- 'x'+").compile().unwrap();
     assert_eq!(plain.code, lenient.code, "`~` is runtime-transparent");
     let r = VM::new(&lenient.code, b"xxx").run();
     assert!(r.complete);

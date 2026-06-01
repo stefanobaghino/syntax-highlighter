@@ -1769,12 +1769,14 @@ fn definition_lenient_suppresses_lint_at_every_call_site() {
 
 #[test]
 fn definition_lenient_marker_is_runtime_transparent() {
-    // The `~name <-` wrap compiles to the same bytecode as the bare form.
-    let plain = parse("root <- 'x'+")
+    // The `~name <-` wrap compiles to the same bytecode as the bare
+    // form. The marker rides a non-special helper rule — `root` (like
+    // `trivia` / `wb`) rejects every qualifier.
+    let plain = parse("root <- r\nr <- 'x'+")
         .expect("parse plain")
         .compile()
         .expect("compile plain");
-    let marked = parse("~root <- 'x'+")
+    let marked = parse("root <- r\n~r <- 'x'+")
         .expect("parse marked")
         .compile()
         .expect("compile marked");
@@ -2129,25 +2131,29 @@ fn percent_sigil_populates_percent_and_atomic_sets() {
 }
 
 #[test]
-fn qualifier_on_trivia_is_rejected() {
-    // `trivia` is the auto-insertion target and carries no qualifiers;
-    // disabling auto-insertion is done by omitting the rule.
-    for src in [
-        "root <- trivia\n*trivia <- (\\s)*",
-        "root <- trivia\n~trivia <- (\\s)*",
-        "root <- trivia\n%trivia <- (\\s)*",
-        "root <- trivia\n%?trivia <- (\\s)*",
-    ] {
-        let err = match parse(src) {
-            Ok(_) => panic!("{src:?} should be rejected"),
-            Err(e) => e,
-        };
-        assert!(
-            err.message
-                .contains("the `trivia` rule cannot carry a qualifier"),
-            "{src:?}: unexpected error {:?}",
-            err.message
-        );
+fn qualifier_on_special_rule_is_rejected() {
+    // The three special rules — the start rule `root` and the two
+    // auto-insertion targets `trivia` (whitespace) and `wb` (word
+    // boundary) — are structural slots, not lexable tokens: every
+    // qualifier (`*`, `~`, `%`, `%?`) is rejected on all of them.
+    // Disabling whitespace auto-insertion is done by omitting `trivia`,
+    // not by qualifying it.
+    for name in ["root", "trivia", "wb"] {
+        for qual in ["*", "~", "%", "%?"] {
+            let src = format!("{qual}{name} <- 'a'");
+            let err = parse(&src).expect_err("a qualifier on a special rule must error");
+            assert!(
+                err.message.contains("cannot carry a qualifier"),
+                "{src:?}: unexpected error {:?}",
+                err.message
+            );
+            // Only `trivia` carries the auto-insertion-disable hint.
+            assert_eq!(
+                err.message.contains("omit `trivia`"),
+                name == "trivia",
+                "{src:?}: hint presence should track the `trivia` name"
+            );
+        }
     }
 }
 
@@ -2212,21 +2218,6 @@ fn percent_and_atomic_combined_is_parse_error() {
 }
 
 #[test]
-fn percent_on_reserved_rule_is_parse_error() {
-    // `trivia` is covered by `qualifier_on_trivia_is_rejected` (it has
-    // its own all-qualifier rejection with a distinct message).
-    for name in ["root", "wb"] {
-        let src = format!("%{name} <- 'a'");
-        let err = parse(&src).expect_err("`%` on a reserved rule must error");
-        assert!(
-            err.message.contains("reserved rule"),
-            "{src:?} unexpected error: {}",
-            err.message
-        );
-    }
-}
-
-#[test]
 fn wb_must_sit_in_the_reserved_slots() {
     // `wb` after a non-reserved rule (not contiguous with `root`) errors.
     let err = parse("root <- r\nr <- 'a'\nwb <- !'x'").expect_err("misplaced wb must error");
@@ -2277,21 +2268,6 @@ fn preferred_and_atomic_combined_is_parse_error() {
         let err = parse(src).expect_err("combining `%?` and `*` must error");
         assert!(
             err.message.contains("cannot be combined"),
-            "{src:?} unexpected error: {}",
-            err.message
-        );
-    }
-}
-
-#[test]
-fn preferred_on_reserved_rule_is_parse_error() {
-    // `trivia` is covered by `qualifier_on_trivia_is_rejected` (it has
-    // its own all-qualifier rejection with a distinct message).
-    for name in ["root", "wb"] {
-        let src = format!("%?{name} <- 'a'");
-        let err = parse(&src).expect_err("`%?` on a reserved rule must error");
-        assert!(
-            err.message.contains("reserved rule"),
             "{src:?} unexpected error: {}",
             err.message
         );

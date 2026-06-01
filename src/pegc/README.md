@@ -44,8 +44,9 @@ name2 <-  body2
   sibling of `%` for identifier-eligible distinguished tokens). `~`
   composes with `*` / `%` / `%?` (`~*name`, `%~name`, …); `*` and
   `%` / `%?` are mutually exclusive — both make a rule atomic. The
-  `trivia` rule carries no qualifiers; auto-insertion is disabled by
-  omitting `trivia`, not by marking it.
+  three special rules `root`, `trivia`, and `wb` carry no qualifiers at
+  all (any sigil on them is a parse error); whitespace auto-insertion is
+  disabled by omitting `trivia`, not by marking it.
 - Two special rules, **`reserved`** and **`preferred`**, are
   *synthesized* by the compiler from the `%` / `%?` rules (see below) —
   a grammar references them (`!reserved`) but never defines them.
@@ -526,7 +527,10 @@ recorded in adjacent comments and unenforced by the lint; see
 
 ### Reserved rule names
 
-Three rule names get compile-time treatment:
+Three rule names get compile-time treatment. All three are structural
+slots the compiler wraps or injects, not lexable tokens, so none of
+them accepts a prefix sigil — `*` / `~` / `%` / `%?` on `root`,
+`trivia`, or `wb` is a parse error.
 
 - **`root`** — the start rule (mandatory). The compiler wraps its
   body as `trivia? root_body trivia? !.` so end-of-input is always
