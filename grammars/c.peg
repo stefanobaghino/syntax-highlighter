@@ -118,7 +118,7 @@ predef_type   <- @type{predef_type_name}
 # greedy `ident_body*` would swallow the trailing `_t`.
 *typedef_name <- [A-Z] ident_body*
                / [a-z_] (!typedef_t_end ident_body)* typedef_t_end
-%typedef_t_end <- '_t'
+*typedef_t_end <- '_t' wb
 
 struct_or_union_spec <- (kw_struct / kw_union)
                        (@type{ident})? (@punctuation{'{'} struct_decl* @punctuation{'}'})?
@@ -279,9 +279,9 @@ expr_primary  <- string_lit
                / lit_const
                / @variable{ident}
 
-# Boolean / null constants as a `%` reserved-word alternation so the
+# Boolean / null constants as a `%?` preferred-word alternation so the
 # `wb` boundary keeps `trueish` / `NULLify` from matching the prefix.
-%lit_const    <- @constant{'true'}
+%?lit_const   <- @constant{'true'}
                / @constant{'false'}
                / @constant{'NULL'}
 
@@ -330,17 +330,6 @@ float_suffix  <- [fFlL]
 *ident        <- !reserved ([\p{L}_] / ucn) ident_body*
 ident_body    <- [\p{L}\p{Nd}_] / ucn
 ucn           <- '\\u' [0-9A-Fa-f]{4} / '\\U' [0-9A-Fa-f]{8}
-
-# Reserved keywords that must not be matched as identifiers.
-%reserved     <- reserved_word
-reserved_word <- 'auto' / 'break' / 'case' / 'char' / 'const' / 'continue'
-               / 'default' / 'do' / 'double' / 'else' / 'enum' / 'extern'
-               / 'float' / 'for' / 'goto' / 'if' / 'inline' / 'int'
-               / 'long long' / 'long' / 'register' / 'restrict' / 'return'
-               / 'short' / 'signed' / 'sizeof' / 'static' / 'struct'
-               / 'switch' / 'typedef' / 'union' / 'unsigned' / 'void'
-               / 'volatile' / 'while' / '_Alignof' / '_Atomic' / '_Bool'
-               / '_Complex' / '_Imaginary' / '_Noreturn' / '_Thread_local'
 
 # --- Whitespace / comments ------------------------------------------
 

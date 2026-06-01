@@ -709,3 +709,18 @@ fn unicode_brace_escape_in_identifier() {
         "expected \\u{{}}-bearing identifier to capture; got {var_spans:?}"
     );
 }
+
+#[test]
+fn contextual_keyword_is_identifier_eligible() {
+    // Contextual keywords (`async`, `let`, `as`, …) are `%?` (preferred),
+    // not reserved, so they can be bound as ordinary variable names —
+    // the property the old hand-maintained `reserved_word` list encoded
+    // by omission, now expressed structurally.
+    let input = "const async = 1;\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let pairs = captures_with_text(input, &caps, &kinds);
+    assert!(
+        pairs.contains(&("variable", "async")),
+        "`async` should bind as a variable (contextual, not reserved): {pairs:?}"
+    );
+}

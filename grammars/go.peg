@@ -363,9 +363,9 @@ expr_no_compound_list <- expr_no_compound (@punctuation{','} expr_no_compound)*
 
 literal       <- string_lit / number_lit / rune_lit / lit_const
 
-# Predeclared constants as a `%` reserved-word alternation so the `wb`
+# Predeclared constants as a `%?` preferred-word alternation so the `wb`
 # boundary keeps `trueish` / `nilish` from matching the prefix.
-%lit_const    <- @constant{'true'} / @constant{'false'}
+%?lit_const   <- @constant{'true'} / @constant{'false'}
                / @constant{'nil'} / @constant{'iota'}
 
 string_lit    <- @string{raw_string / interp_string}
@@ -404,24 +404,16 @@ number_lit    <- @number{num_body}
 *lower_ident  <- !reserved [a-z_] ident_body*
 ident_body    <- [\p{L}\p{Nd}_]
 
-# Reserved keywords blocking identifier capture.
-%reserved     <- reserved_word
-reserved_word <- 'break' / 'case' / 'chan' / 'const' / 'continue'
-               / 'defer' / 'default' / 'else' / 'fallthrough' / 'for'
-               / 'func' / 'go' / 'goto' / 'if' / 'import' / 'interface'
-               / 'map' / 'package' / 'range' / 'return' / 'select'
-               / 'struct' / 'switch' / 'type' / 'var'
-
 # Predeclared constants / types / builtin funcs — matched as whole
 # identifiers so colouring is consistent without contextual
 # resolution.
-%predeclared_const <- 'true' / 'false' / 'nil' / 'iota'
-%predeclared_type <- 'uint8' / 'uint16' / 'uint32' / 'uint64' / 'uint'
+%?predeclared_const <- 'true' / 'false' / 'nil' / 'iota'
+%?predeclared_type <- 'uint8' / 'uint16' / 'uint32' / 'uint64' / 'uint'
                    / 'int8' / 'int16' / 'int32' / 'int64' / 'int'
                    / 'float32' / 'float64' / 'complex64' / 'complex128'
                    / 'uintptr' / 'byte' / 'rune' / 'string' / 'bool'
                    / 'error' / 'any' / 'comparable'
-%predeclared_fn <- 'append' / 'cap' / 'close' / 'complex' / 'copy'
+%?predeclared_fn <- 'append' / 'cap' / 'close' / 'complex' / 'copy'
                  / 'delete' / 'imag' / 'len' / 'make' / 'new' / 'panic'
                  / 'print' / 'println' / 'real' / 'recover'
 

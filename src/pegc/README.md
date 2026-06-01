@@ -38,12 +38,17 @@ name2 <-  body2
   it is only required when the grammar has at least one `%` rule.
 - Rules may carry **prefix sigils**: `~name <-` for the intentional
   leniency marker, `*name <-` for the atomic marker (no `trivia`
-  injected inside this rule's body), and `%name <-` for the
-  reserved-word marker (atomic *and* appends a trailing `wb` call
-  inside the rule's terminal captures). `~` composes with either of
-  `*` / `%` (`~*name`, `%~name`, …); `*` and `%` are mutually
-  exclusive — both make a rule atomic. `*trivia <- …` is the special
-  case that disables auto-insertion grammar-wide.
+  injected inside this rule's body), `%name <-` for the reserved-word
+  marker (atomic *and* appends a trailing `wb` call inside the rule's
+  terminal captures), and `%?name <-` for the preferred-word marker (a
+  sibling of `%` for identifier-eligible distinguished tokens). `~`
+  composes with `*` / `%` / `%?` (`~*name`, `%~name`, …); `*` and
+  `%` / `%?` are mutually exclusive — both make a rule atomic.
+  `*trivia <- …` is the special case that disables auto-insertion
+  grammar-wide.
+- Two special rules, **`reserved`** and **`preferred`**, are
+  *synthesized* by the compiler from the `%` / `%?` rules (see below) —
+  a grammar references them (`!reserved`) but never defines them.
 - **Position constraint:** `root` is always the first rule. The
   optional special rules `trivia` and `wb` occupy the contiguous slots
   immediately after `root` (positions 1..2, in either order). Other
@@ -576,12 +581,12 @@ Three rule names get compile-time treatment:
   pair`, and each iteration begins by consuming whatever
   inter-iteration whitespace is sitting in front of it.
 
-- **`wb`** — the optional word-boundary target for `%` rules. Its
-  body is a bare boundary predicate (typically `wb <- !ident_body`,
+- **`wb`** — the optional word-boundary target for `%` / `%?` rules.
+  Its body is a bare boundary predicate (typically `wb <- !ident_body`,
   or `!ident_cont` for a Unicode-aware continuation class). The
   compiler appends a `wb` call inside the terminal captures of every
-  `%` rule (see [`%name <-`](#name----reserved-word-marker)); it is
-  required only when the grammar has at least one `%` rule. Like
+  `%` / `%?` rule (see [`%name <-`](#name----reserved-word-marker)); it
+  is required only when the grammar has at least one such rule. Like
   `trivia`, `wb` is exempt from trivia auto-insertion and must sit in
   the reserved slots immediately after `root`. It is **not** part of
   the trivia diagnostic cascade.
@@ -635,11 +640,66 @@ the boundary holds, so a rejected keyword leaves no stray capture for
 top-level `*^` recovery to surface. Because the rule is atomic, no
 `trivia` is spliced between the literal and the appended `wb` call.
 
+When a `%` / `%?` rule's body is a **capture-less alternation of plain
+literals**, the compiler prefix-factors it into a longest-match **trie**
+(with `wb` at each accepting leaf) instead of a flat alternation. The
+trie is order-independent, so a shorter keyword can't shadow a longer
+one that extends it — `do` / `double`, `go` / `goto`, `int` / `int8`
+all match maximally regardless of source order. (Case-insensitive
+`i"…"` keyword sets lower to char-class sequences, not plain literals,
+so they keep the flat form — the synthesizer below emits those
+longest-first so maximal munch still holds.)
+
 - Requires a `wb` rule; with none defined, the synthesized
   `NonTerminal("wb")` surfaces as `CompileError::UndefinedRule("wb")`.
 - Composes with `~` (`%~name` / `~%name`); mutually exclusive with `*`
   (combining them is a parse error).
 - Rejected on the reserved rules `root` / `trivia` / `wb`.
+
+### `%?name <-` — preferred-word marker
+
+A `%?` prefix (the `?` touches the `%`) is the sibling of `%` for
+**preferred words**: identifier-eligible distinguished tokens such as
+Go's predeclared `int` / `len` / `true` or JavaScript's contextual
+`async` / `let`. It behaves exactly like `%` — atomic, with the same
+`wb` boundary and the same trie treatment — and differs only in *which
+synthesized set the rule's literals feed*: a `%?` rule's words go into
+`preferred` and are **excluded** from `reserved`, so they stay usable as
+identifiers.
+
+```peg
+%?predeclared_type <- 'int8' / 'int16' / 'int'   # Go: shadowable
+%?kw_async         <- @keyword{'async'}          # JS: contextual
+```
+
+- Same requirements / composition / rejections as `%`.
+- A word reachable from both a `%` and a `%?` rule is a contradiction
+  (it can't be both barred from and allowed in identifier position) and
+  raises `CompileError::ReservedPreferredConflict`.
+
+### `reserved` / `preferred` — synthesized word sets
+
+The compiler synthesizes two rules from the `%` / `%?` rules above:
+
+- **`reserved`** — every literal of a `%` rule that is **not** `%?`.
+  Reference it as `!reserved` in an identifier rule to bar keywords from
+  identifier position without hand-maintaining a list:
+
+  ```peg
+  *ident <- !reserved [A-Za-z_] [A-Za-z0-9_]*
+  ```
+
+- **`preferred`** — every literal of a `%?` rule. Materialized for
+  symmetry / inspection (e.g. `pegdb`); a grammar usually doesn't
+  reference it.
+
+Both are emitted as `%` rules (trie + `wb`), so `!reserved` does correct
+maximal-munch: `int` is reserved, but `integer` — a longer word that
+merely starts with it — is not. A rule whose body isn't a fixed keyword
+shape (it has a quantifier / wildcard / predicate, e.g. a number body
+like `'0x' [\da-fA-F]+`) contributes nothing; keep such boundary-only
+helpers as `*name <- … wb` rather than `%`. Authors **reference** these
+two names but never **define** them (a definition is a parse error).
 
 ### Reserved syntax
 

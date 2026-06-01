@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use super::analysis::{
-    append_wb_check, inject_auto_trivia, lint_partial_match, resolve_inferred_boundaries, wrap_root,
+    append_wb_check, inject_auto_trivia, lint_partial_match, resolve_inferred_boundaries,
+    synthesize_reserved_preferred, wrap_root,
 };
 use super::compiler::{compile_rules, CompileError};
 use super::pattern::{Pattern, Span};
@@ -52,6 +53,20 @@ pub const TRIVIA_RULE: &str = "trivia";
 /// it must sit in the reserved slots immediately after [`ROOT_RULE`].
 pub const WB_RULE: &str = "wb";
 
+/// Compiler-generated rule name for the reserved-word set. Synthesized
+/// by [`synthesize_reserved_preferred`](super::analysis::synthesize_reserved_preferred)
+/// from the literals of every `%` rule minus every `%?` rule, so a
+/// grammar can write `!reserved` to bar keywords from identifier
+/// position without hand-maintaining the list. Authors may *reference*
+/// it but not *define* it — the parser rejects a definition.
+pub const RESERVED_RULE: &str = "reserved";
+
+/// Compiler-generated rule name for the preferred-word set: the union
+/// of every `%?` rule's literals (identifier-eligible distinguished
+/// tokens, e.g. Go predeclared `int` / `len`). Synthesized alongside
+/// [`RESERVED_RULE`]; like it, authors may reference but not define it.
+pub const PREFERRED_RULE: &str = "preferred";
+
 /// Cap for the `p{n}` exact-count quantifier. Conservative typo guard:
 /// the largest plausible corpus site is `hex{8}`. Above this the parser
 /// rejects with a clear error instead of expanding a malformed grammar
@@ -69,11 +84,21 @@ pub struct Grammar {
     /// grammar-wide.
     pub atomic_rules: HashSet<String>,
     /// Names of rules marked with the `%name <- body` reserved-word
-    /// sigil. Each such rule is also in `atomic_rules` (so trivia is not
-    /// auto-inserted inside it); membership here additionally drives
+    /// sigil (and the `%?name <- body` preferred-word sigil, which is a
+    /// subset — every `%?` rule is also here so it still gets a
+    /// boundary). Each such rule is also in `atomic_rules` (so trivia is
+    /// not auto-inserted inside it); membership here additionally drives
     /// [`append_wb_check`](super::analysis::append_wb_check), which
     /// appends a [`WB_RULE`] call inside the rule's terminal captures.
     pub percent_rules: HashSet<String>,
+    /// Names of rules marked with the `%?name <- body` preferred-word
+    /// sigil — identifier-eligible distinguished tokens (Go predeclared
+    /// `int` / `len`, JS contextual `async` / `let`). A strict subset of
+    /// `percent_rules`: a `%?` rule still gets the [`WB_RULE`] boundary,
+    /// but its literals are *excluded* from the synthesized
+    /// [`RESERVED_RULE`] and instead collected into [`PREFERRED_RULE`] by
+    /// [`synthesize_reserved_preferred`](super::analysis::synthesize_reserved_preferred).
+    pub preferred_rules: HashSet<String>,
     /// Per-rule source ranges, in declaration order. Populated by
     /// [`parse`]; empty for grammars built via [`Grammar::new`] (which
     /// has no source text). `pegc stats` uses these to slice the
@@ -110,6 +135,7 @@ impl Grammar {
             rules,
             atomic_rules: HashSet::new(),
             percent_rules: HashSet::new(),
+            preferred_rules: HashSet::new(),
             rule_headers: Vec::new(),
         }
     }
@@ -122,6 +148,7 @@ impl Grammar {
             rules,
             atomic_rules,
             percent_rules: HashSet::new(),
+            preferred_rules: HashSet::new(),
             rule_headers: Vec::new(),
         }
     }
@@ -175,6 +202,7 @@ impl Grammar {
             rules: self.rules.clone(),
             atomic_rules: self.atomic_rules.clone(),
             percent_rules: self.percent_rules.clone(),
+            preferred_rules: self.preferred_rules.clone(),
             rule_headers: self.rule_headers.clone(),
         };
         resolve_inferred_boundaries(&mut resolved)?;
@@ -183,6 +211,13 @@ impl Grammar {
             return Err(CompileError::PartialMatchLeniency(findings));
         }
         inject_auto_trivia(&mut resolved);
+        // Synthesize the `reserved` / `preferred` rules from the literals
+        // of the `%` / `%?` rules. Runs after trivia injection (so the
+        // synthesized atomic rules aren't walked) and before
+        // `append_wb_check` (so the synthesized rules pick up the trie +
+        // `wb` like any other `%` rule, and exist before `compile_rules`'
+        // reference check).
+        synthesize_reserved_preferred(&mut resolved)?;
         // After trivia injection (which skips the atomic `%` rules) and
         // before the root wrap: append the `wb` boundary call inside each
         // `%` rule's terminal captures. An undefined `wb` surfaces as
@@ -271,6 +306,7 @@ impl<'a> Parser<'a> {
         let mut rules = HashMap::new();
         let mut atomic_rules: HashSet<String> = HashSet::new();
         let mut percent_rules: HashSet<String> = HashSet::new();
+        let mut preferred_rules: HashSet<String> = HashSet::new();
         let mut rule_headers: Vec<RuleHeader> = Vec::new();
         while self.pos < self.src.len() {
             // Definition-level lenient marker: `~name <- body` declares
@@ -291,9 +327,17 @@ impl<'a> Parser<'a> {
             // terminal captures (see `append_wb_check`). `%` composes with
             // `~` but is mutually exclusive with `*` — both make a rule
             // atomic, so combining them is always a mistake.
+            //
+            // The preferred-word marker `%?name <- body` (the `?` touches
+            // the `%`) is a sibling of `%`: same atomic + `wb` behavior,
+            // but the rule's literals are *excluded* from the synthesized
+            // `reserved` set and collected into `preferred` instead, so a
+            // predeclared / contextual name (`int`, `async`) stays usable
+            // as an identifier. `%?` is also mutually exclusive with `*`.
             let mut lenient_span: Option<Span> = None;
             let mut definition_atomic = false;
             let mut definition_percent = false;
+            let mut definition_preferred = false;
             loop {
                 match self.peek() {
                     Some(b'~') if lenient_span.is_none() => {
@@ -307,6 +351,12 @@ impl<'a> Parser<'a> {
                     Some(b'%') if !definition_percent && !definition_atomic => {
                         self.pos += 1;
                         definition_percent = true;
+                        // `%?` — the optional preferred-word discriminator.
+                        // The `?` must touch the `%` (no whitespace).
+                        if self.peek() == Some(b'?') {
+                            self.pos += 1;
+                            definition_preferred = true;
+                        }
                     }
                     _ => break,
                 }
@@ -334,13 +384,26 @@ impl<'a> Parser<'a> {
                     span,
                 };
             }
+            // `reserved` and `preferred` are compiler-generated (see
+            // `synthesize_reserved_preferred`); an author definition would
+            // be silently overwritten, so reject it outright. Grammars may
+            // still *reference* them (`!reserved`).
+            if name == RESERVED_RULE || name == PREFERRED_RULE {
+                return Err(self.err(format!(
+                    "`{name}` is a compiler-generated rule (synthesized from the `%` / `%?` rules) \
+                     and cannot be defined explicitly; reference it (e.g. `!{name}`) instead"
+                )));
+            }
             if definition_percent {
                 if name == ROOT_RULE || name == TRIVIA_RULE || name == WB_RULE {
                     return Err(self.err(format!(
-                        "the `%` reserved-word qualifier cannot be applied to the reserved rule `{name}`"
+                        "the `%` / `%?` reserved-word qualifier cannot be applied to the reserved rule `{name}`"
                     )));
                 }
                 percent_rules.insert(name.clone());
+            }
+            if definition_preferred {
+                preferred_rules.insert(name.clone());
             }
             if definition_atomic || definition_percent {
                 atomic_rules.insert(name.clone());
@@ -392,6 +455,7 @@ impl<'a> Parser<'a> {
             rules,
             atomic_rules,
             percent_rules,
+            preferred_rules,
             rule_headers,
         })
     }

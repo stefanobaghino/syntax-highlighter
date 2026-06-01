@@ -46,26 +46,26 @@ wb             <- !ident_body
 # `reserved` so they remain usable as identifiers: `{ asyncFoo() {} }`
 # must stay one method name.
 %kw_import     <- @keyword{'import'}
-%kw_from       <- @keyword{'from'}
-%kw_as         <- @keyword{'as'}
+%?kw_from      <- @keyword{'from'}
+%?kw_as        <- @keyword{'as'}
 %kw_export     <- @keyword{'export'}
 %kw_default    <- @keyword{'default'}
-%kw_async      <- @keyword{'async'}
+%?kw_async     <- @keyword{'async'}
 %kw_function   <- @keyword{'function'}
 %kw_class      <- @keyword{'class'}
 %kw_extends    <- @keyword{'extends'}
-%kw_static     <- @keyword{'static'}
-%kw_get        <- @keyword{'get'}
-%kw_set        <- @keyword{'set'}
+%?kw_static    <- @keyword{'static'}
+%?kw_get       <- @keyword{'get'}
+%?kw_set       <- @keyword{'set'}
 %kw_var        <- @keyword{'var'}
-%kw_let        <- @keyword{'let'}
+%?kw_let       <- @keyword{'let'}
 %kw_const      <- @keyword{'const'}
 %kw_if         <- @keyword{'if'}
 %kw_else       <- @keyword{'else'}
 %kw_for        <- @keyword{'for'}
-%kw_await      <- @keyword{'await'}
+%?kw_await     <- @keyword{'await'}
 %kw_in         <- @keyword{'in'}
-%kw_of         <- @keyword{'of'}
+%?kw_of        <- @keyword{'of'}
 %kw_while      <- @keyword{'while'}
 %kw_do         <- @keyword{'do'}
 %kw_switch     <- @keyword{'switch'}
@@ -364,12 +364,12 @@ literal        <- template_lit
                 / string_lit
                 / number_lit
                 / lit_const
+                / lit_undefined
 
-# Boolean / null / undefined constants as a `%` reserved-word
-# alternation so the `wb` boundary keeps `trueish` / `nullish` from
-# matching the prefix.
-%lit_const     <- @constant{'true'} / @constant{'false'}
-                / @constant{'null'} / @constant{'undefined'}
+# Boolean / null / undefined constants; the `wb` boundary keeps
+# `trueish` / `nullish` from matching the prefix.
+%lit_const     <- @constant{'true'} / @constant{'false'} / @constant{'null'}
+%?lit_undefined <- @constant{'undefined'}
 
 string_lit     <- @string{sq_string / dq_string}
 *sq_string     <- "'" ('\\' . / !"'" !'\n' .)* "'"
@@ -424,21 +424,6 @@ number_lit     <- @number{num_body}
 *lower_ident   <- !reserved [a-z_$] ident_body_part*
 ident_body_part <- ident_body / js_uesc
 ident_body     <- [\p{ID_Continue}$\u{200C}\u{200D}]
-
-# Reserved words that must not appear as identifiers. The grammar uses
-# explicit `@keyword{...}` at each call site, so this list only blocks
-# accidental ident capture. Contextual keywords (`async`, `await`,
-# `of`, `from`, `as`, `get`, `set`, `static`, `yield` outside
-# generators) are intentionally omitted so they can still be used as
-# identifiers where the language allows.
-%reserved      <- reserved_word
-reserved_word  <- 'break' / 'case' / 'catch' / 'class' / 'const' / 'continue'
-                / 'debugger' / 'default' / 'delete' / 'do' / 'else'
-                / 'export' / 'extends' / 'false' / 'finally' / 'for'
-                / 'function' / 'if' / 'import' / 'instanceof' / 'in'
-                / 'new' / 'null' / 'return' / 'super' / 'switch'
-                / 'this' / 'throw' / 'true' / 'try' / 'typeof' / 'var'
-                / 'void' / 'while' / 'with' / 'yield'
 
 # --- Whitespace / comments --------------------------------------------
 

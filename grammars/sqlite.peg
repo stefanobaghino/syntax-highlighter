@@ -547,7 +547,7 @@ number_body <- hex_body / float_body / int_body
 # names and CTE heads where a keyword like INTEGER is actually the
 # content we want to capture as @type).
 
-*bare_ident_nonkw  <- quoted_ident / !keyword_word bare_raw
+*bare_ident_nonkw  <- quoted_ident / !reserved bare_raw
 *bare_ident        <- quoted_ident / bare_raw
 *quoted_ident      <- double_quoted_id / backtick_id / bracket_id
 
@@ -567,11 +567,6 @@ number_body <- hex_body / float_body / int_body
 # boundary call inside the @keyword capture so `SELECT` doesn't match
 # the prefix of `SELECTED`. The `i"…"` literal sugar gives
 # case-insensitive matching at the parser level — see src/pegc/README.md.
-# `keyword_word` is also a `%` rule. It has no capture (it's a pure
-# negative-lookahead helper), so the compiler appends a single trailing
-# `wb` after the whole alternation rather than one per branch — one
-# check on the hot identifier-exclusion path, same as a hand-written
-# `!ident_cont`.
 
 %kw_select    <- @keyword{i"select"}
 %kw_from      <- @keyword{i"from"}
@@ -624,22 +619,22 @@ number_body <- hex_body / float_body / int_body
 # Window-function vocabulary. Only WINDOW and OVER are reserved; the
 # rest are matched positionally inside window_defn / frame_spec and
 # remain usable as identifiers outside those positions.
-%kw_recursive <- @keyword{i"recursive"}
+%?kw_recursive<- @keyword{i"recursive"}
 %kw_window    <- @keyword{i"window"}
 %kw_over      <- @keyword{i"over"}
-%kw_filter    <- @keyword{i"filter"}
-%kw_partition <- @keyword{i"partition"}
-%kw_range     <- @keyword{i"range"}
-%kw_rows      <- @keyword{i"rows"}
-%kw_groups    <- @keyword{i"groups"}
-%kw_unbounded <- @keyword{i"unbounded"}
-%kw_preceding <- @keyword{i"preceding"}
-%kw_following <- @keyword{i"following"}
-%kw_current   <- @keyword{i"current"}
-%kw_row       <- @keyword{i"row"}
-%kw_exclude   <- @keyword{i"exclude"}
-%kw_ties      <- @keyword{i"ties"}
-%kw_others    <- @keyword{i"others"}
+%?kw_filter   <- @keyword{i"filter"}
+%?kw_partition<- @keyword{i"partition"}
+%?kw_range    <- @keyword{i"range"}
+%?kw_rows     <- @keyword{i"rows"}
+%?kw_groups   <- @keyword{i"groups"}
+%?kw_unbounded<- @keyword{i"unbounded"}
+%?kw_preceding<- @keyword{i"preceding"}
+%?kw_following<- @keyword{i"following"}
+%?kw_current  <- @keyword{i"current"}
+%?kw_row      <- @keyword{i"row"}
+%?kw_exclude  <- @keyword{i"exclude"}
+%?kw_ties     <- @keyword{i"ties"}
+%?kw_others   <- @keyword{i"others"}
 %kw_no        <- @keyword{i"no"}
 
 # DML (INSERT family). UPDATE lands in a later commit but its keyword
@@ -650,7 +645,7 @@ number_body <- hex_body / float_body / int_body
 %kw_values    <- @keyword{i"values"}
 %kw_default   <- @keyword{i"default"}
 %kw_conflict  <- @keyword{i"conflict"}
-%kw_do        <- @keyword{i"do"}
+%?kw_do       <- @keyword{i"do"}
 %kw_nothing   <- @keyword{i"nothing"}
 %kw_rollback  <- @keyword{i"rollback"}
 %kw_abort     <- @keyword{i"abort"}
@@ -673,7 +668,7 @@ number_body <- hex_body / float_body / int_body
 %kw_temp      <- @keyword{i"temp"}
 %kw_temporary <- @keyword{i"temporary"}
 %kw_primary   <- @keyword{i"primary"}
-%kw_key       <- @keyword{i"key"}
+%?kw_key      <- @keyword{i"key"}
 %kw_unique    <- @keyword{i"unique"}
 %kw_check     <- @keyword{i"check"}
 %kw_null      <- @keyword{i"null"}
@@ -721,151 +716,6 @@ number_body <- hex_body / float_body / int_body
 %kw_explain   <- @keyword{i"explain"}
 %kw_query     <- @keyword{i"query"}
 %kw_plan      <- @keyword{i"plan"}
-
-# Keyword negative-lookahead for the identifier rule.
-#
-# Invariant: among alternatives that share a prefix, the longer body
-# must come first so PEG first-match doesn't accept a shorter keyword
-# when a longer one also matches (e.g. INTERSECT before IN). We enforce
-# it by sorting the whole list strictly length-descending, then
-# alphabetically within each length tier. New keywords slot in by
-# length alone — no per-cluster reasoning needed. The known shared-
-# prefix clusters (all satisfied by length-descending ordering):
-#
-#   INTERSECT > IN / IS             (I-prefix)
-#   DISTINCT > DESC                 (D-prefix)
-#   NATURAL > NULL > NOT            (N-prefix)
-#   OFFSET > ORDER / OUTER > ON / OR (O-prefix)
-#
-# The `%` marker appends one `wb` boundary after the whole alternation
-# (this rule has no capture, so it isn't distributed per branch), which
-# keeps each body boundary-free.
-%keyword_word <-
-    ( i"autoincrement"  # 13
-    / i"transaction"    # 11
-    / i"constraint"     # 10
-    / i"deferrable"     # 10
-    / i"references"     # 10
-    / i"exclusive"      # 9
-    / i"generated"      # 9
-    / i"immediate"      # 9
-    / i"initially"      # 9
-    / i"intersect"      # 9
-    / i"returning"      # 9
-    / i"savepoint"      # 9
-    / i"temporary"      # 9
-    / i"conflict"       # 8
-    / i"database"       # 8
-    / i"deferred"       # 8
-    / i"distinct"       # 8
-    / i"restrict"       # 8
-    / i"rollback"       # 8
-    / i"analyze"        # 7
-    / i"between"        # 7
-    / i"cascade"        # 7
-    / i"collate"        # 7
-    / i"default"        # 7
-    / i"explain"        # 7
-    / i"foreign"        # 7
-    / i"instead"        # 7
-    / i"natural"        # 7
-    / i"nothing"        # 7
-    / i"primary"        # 7
-    / i"reindex"        # 7
-    / i"release"        # 7
-    / i"replace"        # 7
-    / i"trigger"        # 7
-    / i"virtual"        # 7
-    / i"without"        # 7
-    / i"action"         # 6
-    / i"always"         # 6
-    / i"attach"         # 6
-    / i"before"         # 6
-    / i"column"         # 6
-    / i"commit"         # 6
-    / i"create"         # 6
-    / i"delete"         # 6
-    / i"detach"         # 6
-    / i"escape"         # 6
-    / i"except"         # 6
-    / i"exists"         # 6
-    / i"having"         # 6
-    / i"ignore"         # 6
-    / i"insert"         # 6
-    / i"offset"         # 6
-    / i"pragma"         # 6
-    / i"regexp"         # 6
-    / i"rename"         # 6
-    / i"select"         # 6 (SELECT)
-    / i"stored"         # 6
-    / i"strict"         # 6
-    / i"unique"         # 6
-    / i"update"         # 6
-    / i"vacuum"         # 6
-    / i"values"         # 6
-    / i"window"         # 6
-    / i"abort"          # 5
-    / i"after"          # 5
-    / i"alter"          # 5
-    / i"begin"          # 5
-    / bool_body         # 5 (FALSE) / 4 (TRUE); alternation handles both
-    / i"check"          # 5
-    / i"cross"          # 5
-    / i"group"          # 5
-    / i"index"          # 5
-    / i"inner"          # 5
-    / i"limit"          # 5
-    / i"match"          # 5
-    / i"order"          # 5
-    / i"outer"          # 5
-    / i"query"          # 5
-    / i"right"          # 5
-    / i"rowid"          # 5
-    / i"table"          # 5
-    / i"union"          # 5
-    / i"using"          # 5
-    / i"where"          # 5
-    / i"case"           # 4
-    / i"cast"           # 4
-    / i"desc"           # 4
-    / i"drop"           # 4
-    / i"each"           # 4
-    / i"else"           # 4
-    / i"fail"           # 4
-    / i"from"           # 4
-    / i"full"           # 4
-    / i"glob"           # 4
-    / i"into"           # 4
-    / i"join"           # 4
-    / i"left"           # 4
-    / i"like"           # 4
-    / null_body         # 4
-    / i"over"           # 4
-    / i"plan"           # 4
-    / i"temp"           # 4
-    / i"then"           # 4
-    / i"view"           # 4
-    / i"when"           # 4
-    / i"with"           # 4
-    / i"add"            # 3
-    / i"all"            # 3
-    / i"and"            # 3
-    / i"asc"            # 3
-    / i"end"            # 3
-    / i"for"            # 3
-    / i"not"            # 3
-    / i"set"            # 3
-    / i"as"             # 2
-    / i"by"             # 2
-    / i"if"             # 2
-    / i"in"             # 2
-    / i"is"             # 2
-    / i"no"             # 2
-    / i"of"             # 2
-    / i"on"             # 2
-    / i"or"             # 2
-    / i"to"             # 2
-    )
 
 # --- Whitespace & comments -------------------------------------------
 

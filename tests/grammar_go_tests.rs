@@ -429,3 +429,26 @@ fn non_ascii_identifier_in_short_var_decl() {
         "expected non-ASCII identifier `世界` as variable; got {var_spans:?}"
     );
 }
+
+#[test]
+fn bound_predeclared_name_is_always_a_variable() {
+    // Predeclared names are `%?` (preferred), not reserved, so `int`
+    // shadows as an identifier wherever a binding identifier is expected
+    // — `var` / param / `:=` LHS all flow through `ident_list`
+    // (= @variable). #13's headline: the compiler no longer bars
+    // predeclared names from identifier position. Every `int` token in a
+    // binding slot must be a variable, never a type or keyword. (In
+    // *expression* position `int` is still @type by design — the
+    // predeclared-type colouring, exercised elsewhere.)
+    let input = "package p\n\nvar int = 5\n\nfunc f(int int8) {\n\tint := 6\n}\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let ints: Vec<(&str, &str)> = captures_with_text(input, &caps, &kinds)
+        .into_iter()
+        .filter(|(_, text)| *text == "int")
+        .collect();
+    assert_eq!(ints.len(), 3, "expected three bound `int` tokens: {ints:?}");
+    assert!(
+        ints.iter().all(|(kind, _)| *kind == "variable"),
+        "every bound `int` must be a variable, never a type/keyword: {ints:?}"
+    );
+}
