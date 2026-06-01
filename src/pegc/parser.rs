@@ -394,29 +394,30 @@ impl<'a> Parser<'a> {
                      and cannot be defined explicitly; reference it (e.g. `!{name}`) instead"
                 )));
             }
-            // The auto-insertion target carries no qualifiers: `*`, `~`,
-            // `%`, and `%?` on `trivia` are all rejected. To disable
-            // auto-insertion, omit the `trivia` rule and thread whitespace
-            // through a plainly-named rule instead.
-            if name == TRIVIA_RULE
-                && (definition_atomic
-                    || definition_percent
-                    || definition_preferred
-                    || definition_lenient)
+            // The three special rules — the start rule `root` and the two
+            // auto-insertion targets `trivia` (whitespace) and `wb` (word
+            // boundary) — are structural slots wrapped or injected by the
+            // compiler, not lexable tokens, so every qualifier (`*`, `~`,
+            // `%`, `%?`) is meaningless on them and rejected. Disabling
+            // whitespace auto-insertion is done by omitting `trivia`, not
+            // by qualifying it.
+            if (definition_atomic
+                || definition_percent
+                || definition_preferred
+                || definition_lenient)
+                && (name == ROOT_RULE || name == TRIVIA_RULE || name == WB_RULE)
             {
-                return Err(self.err(
-                    "the `trivia` rule cannot carry a qualifier (`*`, `~`, `%`, `%?`); to \
-                     disable auto-insertion, omit `trivia` and thread whitespace through a \
-                     plainly-named rule"
-                        .into(),
-                ));
+                let disable_hint = if name == TRIVIA_RULE {
+                    "; to disable auto-insertion, omit `trivia` and thread \
+                     whitespace through a plainly-named rule"
+                } else {
+                    ""
+                };
+                return Err(self.err(format!(
+                    "the `{name}` rule cannot carry a qualifier (`*`, `~`, `%`, `%?`){disable_hint}"
+                )));
             }
             if definition_percent {
-                if name == ROOT_RULE || name == WB_RULE {
-                    return Err(self.err(format!(
-                        "the `%` / `%?` reserved-word qualifier cannot be applied to the reserved rule `{name}`"
-                    )));
-                }
                 percent_rules.insert(name.clone());
             }
             if definition_preferred {
