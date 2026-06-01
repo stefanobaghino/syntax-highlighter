@@ -500,7 +500,7 @@ impl<'a> Parser<'a> {
     ///   recovery branch. Left-associative. See `src/pegc/README.md`.
     /// - `inner ^^label B` / `inner ^^label` — **boundary-anchored
     ///   catch.** The doubled caret marks a new operator family: the
-    ///   recovery branch is auto-synthesized as `@recovery{(!B .)*}`,
+    ///   recovery branch is auto-synthesized as `@recovery ((!B .)*)`,
     ///   and the inner is implicitly anchored with `&B`. The boundary
     ///   `B` is parsed as one atom-with-prefix-postfix; if absent
     ///   (no atom-start follows the label), the FOLLOW-inferred form
@@ -958,15 +958,20 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_capture(&mut self) -> Result<Pattern, ParseError> {
-        // Span of `Capture` is the position of the `@` sigil.
+        // `@kind operand` — the capture applies to a single following
+        // atom. Span of `Capture` is the position of the `@` sigil.
+        //
+        // Capture stays at the atom level (this is reached from
+        // `parse_atom`), so any postfix quantifier binds *outside* the
+        // capture: `@kind a+` is `(@kind a)+`, and to capture a
+        // quantified or multi-item expression the operand is grouped in
+        // parens — `@kind (a+)`, `@kind (a / b)`. The operand is a
+        // single atom (`parse_atom`), never a bare sequence.
         let span = self.span();
         self.expect(b'@')?;
         let name = self.parse_ident()?;
-        self.expect(b'{')?;
         self.skip_ws();
-        let inner = self.parse_choice()?;
-        self.skip_ws();
-        self.expect(b'}')?;
+        let inner = self.parse_atom()?;
         Ok(Pattern::Capture {
             kind: name,
             inner: Box::new(inner),
@@ -1474,7 +1479,7 @@ fn lower_until_inclusive(stop: Pattern, span: Span) -> Pattern {
 }
 
 /// Lower `INNER ^^lbl B` to the explicit boundary-anchored catch
-/// shape: `Catch { Sequence([INNER, &B]), lbl, @recovery{(!B .)*} }`.
+/// shape: `Catch { Sequence([INNER, &B]), lbl, @recovery ((!B .)*) }`.
 /// Parse-time lowering — the compiler sees this as a regular `Catch`
 /// with an `AndPredicate` sibling, so the existing lint walker
 /// recognizes it as anchored without a new arm. All synthesized nodes
@@ -1514,7 +1519,7 @@ fn lower_boundary_catch(inner: Pattern, label: String, boundary: Pattern, span: 
 }
 
 /// Lower `INNER ^^lbl ..= B` (bracketed-close catch sugar) to:
-/// `Catch { INNER, lbl, Sequence([@recovery{(!B .)*}, B]) }`.
+/// `Catch { INNER, lbl, Sequence([@recovery ((!B .)*), B]) }`.
 ///
 /// Distinct from `lower_boundary_catch` in two ways: (1) the inner is
 /// *not* anchored with `&B` — every corpus site has `INNER` already
@@ -1563,7 +1568,7 @@ fn lower_bracketed_close_catch(
 }
 
 /// Desugar `p*^` and `p*^[cs]` to a labeled-catch loop. Both forms are
-/// `(p ^<label> @recovery{<body>})*` where `<body>` is `.` for the
+/// `(p ^<label> @recovery <body>)*` where `<body>` is `.` for the
 /// plain form and `(!cs .)* cs` for the sync-set form. The capture
 /// name is always `"recovery"`; the label is the author-supplied
 /// `:lbl` suffix when present and falls back to the literal

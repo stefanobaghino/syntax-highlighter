@@ -229,7 +229,7 @@ fn desugared_recover_repeat_with_label(
 
 #[test]
 fn recover_repeat_postfix_star_caret() {
-    // `p*^` desugars to `(p ^recovery @recovery{.})*` at parse time.
+    // `p*^` desugars to `(p ^recovery @recovery .)*` at parse time.
     let g = parse("r = 'x'*^");
     assert_eq!(
         g.rules["r"],
@@ -252,7 +252,7 @@ fn recover_repeat_postfix_plus_caret_lowers_to_seq() {
 
 #[test]
 fn sync_set_postfix_star_caret_charset() {
-    // `p*^[;]` desugars to `(p ^recovery @recovery{(![;] .)* [;]})*`.
+    // `p*^[;]` desugars to `(p ^recovery @recovery ((![;] .)* [;]))*`.
     let semi = CharSet::from_chars(&[';']);
     let g = parse("r = 'x'*^[;]");
     let skip_loop = Pattern::repeat(Pattern::seq(vec![
@@ -622,7 +622,7 @@ fn catch_rejects_reserved_underscore_label() {
 
 /// Builds the AST that `INNER ^^lbl B` lowers to: a `Catch` whose
 /// inner is `Sequence([INNER, AndPredicate(B)])` and whose recovery
-/// is `@recovery{(!B .)*}`. Mirrors `lower_boundary_catch` in the
+/// is `@recovery ((!B .)*)`. Mirrors `lower_boundary_catch` in the
 /// parser.
 fn lowered_boundary_catch(inner: Pattern, label: &str, boundary: Pattern) -> Pattern {
     let stop_loop = Pattern::repeat(Pattern::seq(vec![
@@ -709,9 +709,9 @@ fn boundary_catch_does_not_swallow_trailing_atoms() {
 
 #[test]
 fn bare_catch_with_capture_rhs_still_parses() {
-    // Regression guard: single `^` is bare, `@kind{...}` is the RHS.
+    // Regression guard: single `^` is bare, `@kind ...` is the RHS.
     // The doubled-caret discriminator must not consume `@`.
-    let g = parse("r = 'a' ^lbl @rec{'b'}");
+    let g = parse("r = 'a' ^lbl @rec 'b'");
     assert_eq!(
         g.rules["r"],
         Pattern::Catch {
@@ -882,7 +882,7 @@ fn char_class_mixed_chars_and_ranges() {
 
 #[test]
 fn capture_annotation() {
-    let g = parse("r = @keyword{'while'}");
+    let g = parse("r = @keyword 'while'");
     assert_eq!(
         g.rules["r"],
         Pattern::capture("keyword", Pattern::literal("while"))
@@ -1098,7 +1098,7 @@ fn end_to_end_recover_repeat_compile_run() {
     use syntax_highlighter::pegvm::VM;
     // Top-level `*^` resyncs past garbage one byte at a time; the parse
     // completes at EOF, with one "recovery"-tagged capture per skipped byte.
-    let g = parse("root = doc\ndoc = @kw{\"foo\"}*^");
+    let g = parse("root = doc\ndoc = @kw \"foo\"*^");
     let prog = g.compile().unwrap();
     let r = VM::new_from_program(&prog, b"fooXXfoo").run();
     assert!(r.complete);
@@ -1196,7 +1196,7 @@ fn end_to_end_recover_repeat_with_label_intern() {
     // identical to the unlabeled form (one recovery capture per
     // skipped byte, clean exit at EOF). pegdb recoveries explain
     // clusters by this label.
-    let g = parse("root = doc\ndoc = @kw{\"foo\"}*^:bad_doc");
+    let g = parse("root = doc\ndoc = @kw \"foo\"*^:bad_doc");
     let prog = g.compile().unwrap();
     assert_eq!(prog.label_kinds, vec!["bad_doc"]);
     let r = VM::new_from_program(&prog, b"fooXXfoo").run();
@@ -1213,7 +1213,7 @@ fn end_to_end_catch_compile_run() {
     // semicolon. Input is malformed (no FROM), so the inner fails and
     // the recovery branch fires.
     let g = parse(
-        "root = stmt\nstmt = (@kw{'SELECT'} ' ' @kw{'FROM'} ' ' 'x' ';') ^bad_select @err{(!';' .)*} ';'",
+        "root = stmt\nstmt = (@kw 'SELECT' ' ' @kw 'FROM' ' ' 'x' ';') ^bad_select @err ((!';' .)*) ';'",
     );
     let prog = g.compile().unwrap();
     let r = VM::new_from_program(&prog, b"SELECT bogus;").run();
@@ -1226,7 +1226,7 @@ fn end_to_end_catch_compile_run() {
     assert_eq!(prog.capture_kinds, vec!["kw", "err"]);
     let kinds: Vec<u16> = r.captures.iter().map(|c| c.kind.0).collect();
     let spans: Vec<(usize, usize)> = r.captures.iter().map(|c| (c.start, c.end)).collect();
-    // Failed inner's deepest reach: the @kw{'SELECT'} survives via
+    // Failed inner's deepest reach: the @kw 'SELECT' survives via
     // RecoverToScopedMax. Recovery then captures the byte range past
     // "SELECT " up to the `;`.
     assert_eq!(kinds, vec![0, 1]);
@@ -1362,20 +1362,20 @@ fn skip_until_inclusive_with_capture_stop() {
     // The stop pattern's capture survives lowering: the trailing
     // consume in `..= S` retains the same capture kind so themes
     // render the consumed delimiter consistently.
-    let g = parse("r = ..= @punctuation{'}'}");
+    let g = parse("r = ..= @punctuation '}'");
     let stop = Pattern::capture("punctuation", Pattern::literal("}"));
     assert_eq!(g.rules["r"], desugared_until_inclusive(stop));
 }
 
 #[test]
 fn skip_until_with_capture_stop_exclusive() {
-    let g = parse("r = .. @comment{'#'}");
+    let g = parse("r = .. @comment '#'");
     let stop = Pattern::capture("comment", Pattern::literal("#"));
     assert_eq!(g.rules["r"], desugared_until_exclusive(stop));
 }
 
 /// Builds the desugared AST that `INNER ^^lbl ..= B` lowers to:
-/// `Catch { INNER, lbl, Seq(@recovery{(!B .)*}, B) }`. No `&B`
+/// `Catch { INNER, lbl, Seq(@recovery ((!B .)*), B) }`. No `&B`
 /// anchor on the inner. Mirrors `lower_bracketed_close_catch` in
 /// `src/pegc/parser.rs`.
 fn desugared_bracketed_close_catch(inner: Pattern, label: &str, boundary: Pattern) -> Pattern {
@@ -1406,7 +1406,7 @@ fn bracketed_close_catch_with_capture_boundary() {
     // The boundary's capture kind is preserved on the trailing
     // consume — `}` is captured as `@punctuation` in both happy and
     // recovery paths.
-    let g = parse("r = 'a' ^^lbl ..= @punctuation{'}'}");
+    let g = parse("r = 'a' ^^lbl ..= @punctuation '}'");
     let boundary = Pattern::capture("punctuation", Pattern::literal("}"));
     assert_eq!(
         g.rules["r"],
@@ -1416,8 +1416,8 @@ fn bracketed_close_catch_with_capture_boundary() {
 
 #[test]
 fn bracketed_close_catch_vs_boundary_catch_distinction() {
-    // `^^lbl B`   — anchors INNER with `&B`; recovery is just `@recovery{(!B .)*}` (B left for outer).
-    // `^^lbl ..= B` — no inner anchor; recovery is `Seq(@recovery{(!B .)*}, B)` (B consumed by recovery).
+    // `^^lbl B`   — anchors INNER with `&B`; recovery is just `@recovery ((!B .)*)` (B left for outer).
+    // `^^lbl ..= B` — no inner anchor; recovery is `Seq(@recovery ((!B .)*), B)` (B consumed by recovery).
     let anchored = parse("r = 'a' ^^lbl '}'").rules["r"].clone();
     let bracketed = parse("r = 'a' ^^lbl ..= '}'").rules["r"].clone();
     match (&anchored, &bracketed) {
@@ -1592,7 +1592,7 @@ fn case_insensitive_literal_disambiguates_against_identifier() {
 
 #[test]
 fn case_insensitive_literal_inside_capture() {
-    let g = parse("r = @keyword{i\"select\"}");
+    let g = parse("r = @keyword i\"select\"");
     let body = Pattern::seq(vec![
         ci_class('s', 'S'),
         ci_class('e', 'E'),

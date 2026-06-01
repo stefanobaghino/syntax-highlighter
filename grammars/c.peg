@@ -39,7 +39,7 @@ wb = !ident_body
 
 # --- Preprocessor directives (absorbed as @comment) ------------------
 
-pp_line = @keyword{pp_body}
+pp_line = @keyword pp_body
 *pp_body = '#' (pp_cont / [^\n])*
 *pp_cont = '\\' '\n'
           / '\\' '\r' '\n'
@@ -56,7 +56,7 @@ fn_def = decl_spec_list declarator decl* compound_stmt
 # Declarations end in `;`. Must start with at least one specifier
 # (storage/qualifier/type keyword, `typedef`, `struct`, `union`,
 # `enum`) so we don't accidentally parse `a * b;` as a declaration.
-decl = decl_spec_list init_declarator_list? @punctuation{';'}
+decl = decl_spec_list init_declarator_list? @punctuation ';'
 
 decl_spec_list = decl_spec+
 decl_spec = storage_spec
@@ -68,45 +68,45 @@ decl_spec = storage_spec
 # appended inside each keyword capture. A keyword can't fire on a longer
 # identifier that merely starts with it (`static MyType`, `typedefx`),
 # and a rejected keyword leaves no stray capture for recovery to surface.
-%storage_spec = @keyword{'typedef'}
-              / @keyword{'extern'}
-              / @keyword{'static'}
-              / @keyword{'auto'}
-              / @keyword{'register'}
-              / @keyword{'_Thread_local'}
-%type_qualifier = @keyword{'const'}
-                / @keyword{'volatile'}
-                / @keyword{'restrict'}
-                / @keyword{'_Atomic'}
-%fn_spec = @keyword{'inline'}
-         / @keyword{'_Noreturn'}
+%storage_spec = @keyword 'typedef'
+              / @keyword 'extern'
+              / @keyword 'static'
+              / @keyword 'auto'
+              / @keyword 'register'
+              / @keyword '_Thread_local'
+%type_qualifier = @keyword 'const'
+                / @keyword 'volatile'
+                / @keyword 'restrict'
+                / @keyword '_Atomic'
+%fn_spec = @keyword 'inline'
+         / @keyword '_Noreturn'
 
 # Embedded keyword tokens: one `%` rule per keyword, referenced wherever
 # the keyword appears so the `wb` boundary is applied uniformly.
-%kw_struct = @keyword{'struct'}
-%kw_union = @keyword{'union'}
-%kw_enum = @keyword{'enum'}
-%kw_case = @keyword{'case'}
-%kw_default = @keyword{'default'}
-%kw_if = @keyword{'if'}
-%kw_else = @keyword{'else'}
-%kw_for = @keyword{'for'}
-%kw_while = @keyword{'while'}
-%kw_do = @keyword{'do'}
-%kw_switch = @keyword{'switch'}
-%kw_return = @keyword{'return'}
-%kw_break = @keyword{'break'}
-%kw_continue = @keyword{'continue'}
-%kw_goto = @keyword{'goto'}
-%kw_sizeof = @keyword{'sizeof'}
-%kw_alignof = @keyword{'_Alignof'}
+%kw_struct = @keyword 'struct'
+%kw_union = @keyword 'union'
+%kw_enum = @keyword 'enum'
+%kw_case = @keyword 'case'
+%kw_default = @keyword 'default'
+%kw_if = @keyword 'if'
+%kw_else = @keyword 'else'
+%kw_for = @keyword 'for'
+%kw_while = @keyword 'while'
+%kw_do = @keyword 'do'
+%kw_switch = @keyword 'switch'
+%kw_return = @keyword 'return'
+%kw_break = @keyword 'break'
+%kw_continue = @keyword 'continue'
+%kw_goto = @keyword 'goto'
+%kw_sizeof = @keyword 'sizeof'
+%kw_alignof = @keyword '_Alignof'
 
 type_spec = struct_or_union_spec
           / enum_spec
           / predef_type
-          / @type{typedef_name}
+          / @type typedef_name
 
-predef_type = @type{predef_type_name}
+predef_type = @type predef_type_name
 %predef_type_name = 'void' / 'char' / 'short' / 'long long' / 'long'
                   / 'int' / 'float' / 'double' / 'signed' / 'unsigned'
                   / '_Bool' / '_Complex' / '_Imaginary'
@@ -121,58 +121,58 @@ predef_type = @type{predef_type_name}
 *typedef_t_end = '_t' wb
 
 struct_or_union_spec = (kw_struct / kw_union)
-                      (@type{ident})? (@punctuation{'{'} struct_decl* @punctuation{'}'})?
-struct_decl = decl_spec_list struct_declarator_list? @punctuation{';'}
+                      (@type ident)? (@punctuation '{' struct_decl* @punctuation '}')?
+struct_decl = decl_spec_list struct_declarator_list? @punctuation ';'
             / pp_line
-struct_declarator_list = struct_declarator (@punctuation{','} struct_declarator)*
-struct_declarator = struct_field_declarator (@punctuation{':'} expr_cond)?
-                  / @punctuation{':'} expr_cond
+struct_declarator_list = struct_declarator (@punctuation ',' struct_declarator)*
+struct_declarator = struct_field_declarator (@punctuation ':' expr_cond)?
+                  / @punctuation ':' expr_cond
 struct_field_declarator = pointer? struct_field_direct
-struct_field_direct = @property{ident} struct_field_tail*
-                    / @punctuation{'('} struct_field_declarator @punctuation{')'} struct_field_tail*
-struct_field_tail = @punctuation{'['} (expr / '')? @punctuation{']'}
-                  / @punctuation{'('} param_list? @punctuation{')'}
+struct_field_direct = @property ident struct_field_tail*
+                    / @punctuation '(' struct_field_declarator @punctuation ')' struct_field_tail*
+struct_field_tail = @punctuation '[' (expr / '')? @punctuation ']'
+                  / @punctuation '(' param_list? @punctuation ')'
 
-enum_spec = kw_enum (@type{ident})?
-            (@punctuation{'{'} enum_list? @punctuation{'}'})?
-enum_list = enum_item (@punctuation{','} enum_item)* (@punctuation{','})?
-enum_item = @constant{ident} (@operator{'='} expr_cond)?
+enum_spec = kw_enum (@type ident)?
+            (@punctuation '{' enum_list? @punctuation '}')?
+enum_list = enum_item (@punctuation ',' enum_item)* (@punctuation ',')?
+enum_item = @constant ident (@operator '=' expr_cond)?
 
 # --- Declarators -----------------------------------------------------
 
-init_declarator_list = init_declarator (@punctuation{','} init_declarator)*
-init_declarator = declarator (@operator{'='} initializer)?
+init_declarator_list = init_declarator (@punctuation ',' init_declarator)*
+init_declarator = declarator (@operator '=' initializer)?
 
 declarator = pointer? direct_declarator
-pointer = (@operator{'*'} type_qualifier*)+
+pointer = (@operator '*' type_qualifier*)+
 direct_declarator = simple_declarator direct_declarator_tail*
-simple_declarator = @function{ident} &(@punctuation{'('})
-                  / @variable{ident}
-                  / @punctuation{'('} declarator @punctuation{')'}
-direct_declarator_tail = @punctuation{'['} (expr / '')? @punctuation{']'}
-                       / @punctuation{'('} param_list? @punctuation{')'}
-                       / @punctuation{'('} ident_list? @punctuation{')'}
+simple_declarator = @function ident &(@punctuation '(')
+                  / @variable ident
+                  / @punctuation '(' declarator @punctuation ')'
+direct_declarator_tail = @punctuation '[' (expr / '')? @punctuation ']'
+                       / @punctuation '(' param_list? @punctuation ')'
+                       / @punctuation '(' ident_list? @punctuation ')'
 
-param_list = param (@punctuation{','} param)* (@punctuation{','} @operator{'...'})?
-           / @operator{'...'}
+param_list = param (@punctuation ',' param)* (@punctuation ',' @operator '...')?
+           / @operator '...'
 param = decl_spec_list (declarator / abstract_declarator)?
 abstract_declarator = pointer direct_abstract_declarator?
                     / direct_abstract_declarator
-direct_abstract_declarator = (@punctuation{'('} abstract_declarator @punctuation{')'} / @punctuation{'['} (expr / '')? @punctuation{']'})
-                             (@punctuation{'['} (expr / '')? @punctuation{']'} / @punctuation{'('} param_list? @punctuation{')'})*
+direct_abstract_declarator = (@punctuation '(' abstract_declarator @punctuation ')' / @punctuation '[' (expr / '')? @punctuation ']')
+                             (@punctuation '[' (expr / '')? @punctuation ']' / @punctuation '(' param_list? @punctuation ')')*
 
-ident_list = @variable{ident} (@punctuation{','} @variable{ident})*
+ident_list = @variable ident (@punctuation ',' @variable ident)*
 
-initializer = @punctuation{'{'} initializer_list? @punctuation{','}? @punctuation{'}'}
+initializer = @punctuation '{' initializer_list? @punctuation ','? @punctuation '}'
             / expr_assign
-initializer_list = designation? initializer (@punctuation{','} designation? initializer)*
-designation = designator+ @operator{'='}
-designator = @punctuation{'['} expr_cond @punctuation{']'}
-           / @punctuation{'.'} @property{ident}
+initializer_list = designation? initializer (@punctuation ',' designation? initializer)*
+designation = designator+ @operator '='
+designator = @punctuation '[' expr_cond @punctuation ']'
+           / @punctuation '.' @property ident
 
 # --- Statements ------------------------------------------------------
 
-compound_stmt = @punctuation{'{'} (block_item* @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
+compound_stmt = @punctuation '{' (block_item* @punctuation '}' ^^block_close ..= @punctuation '}')
 block_item = pp_line
            / decl
            / stmt
@@ -191,24 +191,24 @@ stmt = labeled_stmt
      / empty_stmt
      / expr_stmt
 
-labeled_stmt = @variable{ident} @punctuation{':'} stmt
-             / kw_case expr_cond @punctuation{':'} stmt
-             / kw_default @punctuation{':'} stmt
+labeled_stmt = @variable ident @punctuation ':' stmt
+             / kw_case expr_cond @punctuation ':' stmt
+             / kw_default @punctuation ':' stmt
 # Trailing `(else stmt)?` leniency absorbed by top-level `*^` and `^block_close`.
-~if_stmt = kw_if @punctuation{'('} expr @punctuation{')'} stmt
+~if_stmt = kw_if @punctuation '(' expr @punctuation ')' stmt
            (kw_else stmt)?
-for_stmt = kw_for @punctuation{'('} for_init expr? @punctuation{';'} expr? @punctuation{')'} stmt
+for_stmt = kw_for @punctuation '(' for_init expr? @punctuation ';' expr? @punctuation ')' stmt
 for_init = decl
-         / expr? @punctuation{';'}
-while_stmt = kw_while @punctuation{'('} expr @punctuation{')'} stmt
-do_while_stmt = kw_do stmt kw_while @punctuation{'('} expr @punctuation{')'} @punctuation{';'}
-switch_stmt = kw_switch @punctuation{'('} expr @punctuation{')'} stmt
-return_stmt = kw_return expr? @punctuation{';'}
-break_stmt = kw_break @punctuation{';'}
-continue_stmt = kw_continue @punctuation{';'}
-goto_stmt = kw_goto @variable{ident} @punctuation{';'}
-empty_stmt = @punctuation{';'}
-expr_stmt = expr @punctuation{';'}
+         / expr? @punctuation ';'
+while_stmt = kw_while @punctuation '(' expr @punctuation ')' stmt
+do_while_stmt = kw_do stmt kw_while @punctuation '(' expr @punctuation ')' @punctuation ';'
+switch_stmt = kw_switch @punctuation '(' expr @punctuation ')' stmt
+return_stmt = kw_return expr? @punctuation ';'
+break_stmt = kw_break @punctuation ';'
+continue_stmt = kw_continue @punctuation ';'
+goto_stmt = kw_goto @variable ident @punctuation ';'
+empty_stmt = @punctuation ';'
+expr_stmt = expr @punctuation ';'
 
 # --- Expressions ----------------------------------------------------
 #
@@ -220,29 +220,29 @@ expr_stmt = expr @punctuation{';'}
 # doesn't eat a fragment of a longer operator that belongs higher up.
 # Assignment (right-associative) and ternary stay outside the LR ladder.
 
-expr = expr_assign (@punctuation{','} expr_assign)*
+expr = expr_assign (@punctuation ',' expr_assign)*
 expr_assign = expr_unary assign_op expr_assign
             / expr_cond
 
 
-assign_op = @operator{'<<='} / @operator{'>>='}
-          / @operator{'+='} / @operator{'-='} / @operator{'*='} / @operator{'/='}
-          / @operator{'%='} / @operator{'&='} / @operator{'|='} / @operator{'^='}
-          / @operator{'='} !'='
+assign_op = @operator '<<=' / @operator '>>='
+          / @operator '+=' / @operator '-=' / @operator '*=' / @operator '/='
+          / @operator '%=' / @operator '&=' / @operator '|=' / @operator '^='
+          / @operator '=' !'='
 
 # Trailing ternary `?` leniency absorbed by top-level `*^`.
-~expr_cond = expr_lor (@operator{'?'} expr @punctuation{':'} expr_assign)?
+~expr_cond = expr_lor (@operator '?' expr @punctuation ':' expr_assign)?
 
-expr_lor = expr_lor @operator{'||'} expr_land / expr_land
-expr_land = expr_land @operator{'&&'} expr_bor / expr_bor
-expr_bor = expr_bor @operator{'|'} !'|' !'=' expr_bxor / expr_bxor
-expr_bxor = expr_bxor @operator{'^'} !'=' expr_band / expr_band
-expr_band = expr_band @operator{'&'} !'&' !'=' expr_eq / expr_eq
-expr_eq = expr_eq (@operator{'=='} / @operator{'!='}) expr_rel / expr_rel
-expr_rel = expr_rel (@operator{'<='} / @operator{'>='} / @operator{'<'} !'<' / @operator{'>'} !'>') expr_shift / expr_shift
-expr_shift = expr_shift (@operator{'<<'} !'=' / @operator{'>>'} !'=') expr_add / expr_add
-expr_add = expr_add (@operator{'+'} !'=' / @operator{'-'} !'=') expr_mul / expr_mul
-expr_mul = expr_mul (@operator{'*'} !'=' / @operator{'/'} !'=' / @operator{'%'} !'=') expr_unary / expr_unary
+expr_lor = expr_lor @operator '||' expr_land / expr_land
+expr_land = expr_land @operator '&&' expr_bor / expr_bor
+expr_bor = expr_bor @operator '|' !'|' !'=' expr_bxor / expr_bxor
+expr_bxor = expr_bxor @operator '^' !'=' expr_band / expr_band
+expr_band = expr_band @operator '&' !'&' !'=' expr_eq / expr_eq
+expr_eq = expr_eq (@operator '==' / @operator '!=') expr_rel / expr_rel
+expr_rel = expr_rel (@operator '<=' / @operator '>=' / @operator '<' !'<' / @operator '>' !'>') expr_shift / expr_shift
+expr_shift = expr_shift (@operator '<<' !'=' / @operator '>>' !'=') expr_add / expr_add
+expr_add = expr_add (@operator '+' !'=' / @operator '-' !'=') expr_mul / expr_mul
+expr_mul = expr_mul (@operator '*' !'=' / @operator '/' !'=' / @operator '%' !'=') expr_unary / expr_unary
 
 # `sizeof_type` is tried before the generic prefix loop so that
 # `sizeof(struct X)` / `sizeof(union X)` / `sizeof(counter_size_t)`
@@ -253,59 +253,59 @@ expr_mul = expr_mul (@operator{'*'} !'=' / @operator{'/'} !'=' / @operator{'%'} 
 # still parse.
 expr_unary = sizeof_type
            / unary_prefix* expr_postfix
-unary_prefix = @operator{'++'} / @operator{'--'}
-             / @operator{'+'} / @operator{'-'} / @operator{'!'} / @operator{'~'}
-             / @operator{'*'} / @operator{'&'}
-             / kw_sizeof &(@punctuation{'('} / [A-Za-z_])
+unary_prefix = @operator '++' / @operator '--'
+             / @operator '+' / @operator '-' / @operator '!' / @operator '~'
+             / @operator '*' / @operator '&'
+             / kw_sizeof &(@punctuation '(' / [A-Za-z_])
              / kw_alignof
 
 expr_postfix = expr_primary postfix_op*
-postfix_op = @operator{'++'} / @operator{'--'}
-           / @punctuation{'('} arg_list? @punctuation{')'}
-           / @punctuation{'['} expr @punctuation{']'}
-           / @operator{'->'} postfix_member
-           / @punctuation{'.'} postfix_member
-postfix_member = @function{ident} &(@punctuation{'('})
-               / @property{ident}
+postfix_op = @operator '++' / @operator '--'
+           / @punctuation '(' arg_list? @punctuation ')'
+           / @punctuation '[' expr @punctuation ']'
+           / @operator '->' postfix_member
+           / @punctuation '.' postfix_member
+postfix_member = @function ident &(@punctuation '(')
+               / @property ident
 
-arg_list = expr_assign (@punctuation{','} expr_assign)*
+arg_list = expr_assign (@punctuation ',' expr_assign)*
 
 expr_primary = string_lit
              / char_lit
              / number_lit
              / cast_or_paren
              / call_ident
-             / @type{predef_type_name}
+             / @type predef_type_name
              / lit_const
-             / @variable{ident}
+             / @variable ident
 
 # Boolean / null constants as a `%?` preferred-word alternation so the
 # `wb` boundary keeps `trueish` / `NULLify` from matching the prefix.
-%?lit_const = @constant{'true'}
-            / @constant{'false'}
-            / @constant{'NULL'}
+%?lit_const = @constant 'true'
+            / @constant 'false'
+            / @constant 'NULL'
 
 # `sizeof(T)` must eat the whole type-name expression as a sizeof argument.
-sizeof_type = kw_sizeof @punctuation{'('} type_name @punctuation{')'}
+sizeof_type = kw_sizeof @punctuation '(' type_name @punctuation ')'
 type_name = decl_spec_list abstract_declarator?
 
 # `(T)expr` vs `(expr)` — try cast first (uses decl_spec which
 # requires a type keyword/qualifier, making the distinction
 # unambiguous for real-world C).
-cast_or_paren = @punctuation{'('} type_name @punctuation{')'} expr_unary
-              / @punctuation{'('} expr @punctuation{')'}
+cast_or_paren = @punctuation '(' type_name @punctuation ')' expr_unary
+              / @punctuation '(' expr @punctuation ')'
 
-call_ident = @function{ident} &(@punctuation{'('})
+call_ident = @function ident &(@punctuation '(')
 
 # --- Literals --------------------------------------------------------
 
-string_lit = @string{string_piece+}
+string_lit = @string (string_piece+)
 *string_piece = ('L' / 'u8' / 'u' / 'U')? '"' ('\\' . / !'"' !'\n' .)* '"'
 
-char_lit = @string{char_body}
+char_lit = @string char_body
 *char_body = ('L' / 'u' / 'U')? "'" ('\\' . / !"'" .)* "'"
 
-number_lit = @number{num_body}
+number_lit = @number num_body
 *num_body = '0x' hex_digits ('.' hex_digits?)? ([pP] [+\-]? \d+)? int_suffix?
           / '0X' hex_digits ('.' hex_digits?)? ([pP] [+\-]? \d+)? int_suffix?
           / '0b' bin_digits int_suffix?
@@ -333,4 +333,4 @@ ucn = '\\u' [0-9A-Fa-f]{4} / '\\U' [0-9A-Fa-f]{8}
 
 # --- Whitespace / comments ------------------------------------------
 
-*comment = @comment{'//' .. '\n' / '/*' ..= '*/'}
+*comment = @comment ('//' .. '\n' / '/*' ..= '*/')

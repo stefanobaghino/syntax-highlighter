@@ -80,25 +80,25 @@ fn memo_table_populates_on_success() {
 }
 
 /// Bug A regression: a memoized rule is called from inside an enclosing
-/// `@outer{ ... }` capture. On the second call (a memo hit) the replay
+/// `@outer ...` capture. On the second call (a memo hit) the replay
 /// inserts cached captures as *closed* entries; the enclosing `CaptureEnd`
 /// must still bind to the outer capture (the only one with `end.is_none()`)
 /// rather than mis-closing a replayed entry.
 ///
 /// Grammar:
 ///   start = outer
-///   outer = @outer{ Inner Inner }   # two calls to Inner inside a capture
-///   Inner = @inner{ [a-z] }
+///   outer = @outer (Inner Inner)   # two calls to Inner inside a capture
+///   Inner = @inner [a-z]
 ///
-/// On "aa": first Inner call at sp=0 produces `@inner{"a"}`. Second Inner
+/// On "aa": first Inner call at sp=0 produces `@inner "a"`. Second Inner
 /// call at sp=1 is a distinct entry (different sp) — but the structure
 /// exercises the replay machinery: both @inner captures must nest under
 /// @outer correctly.
 ///
 /// To force a true replay at the same sp, we instead use:
 ///   start = outer
-///   outer = @outer{ (Inner "x") / (Inner "y") }
-///   Inner = @inner{ [a-z] }
+///   outer = @outer ((Inner "x") / (Inner "y"))
+///   Inner = @inner [a-z]
 /// On "ay": first alternative fails ("ay" doesn't have trailing "x"),
 /// Inner's cached result is reused in the second alternative. The critical
 /// assertion is that the outer capture closes at sp=2 (not at sp=1 — which

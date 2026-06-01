@@ -55,7 +55,7 @@ enum StackEntry {
     },
     /// Tracking frame for a `^label` catch (and, transitively, for each
     /// iteration of the `*^` / `*^[cs]` desugar `(p ^recovery
-    /// @recovery{...})*`). Pushed by `RecoverScopeBegin` and popped by
+    /// @recovery ...)*`). Pushed by `RecoverScopeBegin` and popped by
     /// `RecoverScopeEnd` on every exit edge. Carries an iteration-local
     /// analogue of the global `(max_sp, max_captures_len, saved_lower,
     /// saved_above)` watermark so `RecoverToScopedMax` can splice the
@@ -908,7 +908,7 @@ impl<'p, 'i> VM<'p, 'i> {
                     self.bump_top_memo_examined(examined_max);
                     // Snapshot the captures produced inside the rule. All of
                     // them must be closed at this point — PEG captures are
-                    // lexically scoped to `@name{...}` and cannot straddle a
+                    // lexically scoped to `@name ...` and cannot straddle a
                     // rule boundary, so any `OpenCapture` with `end.is_none()`
                     // would be a compiler bug.
                     let rule_captures: Vec<Capture> = self.captures[capture_start_len..]
@@ -1922,7 +1922,7 @@ mod examined_max_tests {
         // position the loop *successfully* read must appear in
         // examined_max.
         let mut rules = HashMap::new();
-        // `*^` desugars to `(p ^recovery @recovery{.})*` — see
+        // `*^` desugars to `(p ^recovery @recovery .)*` — see
         // `build_recover_repeat` in `src/pegc/parser.rs`.
         rule(
             &mut rules,
