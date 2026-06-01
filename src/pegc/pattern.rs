@@ -21,7 +21,7 @@ pub struct Span {
 
 impl Span {
     /// Marker for nodes with no source position: the FOLLOW-set
-    /// boundary materialization, the `@recovery{(!B .)*}` body
+    /// boundary materialization, the `@recovery ((!B .)*)` body
     /// synthesized in `lower_inferred_boundary_catch`, the
     /// left-recursion alternative materialization, and Pattern trees
     /// hand-built by tests.
@@ -100,7 +100,7 @@ pub enum Pattern {
     /// syntactic slots; see `src/pegc/README.md`.
     ///
     /// The `*^` and `*^[charset]` postfix operators desugar to
-    /// `Repeat(Catch(inner, "recovery", @recovery{<body>}))` at parse
+    /// `Repeat(Catch(inner, "recovery", @recovery <body>))` at parse
     /// time — see `build_recover_repeat` in
     /// [`crate::pegc::parser`]. There is no dedicated `RecoverRepeat`
     /// AST variant any more.
@@ -125,7 +125,7 @@ pub enum Pattern {
     /// `analysis::resolve_inferred_boundaries`, which rewrites it to
     /// the same shape the explicit `^^lbl B` form lowers to (a
     /// `Catch` whose inner is `Sequence([inner, AndPredicate(B)])`
-    /// and whose recovery is `@recovery{(!B .)*}`).
+    /// and whose recovery is `@recovery ((!B .)*)`).
     ///
     /// An `InferBoundaryCatch` should never reach the compiler or any
     /// downstream analysis — the resolver runs first and replaces it.

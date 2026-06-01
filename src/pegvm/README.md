@@ -37,7 +37,7 @@ Every other type in the module exists to serve one of these three stages.
 | `NotPredicate(Box<Pattern>)` | `!p` | Zero-width: succeeds iff `p` would fail here. Consumes no input. |
 | `AndPredicate(Box<Pattern>)` | `&p` | Zero-width: succeeds iff `p` would succeed here. Consumes no input. |
 | `NonTerminal(String)` | `rule_name` | References another `Pattern` in the enclosing `Grammar`. |
-| `Capture(String, Box<Pattern>)` | `@name{p}` | Matches `p`; additionally records the matched span under the tag `name`. |
+| `Capture(String, Box<Pattern>)` | `@name p` | Matches `p`; additionally records the matched span under the tag `name`. |
 | `Catch { inner, label, recovery }` | `p ^label q` | Try `inner`; on failure splice the failed attempt's deepest-reach captures (via `RecoverToScopedMax`) and run `recovery` from that resync point. `*^` / `*^[cs]` / `+^` / `+^[cs]` desugar to `Repeat(Catch(...))` at parse time — see `build_recover_repeat` in `src/pegc/parser.rs`. |
 
 A `Pattern` is a plain value. It can be constructed programmatically (see the compiler tests) or produced by `pegc::parse` from text. A `Pattern` has no knowledge of its environment: a `NonTerminal("digit")` is a dangling reference until it's placed inside a `Grammar` that defines `digit`.
@@ -112,7 +112,7 @@ Labels appear only in `Instruction` payloads. The VM widens to `usize` at the bo
 pub struct CaptureKind(pub u16);
 ```
 
-During compilation, each distinct `Capture(name, …)` encountered in the grammar is interned: the first time the compiler sees `@property{…}` it assigns a fresh `CaptureKind(n)` and records the string in a table. Subsequent occurrences reuse the same id. The bytecode carries only the integer — strings never enter the VM — and the consumer (the highlighter) looks the id back up in `Program::capture_kinds`.
+During compilation, each distinct `Capture(name, …)` encountered in the grammar is interned: the first time the compiler sees `@property …` it assigns a fresh `CaptureKind(n)` and records the string in a table. Subsequent occurrences reuse the same id. The bytecode carries only the integer — strings never enter the VM — and the consumer (the highlighter) looks the id back up in `Program::capture_kinds`.
 
 This is the only interaction between the VM and the rest of the crate that isn't purely through captures. The VM does not interpret the kind in any way; it only stores it and emits it.
 
@@ -169,7 +169,7 @@ pub struct MatchResult {
 }
 ```
 
-A `Capture` is a closed span over the input paired with a kind tag: "these bytes matched under this name." Its `kind` field is the same `CaptureKind` the grammar author (transitively) wrote as `@name{…}`, intern-translated through compilation and emitted unchanged by the VM.
+A `Capture` is a closed span over the input paired with a kind tag: "these bytes matched under this name." Its `kind` field is the same `CaptureKind` the grammar author (transitively) wrote as `@name …`, intern-translated through compilation and emitted unchanged by the VM.
 
 Captures returned in a `MatchResult` have two non-obvious guarantees:
 

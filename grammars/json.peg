@@ -4,23 +4,23 @@ root = value
 
 trivia = \s*
 
-value = @string{string}
-      / @number{number}
+value = @string string
+      / @number number
       / object
       / array
-      / @constant{'true'}
-      / @constant{'false'}
-      / @constant{'null'}
+      / @constant 'true'
+      / @constant 'false'
+      / @constant 'null'
 
-object = @punctuation{'{'}
-         (pair (@punctuation{','} pair)*)?
-         @punctuation{'}'}
+object = @punctuation '{'
+         (pair (@punctuation ',' pair)*)?
+         @punctuation '}'
 
-pair = @property{string} @punctuation{':'} value
+pair = @property string @punctuation ':' value
 
-array = @punctuation{'['}
-        (value (@punctuation{','} value)*)?
-        @punctuation{']'}
+array = @punctuation '['
+        (value (@punctuation ',' value)*)?
+        @punctuation ']'
 
 *string = '"' string_char* '"'
 *string_char = '\\' ["\\/bfnrt]

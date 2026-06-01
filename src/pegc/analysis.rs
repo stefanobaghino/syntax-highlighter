@@ -247,8 +247,8 @@ fn tarjan_sccs(
 /// not the keyword inside it. Callers who want a deeper view recurse into
 /// FIRST(`returning_clause`) themselves.
 ///
-/// Captures are preserved (not stripped to their inner): `@punctuation{','}`
-/// and `@operator{','}` are distinct elements.
+/// Captures are preserved (not stripped to their inner): `@punctuation ','`
+/// and `@operator ','` are distinct elements.
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum FollowElement {
     Literal(Vec<u8>),
@@ -1308,7 +1308,7 @@ fn sequence_suffix_trailing(
 }
 
 /// Mirror of `parser::lower_boundary_catch` for the resolver path.
-/// Builds the same `Catch { Sequence([inner, &B]), label, @recovery{(!B .)*} }`
+/// Builds the same `Catch { Sequence([inner, &B]), label, @recovery ((!B .)*) }`
 /// shape from a synthesized boundary. The produced tree inherits the
 /// original `^^lbl` placeholder's span; synthesized boundary subnodes
 /// already carry [`Span::SYNTHETIC`] from `follow_set_to_boundary_pattern`.
@@ -1880,7 +1880,7 @@ pub fn synthesize_reserved_preferred(grammar: &mut Grammar) -> Result<(), Compil
 /// shape: a quantifier, wildcard, predicate, catch, or a reference that
 /// cycles or escapes the keyword shape. `NonTerminal`s are resolved
 /// through `rules` (with a `visiting` cycle guard) so wrappers like
-/// `%bool_lit = @constant{bool_body}` reach their literals.
+/// `%bool_lit = @constant bool_body` reach their literals.
 fn keyword_entries(
     pat: &Pattern,
     rules: &HashMap<String, Pattern>,
@@ -2108,7 +2108,7 @@ mod tests {
 
     #[test]
     fn capture_choice_distributes_wb_per_branch() {
-        // `%t = @k{'a'} / @k{'b'}` — each capture must keep `wb` inside
+        // `%t = @k 'a' / @k 'b'` — each capture must keep `wb` inside
         // so a committed keyword can't leak through recovery.
         let body = Pattern::choice(vec![
             Pattern::capture("k", Pattern::literal("a")),

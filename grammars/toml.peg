@@ -34,19 +34,19 @@ entry = array_of_tables_header / table_header / pair
 entry_sep = inline_space comment? \R blank
 
 # Key-value pair: LHS key as @property, RHS value.
-pair = key inline_space @punctuation{'='} inline_space value
+pair = key inline_space @punctuation '=' inline_space value
 
 # Section headers: path segments as @type.
-table_header = @punctuation{'['} inline_space key_path inline_space @punctuation{']'}
-array_of_tables_header = @punctuation{'[['} inline_space key_path inline_space @punctuation{']]'}
+table_header = @punctuation '[' inline_space key_path inline_space @punctuation ']'
+array_of_tables_header = @punctuation '[[' inline_space key_path inline_space @punctuation ']]'
 
 # Keys. Dotted keys are several segments joined by '.'. The two rules
 # differ only in the capture kind applied to each segment.
-key = key_seg_prop (inline_space @punctuation{'.'} inline_space key_seg_prop)*
-key_path = key_seg_type (inline_space @punctuation{'.'} inline_space key_seg_type)*
+key = key_seg_prop (inline_space @punctuation '.' inline_space key_seg_prop)*
+key_path = key_seg_type (inline_space @punctuation '.' inline_space key_seg_type)*
 
-key_seg_prop = @property{key_seg_body}
-key_seg_type = @type{key_seg_body}
+key_seg_prop = @property key_seg_body
+key_seg_type = @type key_seg_body
 key_seg_body = bare_key / basic_string / literal_string
 bare_key = [A-Za-z\d_\-]+
 
@@ -56,12 +56,12 @@ bare_key = [A-Za-z\d_\-]+
 #   - inf_nan before number (share the optional sign)
 #   - float before integer (both start with digits; float distinguished
 #     by the frac/exp tail)
-value = @string{basic_multiline / literal_multiline / basic_string / literal_string}
-      / @constant{[+\-]? ('inf' / 'nan')}
-      / @number{full_datetime / local_datetime / local_date / local_time}
-      / @number{[+\-]? unsigned_dec (frac exp? / exp)}
-      / @number{hex_int / oct_int / bin_int / dec_int}
-      / @constant{'true' / 'false'}
+value = @string (basic_multiline / literal_multiline / basic_string / literal_string)
+      / @constant ([+\-]? ('inf' / 'nan'))
+      / @number (full_datetime / local_datetime / local_date / local_time)
+      / @number ([+\-]? unsigned_dec (frac exp? / exp))
+      / @number (hex_int / oct_int / bin_int / dec_int)
+      / @constant ('true' / 'false')
       / array
       / inline_table
 
@@ -99,14 +99,14 @@ time = \d{2} ':' \d{2} ':' \d{2} ('.' \d+)?
 time_offset = 'Z' / 'z' / [+\-] \d{2} ':' \d{2}
 
 # --- Arrays (multiline, trailing comma, interior comments allowed) -----
-array = @punctuation{'['} blank array_body? blank @punctuation{']'}
-array_body = value (blank @punctuation{','} blank value)* (blank @punctuation{','})?
+array = @punctuation '[' blank array_body? blank @punctuation ']'
+array_body = value (blank @punctuation ',' blank value)* (blank @punctuation ',')?
 
 # --- Inline tables (no newlines, no trailing comma per v1.0) ----------
-inline_table = @punctuation{'{'} inline_space inline_table_body? inline_space @punctuation{'}'}
-inline_table_body = inline_pair (inline_space @punctuation{','} inline_space inline_pair)*
-inline_pair = key inline_space @punctuation{'='} inline_space value
+inline_table = @punctuation '{' inline_space inline_table_body? inline_space @punctuation '}'
+inline_table_body = inline_pair (inline_space @punctuation ',' inline_space inline_pair)*
+inline_pair = key inline_space @punctuation '=' inline_space value
 
 # --- Whitespace & comments --------------------------------------------
 inline_space = \h*
-comment = @comment{'#' .. \R}
+comment = @comment ('#' .. \R)

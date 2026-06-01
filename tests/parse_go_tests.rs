@@ -72,8 +72,8 @@ fn nil_is_constant() {
 
 #[test]
 fn qualified_ident_dot_is_nested_punctuation() {
-    // Go's `qualified_ident = ident (@punctuation{'.'} ident)?` wrapped
-    // by `@type{...}` produces a punctuation capture nested inside a
+    // Go's `qualified_ident = ident (@punctuation '.' ident)?` wrapped
+    // by `@type ...` produces a punctuation capture nested inside a
     // type capture. The walker resolves to the innermost kind, so the
     // dot's byte should report `punctuation`, not `type`.
     let input = "package p\nvar x pkg.Foo\n";

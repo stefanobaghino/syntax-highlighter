@@ -118,7 +118,7 @@ fn stats_json_grammar_emits_expected_record() {
 }
 
 // `tests/fixtures/stats_canary.peg` is a deliberately tiny grammar
-// (`root = 'a' / @keyword{'b'}`) whose only purpose is pinning
+// (`root = 'a' / @keyword 'b'`) whose only purpose is pinning
 // `stats`'s scalar output. The instruction count shifts only if pegc's
 // bytecode lowering for literals / alternation / capture wrapping
 // changes — a real signal worth catching. Shipped-grammar drift
@@ -143,11 +143,11 @@ fn stats_emits_correct_counts_for_canary_grammar() {
         Some("[\"keyword\"]")
     );
     // The lone rule has no NonTerminal references; body_chars pins the
-    // trimmed source length of `'a' / @keyword{'b'}` (19 characters).
+    // trimmed source length of `'a' / @keyword 'b'` (18 characters).
     let rule_line = lines.next().expect("per-rule record present");
     assert_eq!(json_field_str(rule_line, "rule"), Some("\"root\""));
     assert_eq!(json_field_str(rule_line, "references"), Some("0"));
-    assert_eq!(json_field_str(rule_line, "body_chars"), Some("19"));
+    assert_eq!(json_field_str(rule_line, "body_chars"), Some("18"));
     assert!(lines.next().is_none(), "canary should emit one rule record");
 }
 

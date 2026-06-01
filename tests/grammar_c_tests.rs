@@ -320,7 +320,7 @@ fn captures_with_text<'a>(
 
 // --- Word-boundary regression tests (issue #6) -----------------------
 //
-// Keywords matched inline as `@keyword{'…'}` must not fire on a longer
+// Keywords matched inline as `@keyword '…'` must not fire on a longer
 // identifier that merely starts with the keyword. Without a trailing
 // boundary, `typedefiner` highlights as `typedef` + `iner`.
 

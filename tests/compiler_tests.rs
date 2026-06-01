@@ -200,7 +200,7 @@ fn repeat_one_or_more() {
 }
 
 /// Builds the desugared AST that `p*^` lowers to: a `Repeat` over a
-/// `Catch(inner, kind, @kind{.})`. Mirrors `build_recover_repeat` in
+/// `Catch(inner, kind, @kind .)`. Mirrors `build_recover_repeat` in
 /// `src/pegc/parser.rs`. The `kind` argument controls both the
 /// `Catch` label and the capture name — historically the parser
 /// always picked `"recovery"`, and tests parameterize to exercise the
@@ -270,7 +270,7 @@ fn recover_repeat_mixed_success_and_recovery() {
 
 #[test]
 fn recover_repeat_preserves_failed_inner_attempt_deepest_captures() {
-    // inner = @open{"a"} "b" — the @open capture opens before the "b"
+    // inner = @open "a" "b" — the @open capture opens before the "b"
     // that may fail. Per issue #16, the deepest-progress captures of a
     // failed inner attempt are re-materialized by `RecoverToScopedMax`
     // before the recovery branch fires, and the recovery span covers
@@ -278,7 +278,7 @@ fn recover_repeat_preserves_failed_inner_attempt_deepest_captures() {
     // whole baseline-to-failure window).
     //
     // Kind interning order: `*^` desugars to `Repeat(Catch(inner,
-    // "recovery", @recovery{.}))`; the `Catch` arm compiles inner
+    // "recovery", @recovery .))`; the `Catch` arm compiles inner
     // before the recovery body, so @open interns first (id 0) and
     // @recovery second (id 1).
     let inner = Pattern::seq(vec![
@@ -302,7 +302,7 @@ fn recover_repeat_preserves_failed_inner_attempt_deepest_captures() {
 
 #[test]
 fn recover_repeat_failed_attempt_reaching_eof_does_not_leak_clean_match() {
-    // inner = @open{"a"} "b" against input "a" — the inner @open opens
+    // inner = @open "a" "b" against input "a" — the inner @open opens
     // at sp=0, then Char 'a' consumes ('sp=1'), then Char 'b' tries at
     // sp=1 (EOF) and fails. The failed attempt's scoped_max_sp ==
     // input.len(); RecoverToScopedMax would move sp to EOF, and the
@@ -332,7 +332,7 @@ fn recover_repeat_failed_attempt_reaching_eof_does_not_leak_clean_match() {
 
 #[test]
 fn recover_repeat_nested_loops_do_not_panic() {
-    // outer = ((@a{"a"} "X")*^) "Z"  (the outer is itself wrapped in *^)
+    // outer = ((@a "a" "X")*^) "Z"  (the outer is itself wrapped in *^)
     //
     // Two RecoverScope frames are simultaneously live whenever the
     // outer iteration is executing its inner `*^`. The
@@ -371,7 +371,7 @@ fn recover_repeat_nested_loops_do_not_panic() {
 
 #[test]
 fn recover_repeat_empty_capture_in_failed_inner_attempt_is_dropped() {
-    // inner = @x{!"x"} "z" — @x opens and closes at the same sp via
+    // inner = @x !"x" "z" — @x opens and closes at the same sp via
     // the NotPredicate succeeding without consuming. On input "by",
     // inner fails at "z"; the failed attempt's @x(0,0) sits at the
     // iteration's baseline sp and is dropped, NOT re-materialized.
@@ -397,7 +397,7 @@ fn recover_repeat_empty_capture_in_failed_inner_attempt_is_dropped() {
     assert!(r.complete);
     assert_eq!(r.matched, 2);
     // Kind interning order: "x" (id 0, inner compiled first), then
-    // "recovery" (id 1, the desugared `@recovery{.}` body). No @x
+    // "recovery" (id 1, the desugared `@recovery .` body). No @x
     // captures survive — both iterations produced only empty ones at
     // their baseline sp, which don't enter the watermark.
     assert_eq!(
@@ -411,7 +411,7 @@ fn recover_repeat_empty_capture_in_failed_inner_attempt_is_dropped() {
 
 #[test]
 fn recover_repeat_drops_unclosed_capture_from_failed_inner_attempt() {
-    // inner = @kw{ "abc" / "abd" } — the @kw capture opens BEFORE the
+    // inner = @kw ("abc" / "abd") — the @kw capture opens BEFORE the
     // alternatives, and neither alternative reaches its CaptureEnd on
     // input "abx" (both consume "ab" then fail on the third byte).
     // The failed attempt's `scoped_max_sp` is at sp=2; the open @kw
@@ -433,7 +433,7 @@ fn recover_repeat_drops_unclosed_capture_from_failed_inner_attempt() {
     assert!(r.complete);
     assert_eq!(r.matched, 3);
     // Kind interning order: "kw" (id 0, inner compiled first), then
-    // "recovery" (id 1, from the desugared `@recovery{.}` body).
+    // "recovery" (id 1, from the desugared `@recovery .` body).
     // Recovery byte is 'x' at sp=2 (Any(1) consumes from
     // `scoped_max_sp`, not the iteration baseline). No @kw capture
     // appears.
@@ -476,7 +476,7 @@ fn catch(inner: Pattern, label: &str, recovery: Pattern) -> Pattern {
 
 #[test]
 fn catch_inner_success_does_not_run_recovery() {
-    // inner = @open{"ab"}, recovery = @err{(!';' .)*}
+    // inner = @open "ab", recovery = @err ((!';' .)*)
     // Input matches inner cleanly; recovery branch must not fire.
     let p = catch(
         Pattern::capture("open", Pattern::literal("ab")),
@@ -502,7 +502,7 @@ fn catch_inner_success_does_not_run_recovery() {
 
 #[test]
 fn catch_inner_failure_runs_recovery() {
-    // inner = @open{"ab"} fails at sp=0; recovery = @err{.} consumes one byte.
+    // inner = @open "ab" fails at sp=0; recovery = @err . consumes one byte.
     let p = catch(
         Pattern::capture("open", Pattern::literal("ab")),
         "lbl",
@@ -525,8 +525,8 @@ fn catch_preserves_failed_inner_attempt_deepest_captures() {
     // re-materialized (via RecoverToScopedMax) and recovery runs from
     // that resync point — not from baseline sp.
     //
-    // inner = @open{"a"} "b" — opens an @open over the leading 'a',
-    // then requires 'b' which fails on input "ax". recovery = @err{.}
+    // inner = @open "a" "b" — opens an @open over the leading 'a',
+    // then requires 'b' which fails on input "ax". recovery = @err .
     // consumes one byte starting at the failed attempt's deepest sp
     // (sp=1, after the 'a'), not at baseline (sp=0).
     let p = catch(
@@ -753,7 +753,7 @@ fn capture_records_kind_and_span() {
 
 #[test]
 fn nested_captures_flow_through_compile() {
-    // @outer{ @inner{"a"} @inner{"b"} }
+    // @outer (@inner "a" @inner "b")
     let p = Pattern::capture(
         "outer",
         Pattern::seq(vec![
@@ -859,7 +859,7 @@ fn repeat_emits_partial_commit() {
 
 #[test]
 fn recover_repeat_emits_choice_commit_skeleton() {
-    // `*^` desugars to `(p ^recovery @recovery{.})*` at parse time —
+    // `*^` desugars to `(p ^recovery @recovery .)*` at parse time —
     // the emit is the natural concatenation of the `Repeat` arm's
     // Choice/PartialCommit skeleton and the `Catch` arm's
     // RecoverScope/Choice/RecoverToScopedMax/RecoverScopeEnd shape.
@@ -917,7 +917,7 @@ fn recover_repeat_labeled_interns_author_label() {
 }
 
 /// Builds the desugared AST that `p*^[cs]` lowers to: a `Repeat` over
-/// `Catch(inner, "recovery", @recovery{(!cs .)* cs})`. Mirrors
+/// `Catch(inner, "recovery", @recovery ((!cs .)* cs))`. Mirrors
 /// `build_recover_repeat` in `src/pegc/parser.rs`.
 fn sync_set_recover(inner: Pattern, charset: CharSet) -> Pattern {
     let skip_loop = Pattern::repeat(Pattern::seq(vec![
@@ -935,7 +935,7 @@ fn sync_set_recover(inner: Pattern, charset: CharSet) -> Pattern {
 
 #[test]
 fn sync_set_emits_skip_to_delim_loop() {
-    // The recovery body of `*^[;]` is `@recovery{(![;] .)* [;]}` —
+    // The recovery body of `*^[;]` is `@recovery ((![;] .)* [;])` —
     // a skip-until-delim loop followed by a delimiter consume, both
     // wrapped in a single `recovery` capture. The skeleton verifies
     // the structural pieces are present rather than nailing exact
@@ -1469,7 +1469,7 @@ fn follow_set_recursive() {
 
 #[test]
 fn follow_set_capture_preserved() {
-    // root = a @punctuation{','}; a = 'x'
+    // root = a @punctuation ','; a = 'x'
     let mut rules = HashMap::new();
     rules.insert(
         "root".into(),
@@ -1525,7 +1525,7 @@ fn follow_set_real_sqlite_grammar() {
     let f_result_column = follow.get("result_column").expect("result_column defined");
     assert!(
         f_result_column.contains(&cap_lit("punctuation", ",")),
-        "FOLLOW(result_column) should include @punctuation{{','}}: {f_result_column:?}"
+        "FOLLOW(result_column) should include @punctuation ',': {f_result_column:?}"
     );
     // One-level analysis: the rule called right after `result_list` in
     // `select_core` is `from_clause` (whose FIRST is `kw_from`). Authors
@@ -1820,7 +1820,7 @@ fn compile_succeeds_with_boundary_catch_anchor() {
 #[test]
 fn compile_succeeds_with_bracketed_close_catch_sugar() {
     // `^^bad ..= '}'` lowers to a `Catch` whose inner is unanchored
-    // and whose recovery is `Seq(@recovery{(!'}' .)*}, '}')`. The
+    // and whose recovery is `Seq(@recovery ((!'}' .)*), '}')`. The
     // inner ends in `'}'` (a hard terminator), so `lint_partial_match`
     // sees no trailing-nullable shape and compilation succeeds.
     let g = parse("root = ('{' a '}' ^^bad ..= '}')*\na = 'x'+").expect("parse");
@@ -1837,7 +1837,7 @@ fn bracketed_close_catch_runs_recovery_path() {
     // exercises the recovery: skip captures `garbage` and `}` is
     // captured as `@punctuation`.
     let g = parse(
-        "root = @punctuation{'{'} (body @punctuation{'}'} ^^bad ..= @punctuation{'}'})\nbody = 'x'",
+        "root = @punctuation '{' (body @punctuation '}' ^^bad ..= @punctuation '}')\nbody = 'x'",
     )
     .expect("parse");
     let prog = g.compile().expect("compile");
@@ -2046,18 +2046,18 @@ fn pattern_nodes_carry_parser_set_spans_for_each_variant_family() {
     // Operator: `Optional` span inherits its operand's span.
     // Operator: `Capture` span = position of the `@`.
     // Operator: `Catch` span = position of the leading `^`.
-    let src = "r = @kind{'a'?} ^lbl 'b'";
+    let src = "r = @kind ('a'?) ^lbl 'b'";
     let g = parse(src).expect("parses");
     let body = &g.rules["r"];
 
-    // Top-level is a `Catch`: span at the `^` (column 17 — `^lbl` follows
-    // `@kind{'a'?} `).
+    // Top-level is a `Catch`: span at the `^` (column 18 — `^lbl` follows
+    // `@kind ('a'?) `).
     let Pattern::Catch { inner, span, .. } = body else {
         panic!("expected Catch at root, got: {body:?}");
     };
     assert_eq!(
         *span,
-        Span { line: 1, col: 17 },
+        Span { line: 1, col: 18 },
         "Catch span should anchor at `^`"
     );
 
@@ -2077,7 +2077,7 @@ fn pattern_nodes_carry_parser_set_spans_for_each_variant_family() {
     );
 
     // Inside the capture: `Optional` whose span inherits the operand's
-    // start position — the operand is `'a'` literal at column 11.
+    // start position — the operand is `'a'` literal at column 12.
     let Pattern::Optional {
         inner: opt_inner,
         span: opt_span,
@@ -2087,13 +2087,13 @@ fn pattern_nodes_carry_parser_set_spans_for_each_variant_family() {
     };
     assert_eq!(
         *opt_span,
-        Span { line: 1, col: 11 },
+        Span { line: 1, col: 12 },
         "Optional span should inherit operand's start (the `'`)"
     );
     let Pattern::Literal { span: lit_span, .. } = opt_inner.as_ref() else {
         panic!("expected Literal inside Optional, got: {opt_inner:?}");
     };
-    assert_eq!(*lit_span, Span { line: 1, col: 11 });
+    assert_eq!(*lit_span, Span { line: 1, col: 12 });
 }
 
 // ---- `%` reserved-word sigil + `wb` special rule -------------------
@@ -2119,7 +2119,7 @@ fn run_grammar<'a>(src: &str, input: &'a str) -> Vec<(String, &'a str)> {
 
 #[test]
 fn percent_sigil_populates_percent_and_atomic_sets() {
-    let g = parse("root = r\ntrivia = (\\s)*\nwb = !'x'\n%r = @keyword{'if'}").expect("parse");
+    let g = parse("root = r\ntrivia = (\\s)*\nwb = !'x'\n%r = @keyword 'if'").expect("parse");
     assert!(
         g.percent_rules.contains("r"),
         "`%r` should be a percent rule"
@@ -2162,8 +2162,8 @@ fn percent_composes_with_lenient() {
     // `~%name` and `%~name` both parse: `~` (lenient) and `%`
     // (reserved-word) are independent markers.
     for src in [
-        "root = r\ntrivia = (\\s)*\nwb = !'x'\n~%r = @keyword{'if'}",
-        "root = r\ntrivia = (\\s)*\nwb = !'x'\n%~r = @keyword{'if'}",
+        "root = r\ntrivia = (\\s)*\nwb = !'x'\n~%r = @keyword 'if'",
+        "root = r\ntrivia = (\\s)*\nwb = !'x'\n%~r = @keyword 'if'",
     ] {
         let g = parse(src).unwrap_or_else(|e| panic!("parse {src:?}: {}", e.message));
         assert!(
@@ -2180,8 +2180,8 @@ fn percent_rule_appends_wb_inside_capture() {
     let src = "root = (token)*^\n\
                trivia = (\\s)*\n\
                wb = !ident_body\n\
-               token = kw_if / @variable{ident}\n\
-               %kw_if = @keyword{'if'}\n\
+               token = kw_if / @variable ident\n\
+               %kw_if = @keyword 'if'\n\
                *ident = [a-z] ident_body*\n\
                ident_body = [a-z0-9_]";
     assert_eq!(
@@ -2198,7 +2198,7 @@ fn percent_rule_appends_wb_inside_capture() {
 fn percent_without_wb_errors_undefined_rule() {
     // A `%` rule emits a `NonTerminal("wb")`; with no `wb` defined the
     // reference surfaces as `UndefinedRule("wb")`.
-    let g = parse("root = r\ntrivia = (\\s)*\n%r = @keyword{'if'}").expect("parse");
+    let g = parse("root = r\ntrivia = (\\s)*\n%r = @keyword 'if'").expect("parse");
     match g.compile().expect_err("compile should fail without wb") {
         syntax_highlighter::pegc::CompileError::UndefinedRule(name) => assert_eq!(name, "wb"),
         other => panic!("expected UndefinedRule(\"wb\"), got: {other:?}"),
@@ -2238,7 +2238,7 @@ fn wb_and_trivia_compose_in_either_order() {
 #[test]
 fn wb_without_trivia_is_valid() {
     // `wb` does not require `trivia`; a grammar may define only `wb`.
-    parse("root = r\nwb = !'x'\n%r = @keyword{'if'}")
+    parse("root = r\nwb = !'x'\n%r = @keyword 'if'")
         .expect("parse")
         .compile()
         .expect("compile");
@@ -2252,7 +2252,7 @@ fn preferred_sigil_populates_preferred_and_percent_sets() {
     // also in `percent_rules` + `atomic_rules` (it still gets the `wb`
     // boundary; it differs from `%` only in which synthesized set it
     // feeds).
-    let g = parse("root = r\ntrivia = (\\s)*\nwb = !'x'\n%?r = @keyword{'async'}").expect("parse");
+    let g = parse("root = r\ntrivia = (\\s)*\nwb = !'x'\n%?r = @keyword 'async'").expect("parse");
     assert!(g.preferred_rules.contains("r"), "`%?r` should be preferred");
     assert!(
         g.percent_rules.contains("r"),
@@ -2318,7 +2318,7 @@ fn synthesized_reserved_trie_and_preferred_membership() {
     let src = "root = (token)*^\n\
                trivia = (\\s)*\n\
                wb = !ident_body\n\
-               token = @keyword{kw_word} / @variable{ident}\n\
+               token = @keyword kw_word / @variable ident\n\
                %kw_word = 'int' / 'int8'\n\
                %?pre = 'len'\n\
                *ident = !reserved [a-z] ident_body*\n\

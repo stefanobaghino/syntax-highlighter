@@ -69,7 +69,7 @@ A rule body is a *pattern*. Patterns combine through operators with
 the following precedence, tightest-binding first:
 
 ```
-atom       "abc"   [a-z]   .   ident   (...)   @name{...}
+atom       "abc"   [a-z]   .   ident   (...)   @name ...
 postfix    p*      p+      p?      p{n}    p*^     p+^     p*^[cs]   p+^[cs]
 prefix     !p      &p
 sequence   p1 p2 p3          (juxtaposition)
@@ -92,7 +92,7 @@ the whole rule as intentionally lenient — see
 | `\d \D \s \S \h \H \R` | Built-in character classes — see below. |
 | `ident` | Reference to another rule. |
 | `(...)` | Grouping — any pattern. |
-| `@name{...}` | Named capture — see below. |
+| `@name ...` | Named capture — see below. |
 
 **String literals** use either `"..."` or `'...'`. Recognized escapes
 (inside strings and character classes): `\n`, `\r`, `\t`, `\0`, `\\`,
@@ -199,7 +199,7 @@ Zero-width — consume no input, emit no captures:
 
 Two additions over Ford 2004 PEG syntax:
 
-### `@name{pattern}` — named captures
+### `@name pattern` — named captures
 
 Wraps a sub-pattern with a highlight tag. On a successful enclosing
 match the VM emits a `Capture { kind, start, end }` record over the
@@ -207,8 +207,14 @@ matched bytes. `name` is interned to a small integer (`CaptureKind`)
 at compile time; the highlighter resolves it back via
 `Program::capture_kinds`.
 
+The operand is the **single following atom** — a literal, character
+class, rule reference, `.`, or a `(…)` group. A quantifier after the
+capture binds *outside* it (`@name a+` is `(@name a)+`), so to capture
+a quantified or multi-item pattern, group it in parens: `@name (a+)`,
+`@name (a b)`, `@name (a / b)`.
+
 ```peg
-string_lit = @string{ '"' (!'"' .)* '"' }
+string_lit = @string ('"' (!'"' .)* '"')
 ```
 
 Capture names may be any valid identifier. The built-in theme
@@ -246,7 +252,7 @@ lets distinct call sites surface as their own buckets.
 a `Repeat`. The parser produces an AST equivalent to:
 
 ```peg
-(p ^recovery @recovery{.})*
+(p ^recovery @recovery .)*
 ```
 
 There is no dedicated `RecoverRepeat` AST node — `build_recover_repeat`
@@ -278,7 +284,7 @@ emits a single `recovery` span covering `@@@ garbage @@@;` rather than
 recovery body:
 
 ```peg
-(p ^recovery @recovery{(![charset] .)* [charset]})*
+(p ^recovery @recovery ((![charset] .)* [charset]))*
 ```
 
 `p+^[charset]` desugars to `p (p*^[charset])`, mirroring `p+^`.
@@ -343,7 +349,7 @@ captures back into the live buffer (via `RecoverToScopedMax`) and runs
 `inner` fails; on success the catch behaves exactly like its inner.
 
 ```peg
-stmt = (assign / call) ^bad_stmt @err{ (!';' .)* } ';'
+stmt = (assign / call) ^bad_stmt @err ((!';' .)*) ';'
 ```
 
 The `label` is mandatory: it tags this scope so `pegdb
@@ -379,7 +385,7 @@ stmt = (alt1 / alt2) ^bad_stmt (!';' .)* ';'  # same idea with `^`
 **Difference from `*^`.** No loop and no synthetic single-byte
 `recovery` capture — the recovery body is author-written and emits
 whatever captures the author put in it. Wrap recovery in
-`@recovery{...}` (or any other capture name) if you want one. The
+`@recovery ...` (or any other capture name) if you want one. The
 natural two-tier composition is `^label` inside a rule for known
 failure points and `*^` outside as the loop-level backstop.
 
@@ -406,14 +412,14 @@ three-piece idiom that recurs across `grammars/sqlite.peg`:
 ```peg
 INNER ^^lbl B
 # lowers to
-(INNER &B) ^lbl @recovery{(!B .)*}
+(INNER &B) ^lbl @recovery ((!B .)*)
 ```
 
 `&B` requires `INNER` to consume up to a position where `B` matches
 (turning silent prefix-match success into a `^lbl` catch fire);
 `(!B .)*` resyncs by skipping bytes until `B` is reachable without
 consuming it (so the outer rule still sees the structural
-delimiter). The `@recovery{...}` wrap is part of the lowering — the
+delimiter). The `@recovery ...` wrap is part of the lowering — the
 operator owns the capture-kind choice so authors don't have to type
 it.
 
@@ -464,14 +470,14 @@ boundary is consumed *by the catch itself* (and re-captured with its
 own kind), not left for the outer rule. The five `^block_close`
 sites across the C / CSS / Go / JavaScript / Rust grammars are the
 motivating shape: a `block` rule whose happy path ends in
-`@punctuation{'}'}` and whose recovery skips bytes until the next
+`@punctuation '}'` and whose recovery skips bytes until the next
 `}` and then matches it, with the closing brace tagged as
 `@punctuation` in both paths.
 
 ```peg
 INNER ^^lbl ..= B
 # lowers to
-INNER ^lbl @recovery{(!B .)*} B
+INNER ^lbl @recovery ((!B .)*) B
 ```
 
 Two ways it differs from `^^lbl B`:
@@ -481,17 +487,17 @@ Two ways it differs from `^^lbl B`:
   would require a second `B` to follow. Authors who need a leniency
   anchor on a non-self-terminating INNER write it explicitly.
 - **B is consumed inside the recovery, not by the outer rule.** The
-  recovery body is a `Sequence` of `@recovery{(!B .)*}` then `B` —
+  recovery body is a `Sequence` of `@recovery ((!B .)*)` then `B` —
   the skip is captured as `recovery`; `B` keeps whatever capture
   kind its pattern carries, *outside* the `@recovery` wrap.
 
 Worked example (the `block` rule from `grammars/rust.peg`):
 
 ```peg
-block = @punctuation{'{'} ws (block_body ws @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
+block = @punctuation '{' ws (block_body ws @punctuation '}' ^^block_close ..= @punctuation '}')
 ```
 
-The catch fires when `block_body ws @punctuation{'}'}` fails (a
+The catch fires when `block_body ws @punctuation '}'` fails (a
 malformed block). The recovery skips up to the next `}` and consumes
 it as `@punctuation` — so themes that style recoveries differently
 still render the closing brace as a brace, not as a recovery span.
@@ -515,7 +521,7 @@ barrier and the compiler treats as transparent (emits the inner's
 bytecode unchanged).
 
 ```peg
-~opt_semi = (@punctuation{';'} ws)?
+~opt_semi = (@punctuation ';' ws)?
 ```
 
 The marker must touch the name (no whitespace between `~` and the
@@ -559,7 +565,7 @@ them accepts a prefix sigil — `*` / `~` / `%` / `%?` on `root`,
 
   ```peg
   trivia        = (comment / \s)*
-  comment       = @comment{'//' .. '\n' / '/*' ..= '*/'}
+  comment       = @comment ('//' .. '\n' / '/*' ..= '*/')
   ```
 
   Grammars without a `trivia` rule (e.g. indent-sensitive shapes)
@@ -635,8 +641,8 @@ longer identifier — `if` must not match the start of `ifx`.
 
 ```peg
 wb            = !ident_body
-%kw_if        = @keyword{'if'}
-%storage_spec = @keyword{'typedef'} / @keyword{'extern'} / @keyword{'static'}
+%kw_if        = @keyword 'if'
+%storage_spec = @keyword 'typedef' / @keyword 'extern' / @keyword 'static'
 ```
 
 The `wb` call is pushed inside each leaf capture (and distributed
@@ -675,7 +681,7 @@ identifiers.
 
 ```peg
 %?predeclared_type = 'int8' / 'int16' / 'int'   # Go: shadowable
-%?kw_async         = @keyword{'async'}          # JS: contextual
+%?kw_async         = @keyword 'async'          # JS: contextual
 ```
 
 - Same requirements / composition / rejections as `%`.

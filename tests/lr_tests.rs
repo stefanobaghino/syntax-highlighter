@@ -31,7 +31,7 @@ fn left_associative_addition() {
     // 'op' tag, each leaf number under 'num'.
     let src = r#"
         root = expr
-        expr = expr @op{'+'} @num{[0-9]+} / @num{[0-9]+}
+        expr = expr @op '+' @num ([0-9]+) / @num ([0-9]+)
     "#;
     let prog = pegc::compile(src).expect("compile");
     let r = VM::new_from_program(&prog, b"1+2+3").run();
@@ -59,7 +59,7 @@ fn left_associative_with_distinct_operators() {
     // associativity, but the seed-and-grow loop produces this ordering.
     let src = r#"
         root = expr
-        expr = expr @minus{'-'} @num{[0-9]+} / @num{[0-9]+}
+        expr = expr @minus '-' @num ([0-9]+) / @num ([0-9]+)
     "#;
     let r = run(src, b"9-1-2");
     assert!(r.complete);
@@ -75,9 +75,9 @@ fn precedence_via_two_lr_layers() {
     // both; the parse must reflect '*' binding tighter than '+'.
     let src = r#"
         root   = expr
-        expr   = expr @plus{'+'} term / term
-        term   = term @star{'*'} factor / factor
-        factor = @num{[0-9]+} / '(' expr ')'
+        expr   = expr @plus '+' term / term
+        term   = term @star '*' factor / factor
+        factor = @num ([0-9]+) / '(' expr ')'
     "#;
     let r = run(src, b"1+2*3");
     assert!(r.complete);
@@ -103,9 +103,9 @@ fn precedence_via_two_lr_layers() {
 fn lr_with_parenthesised_subexpression() {
     let src = r#"
         root   = expr
-        expr   = expr @plus{'+'} term / term
-        term   = term @star{'*'} factor / factor
-        factor = @num{[0-9]+} / '(' expr ')'
+        expr   = expr @plus '+' term / term
+        term   = term @star '*' factor / factor
+        factor = @num ([0-9]+) / '(' expr ')'
     "#;
     let r = run(src, b"(1+2)*3");
     assert!(r.complete);
@@ -117,7 +117,7 @@ fn lr_failure_returns_partial() {
     // Input doesn't even start with a valid leaf.
     let src = r#"
         root = expr
-        expr = expr @op{'+'} @num{[0-9]+} / @num{[0-9]+}
+        expr = expr @op '+' @num ([0-9]+) / @num ([0-9]+)
     "#;
     let r = run(src, b"x");
     assert!(!r.complete);
@@ -135,7 +135,7 @@ fn lr_partial_chain_returns_longest_prefix() {
     let src = r#"
         root    = wrapper
         wrapper = expr '!'
-        expr    = expr @op{'+'} @num{[0-9]+} / @num{[0-9]+}
+        expr    = expr @op '+' @num ([0-9]+) / @num ([0-9]+)
     "#;
     let r = run(src, b"1+2");
     assert!(!r.complete);
@@ -186,7 +186,7 @@ fn right_recursive_grammar_is_not_marked_lr() {
     // behavior is unchanged.
     let src = r#"
         root = list
-        list = @num{[0-9]+} (',' list)?
+        list = @num ([0-9]+) (',' list)?
     "#;
     let r = run(src, b"1,2,3");
     assert!(r.complete);
@@ -241,7 +241,7 @@ fn indirect_lr_cycle_of_3_runs() {
 #[test]
 fn lr_inside_recover_repeat_resyncs_cleanly() {
     // top = (expr ';')*^ !.
-    // expr = expr @op{'+'} @num{[0-9]+} / @num{[0-9]+}
+    // expr = expr @op '+' @num ([0-9]+) / @num ([0-9]+)
     //
     // Input "1+2;BAD;3+4;" — the middle "BAD" can't parse as an expr,
     // so the *^ recovery branch consumes one byte at a time. The
@@ -251,7 +251,7 @@ fn lr_inside_recover_repeat_resyncs_cleanly() {
     let src = r#"
         root = top
         top  = (expr ';')*^ !.
-        expr = expr @op{'+'} @num{[0-9]+} / @num{[0-9]+}
+        expr = expr @op '+' @num ([0-9]+) / @num ([0-9]+)
     "#;
     let r = run(src, b"1+2;BAD;3+4;");
     assert!(
@@ -288,7 +288,7 @@ fn cached_lr_seed_matches_uncached_run() {
     // MatchResult as disabling it (threshold=usize::MAX).
     let src = r#"
         root = expr
-        expr = expr @op{'+'} @num{[0-9]+} / @num{[0-9]+}
+        expr = expr @op '+' @num ([0-9]+) / @num ([0-9]+)
     "#;
     let prog = pegc::compile(src).expect("compile");
     let cached = VM::new_from_program(&prog, b"1+2+3")
@@ -313,7 +313,7 @@ fn lr_seed_caches_below_memo_threshold() {
     // shape would not cache, but the LR rule must.
     let src = r#"
         root = expr
-        expr = expr @op{'+'} @num{[0-9]+} / @num{[0-9]+}
+        expr = expr @op '+' @num ([0-9]+) / @num ([0-9]+)
     "#;
     let prog = pegc::compile(src).expect("compile");
     let (_, stats) = VM::new_from_program(&prog, b"1")
@@ -333,7 +333,7 @@ fn lr_inside_outer_repetition_matches_uncached_run() {
     let src = r#"
         root = top
         top  = (expr ',')* expr
-        expr = expr @op{'+'} @num{[0-9]+} / @num{[0-9]+}
+        expr = expr @op '+' @num ([0-9]+) / @num ([0-9]+)
     "#;
     let prog = pegc::compile(src).expect("compile");
     let cached = VM::new_from_program(&prog, b"1+2,3+4,5")

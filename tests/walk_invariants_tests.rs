@@ -10,11 +10,11 @@ mod common;
 use common::segments;
 
 /// Inner capture's `end` coincides with the outer's:
-/// `start = @outer{body}`, `body = 'aaa' @inner{'bbb'}`.
+/// `start = @outer body`, `body = 'aaa' @inner 'bbb'`.
 /// On input `aaabbb`, outer covers 0..6 and inner covers 3..6.
 const SHARED_END_GRAMMAR: &str = "\
-root = @outer{body}
-body = 'aaa' @inner{'bbb'}
+root = @outer body
+body = 'aaa' @inner 'bbb'
 ";
 
 #[test]

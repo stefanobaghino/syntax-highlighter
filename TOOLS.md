@@ -182,8 +182,8 @@ itself contains capture annotations — the inner capture sits inside
 the outer in both range and emission order. Two of the eight shipped
 grammars exercise this today: C `string_lit` wrapping `comment` (the
 inter-piece whitespace between concatenated string literals can match
-a comment), and Go `qualified_ident` (a `@type{...}` wrapping a
-`@punctuation{'.'}`). `depth` makes the relationship explicit: filter
+a comment), and Go `qualified_ident` (a `@type ...` wrapping a
+`@punctuation '.'`). `depth` makes the relationship explicit: filter
 `select(.depth == 0)` for outermost-only, or
 `select(.start <= N and .end > N)` for everything covering byte `N`
 regardless of nesting.

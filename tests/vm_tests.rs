@@ -382,7 +382,7 @@ fn charset_negate_and_union() {
 
 #[test]
 fn partial_match_on_failure_returns_max_sp_and_open_captures() {
-    // Grammar: "ab" @mark{ "cd" }  — match "ab", then a captured "cd".
+    // Grammar: "ab" @mark "cd"  — match "ab", then a captured "cd".
     //  0: Char a
     //  1: Char b
     //  2: CaptureBegin 0
@@ -458,7 +458,7 @@ fn partial_match_captures_survive_backtrack_below_watermark() {
     // runs. The lazy snapshot has to rescue those captures before the
     // truncate; otherwise the final result loses them.
     //
-    // Grammar: `@mark{ "abc" } / "ab" "x"` against input "abdX".
+    // Grammar: `@mark "abc" / "ab" "x"` against input "abdX".
     //  0: Choice L1 (=6)
     //  1: CaptureBegin 0
     //  2: Char a
