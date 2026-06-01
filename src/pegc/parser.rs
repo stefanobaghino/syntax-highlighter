@@ -493,6 +493,20 @@ impl<'a> Parser<'a> {
                             "unterminated scope block for rule `{name}`: expected `}}`"
                         )));
                     }
+                    // A scope-block member starting with a digit is almost
+                    // always a repeat count that lost its tight binding: the
+                    // `{n}` quantifier is recognized only when `{` touches its
+                    // atom *and* a digit follows immediately, so `x{ 4 }` or
+                    // `x {4}` fall through to here as a (malformed) scope. Name
+                    // the real mistake instead of a bare "expected identifier".
+                    Some(c) if c.is_ascii_digit() => {
+                        return Err(self.err(
+                            "expected a rule definition inside the scope block; if you meant a \
+                             repeat count, write `{n}` with the brace touching its atom and no \
+                             spaces (e.g. `x{4}`)"
+                                .into(),
+                        ));
+                    }
                     _ => kids.push(self.parse_rule_def()?),
                 }
             }

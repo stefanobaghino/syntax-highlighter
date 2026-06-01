@@ -185,14 +185,16 @@ fn postfix_repeat_count_exceeds_maximum_rejected() {
 }
 
 #[test]
-fn postfix_repeat_count_whitespace_inside_braces_is_scope_block() {
+fn postfix_repeat_count_whitespace_inside_braces_hints_at_count() {
     // `{n}` is tight: only a `{` immediately followed by a digit is a
     // repeat-count. `'x'{ 4 }` has a space after `{`, so it opens a
-    // scope block whose first rule name fails to parse at `4`.
+    // scope block — but a digit-led member is almost always a count that
+    // lost its tight binding, so the error names that mistake directly
+    // instead of a bare "expected identifier".
     let err = parse_src("r = 'x'{ 4 }").unwrap_err();
     assert!(
-        err.message.contains("expected identifier"),
-        "expected a scope-block identifier error, got: {}",
+        err.message.contains("repeat count") && err.message.contains("touching"),
+        "expected a count-hint error, got: {}",
         err.message
     );
 }
