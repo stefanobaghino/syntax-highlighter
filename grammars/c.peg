@@ -31,11 +31,11 @@
 
 root = (external_decl)*^
 
-trivia = (comment / \s)*
+ignore = (comment / \s)*
 
 # Word boundary for `%` reserved-word rules: a keyword can't be the
 # prefix of a longer identifier. Per C11 §6.4.2.1 identifier-continue.
-wb = !ident_body
+boundary = !ident_body
 
 # --- Preprocessor directives (absorbed as @comment) ------------------
 
@@ -64,7 +64,7 @@ decl_spec = storage_spec
           / type_spec
           / fn_spec
 
-# `%` reserved-word rules: compiled atomic, with a `wb` boundary call
+# `%` reserved-word rules: compiled atomic, with a `boundary` boundary call
 # appended inside each keyword capture. A keyword can't fire on a longer
 # identifier that merely starts with it (`static MyType`, `typedefx`),
 # and a rejected keyword leaves no stray capture for recovery to surface.
@@ -82,7 +82,7 @@ fn_spec: reserved = @keyword 'inline'
                   / @keyword '_Noreturn'
 
 # Embedded keyword tokens: one `%` rule per keyword, referenced wherever
-# the keyword appears so the `wb` boundary is applied uniformly.
+# the keyword appears so the `boundary` boundary is applied uniformly.
 kw_struct: reserved = @keyword 'struct'
 kw_union: reserved = @keyword 'union'
 kw_enum: reserved = @keyword 'enum'
@@ -118,7 +118,7 @@ predef_type_name: reserved = 'void' / 'char' / 'short' / 'long long' / 'long'
 # greedy `ident_body*` would swallow the trailing `_t`.
 typedef_name: atomic = [A-Z] ident_body*
                      / [a-z_] (!typedef_t_end ident_body)* typedef_t_end
-typedef_t_end: atomic = '_t' wb
+typedef_t_end: atomic = '_t' boundary
 
 struct_or_union_spec = (kw_struct / kw_union)
                       (@type ident)? (@punctuation '{' struct_decl* @punctuation '}')?
@@ -280,7 +280,7 @@ expr_primary = string_lit
              / @variable ident
 
 # Boolean / null constants as a `%?` preferred-word alternation so the
-# `wb` boundary keeps `trueish` / `NULLify` from matching the prefix.
+# `boundary` boundary keeps `trueish` / `NULLify` from matching the prefix.
 lit_const: preferred = @constant 'true'
                      / @constant 'false'
                      / @constant 'NULL'

@@ -71,7 +71,7 @@ Usage: pegdb recoveries dump -g <grammar.peg> [--max-literal=N] [<path>]
 Print one JSON object per surviving recovery span (keys: start, end,
 kind, label, pos, rule_stack, literal). One row per span — adjacent
 single-byte recovery captures from the same `*^` loop collapse into
-a single object. `rule_stack` is the full trivia-trimmed call stack
+a single object. `rule_stack` is the full ignore-trimmed call stack
 root-to-leaf at the deepest dive that contributed to the span.
 
 When capture/diagnostic accounting mismatches (a known bug class —
@@ -268,7 +268,7 @@ fn run_recoveries_dump(args: &[String]) -> ExitCode {
     p.set_input(input.into_bytes());
     let kinds = p.capture_kinds();
     let rule_names = p.rule_names();
-    let rule_is_trivia = p.rule_is_trivia();
+    let rule_is_ignore = p.rule_is_ignore();
     let label_names = p.label_kinds();
     let complete = p.is_complete();
     let (matched, captures) = p.captures();
@@ -314,7 +314,7 @@ fn run_recoveries_dump(args: &[String]) -> ExitCode {
         let span_start = captures[span_start_idx].start;
         let span_end = captures[span_end_idx - 1].end;
 
-        let trimmed = trim_trivia_tail(reach.rule_stack(), rule_is_trivia);
+        let trimmed = trim_ignore_tail(reach.rule_stack(), rule_is_ignore);
         let stack_names: Vec<&str> = trimmed
             .iter()
             .filter_map(|id| rule_names.get(id.0 as usize).map(String::as_str))
@@ -374,7 +374,7 @@ fn run_recoveries_dump(args: &[String]) -> ExitCode {
     }
     for idx in &orphan_diagnostics {
         let diag = &diagnostics[*idx];
-        let trimmed = trim_trivia_tail(diag.rule_stack(), rule_is_trivia);
+        let trimmed = trim_ignore_tail(diag.rule_stack(), rule_is_ignore);
         let stack_names: Vec<&str> = trimmed
             .iter()
             .filter_map(|id| rule_names.get(id.0 as usize).map(String::as_str))
@@ -434,7 +434,7 @@ fn run_recoveries_explain(args: &[String]) -> ExitCode {
     p.set_input(input.into_bytes());
     let kinds = p.capture_kinds();
     let rule_names = p.rule_names();
-    let rule_is_trivia = p.rule_is_trivia();
+    let rule_is_ignore = p.rule_is_ignore();
     let complete = p.is_complete();
     let (matched, captures) = p.captures();
     let diagnostics = p.recovery_diagnostics();
@@ -447,9 +447,9 @@ fn run_recoveries_explain(args: &[String]) -> ExitCode {
     // Cluster by `(rule_stack, label_name)`. Every recovery firing
     // carries a label — labeled catches (`^label`) use the author's
     // identifier; `*^` uses the intern of its `recovery_kind` string.
-    // Trailing rule_stack frames marked trivia (reached from a
-    // `trivia = …` reserved-name root) are popped before the key is
-    // built, so two diagnostics that bottom out in different trivia
+    // Trailing rule_stack frames marked ignore (reached from a
+    // `ignore = …` reserved-name root) are popped before the key is
+    // built, so two diagnostics that bottom out in different ignore
     // merge into one cluster on the deepest semantic rule. BTreeMap
     // preserves a stable key order for deterministic output.
     type ClusterKey = (Vec<String>, String);
@@ -459,7 +459,7 @@ fn run_recoveries_explain(args: &[String]) -> ExitCode {
         let Some(reach) = slot else {
             continue;
         };
-        let trimmed_stack = trim_trivia_tail(reach.rule_stack(), rule_is_trivia);
+        let trimmed_stack = trim_ignore_tail(reach.rule_stack(), rule_is_ignore);
         let stack: Vec<String> = trimmed_stack
             .iter()
             .filter_map(|id| rule_names.get(id.0 as usize).cloned())
@@ -510,7 +510,7 @@ fn run_recoveries_explain(args: &[String]) -> ExitCode {
     if !orphan_diagnostics.is_empty() {
         for &idx in &orphan_diagnostics {
             let diag = &diagnostics[idx];
-            let trimmed = trim_trivia_tail(diag.rule_stack(), rule_is_trivia);
+            let trimmed = trim_ignore_tail(diag.rule_stack(), rule_is_ignore);
             let leaf = trimmed
                 .last()
                 .and_then(|id| rule_names.get(id.0 as usize))
@@ -630,16 +630,16 @@ fn compute_recovery_span_aggregates(
     out
 }
 
-/// Pop trailing trivia frames from `stack`. A frame is trivia when its
-/// `MemoId.0` indexes a `true` slot in `rule_is_trivia` (cascaded from
-/// the reserved `trivia = …` rule at compile time). Both
+/// Pop trailing ignore frames from `stack`. A frame is ignore when its
+/// `MemoId.0` indexes a `true` slot in `rule_is_ignore` (cascaded from
+/// the reserved `ignore = …` rule at compile time). Both
 /// `recoveries explain` and `recoveries dump` use this to keep the
 /// displayed leaf on a semantically interesting rule rather than `ws`
 /// or `line_comment`.
-fn trim_trivia_tail(stack: &[MemoId], rule_is_trivia: &[bool]) -> Vec<MemoId> {
+fn trim_ignore_tail(stack: &[MemoId], rule_is_ignore: &[bool]) -> Vec<MemoId> {
     let mut out = stack.to_vec();
     while let Some(last) = out.last() {
-        if rule_is_trivia
+        if rule_is_ignore
             .get(last.0 as usize)
             .copied()
             .unwrap_or(false)

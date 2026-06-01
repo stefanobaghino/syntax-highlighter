@@ -30,7 +30,7 @@
 //!   for each name: NUL-terminated UTF-8 bytes
 //!
 //! rule-attribute bits:
-//!   ceil(rule_names.len() / 8) bytes, bit-packed `rule_is_trivia`
+//!   ceil(rule_names.len() / 8) bytes, bit-packed `rule_is_ignore`
 //!   (rule `i`'s bit is bit `i % 8` of byte `i / 8`, LSB-first).
 //!
 //! label-name table:
@@ -189,7 +189,7 @@ pub fn encode(program: &Program) -> Vec<u8> {
     let mut out = Vec::new();
     write_name_table(&mut out, &program.capture_kinds, "capture");
     write_name_table(&mut out, &program.rule_names, "rule");
-    write_bit_vec(&mut out, &program.rule_is_trivia);
+    write_bit_vec(&mut out, &program.rule_is_ignore);
     write_name_table(&mut out, &program.label_kinds, "label");
     write_char_sets(&mut out, &program.char_sets);
     write_instructions(&mut out, &program.code);
@@ -354,7 +354,7 @@ pub fn decode(bytes: &[u8]) -> Result<Program, Error> {
     let mut cur = Cursor::new(bytes);
     let capture_kinds = read_name_table(&mut cur, Error::InvalidCaptureName)?;
     let rule_names = read_name_table(&mut cur, Error::InvalidRuleName)?;
-    let rule_is_trivia = read_bit_vec(&mut cur, rule_names.len())?;
+    let rule_is_ignore = read_bit_vec(&mut cur, rule_names.len())?;
     let label_kinds = read_name_table(&mut cur, Error::InvalidLabelName)?;
     let char_sets = read_char_sets(&mut cur)?;
     let code = read_instructions(&mut cur)?;
@@ -370,7 +370,7 @@ pub fn decode(bytes: &[u8]) -> Result<Program, Error> {
         rule_count,
         rule_names,
         label_kinds,
-        rule_is_trivia,
+        rule_is_ignore,
         char_sets,
     })
 }
@@ -751,7 +751,7 @@ mod tests {
             rule_count: 2,
             rule_names: vec!["start".to_string(), "other".to_string()],
             label_kinds: vec!["missing_then".to_string()],
-            rule_is_trivia: vec![false, true],
+            rule_is_ignore: vec![false, true],
             char_sets: vec![class_a, class_b],
         };
         assert_roundtrip(&p);
@@ -759,7 +759,7 @@ mod tests {
 
     #[test]
     fn bit_vec_round_trips_across_byte_boundary() {
-        // 10 rules so the trivia bitmap spans 2 bytes; alternating
+        // 10 rules so the ignore bitmap spans 2 bytes; alternating
         // pattern catches any off-by-one in the bit ordering.
         let bits: Vec<bool> = (0..10).map(|i| i % 2 == 0).collect();
         let rule_names: Vec<String> = (0..10).map(|i| format!("r{i}")).collect();
@@ -769,14 +769,14 @@ mod tests {
             rule_count: 10,
             rule_names,
             label_kinds: vec![],
-            rule_is_trivia: bits,
+            rule_is_ignore: bits,
             char_sets: vec![],
         };
         let bytes = encode(&p);
         let decoded = decode(&bytes).expect("decode succeeds");
         assert_eq!(
-            decoded.rule_is_trivia, p.rule_is_trivia,
-            "trivia bit-vec mismatch after round-trip"
+            decoded.rule_is_ignore, p.rule_is_ignore,
+            "ignore bit-vec mismatch after round-trip"
         );
     }
 
@@ -918,7 +918,7 @@ mod tests {
             rule_count: 0,
             rule_names: vec![],
             label_kinds: vec![],
-            rule_is_trivia: vec![],
+            rule_is_ignore: vec![],
             char_sets: vec![],
         };
         assert_roundtrip(&p);
@@ -941,7 +941,7 @@ mod tests {
             rule_count: 99, // intentionally inconsistent with the code
             rule_names: vec![],
             label_kinds: vec![],
-            rule_is_trivia: vec![],
+            rule_is_ignore: vec![],
             char_sets: vec![],
         };
         let bytes = encode(&p);

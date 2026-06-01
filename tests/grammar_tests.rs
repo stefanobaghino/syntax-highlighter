@@ -1179,7 +1179,7 @@ fn end_to_end_inferred_catch_clean_input_no_recovery() {
 fn end_to_end_lenient_marker_is_runtime_transparent() {
     use syntax_highlighter::pegvm::VM;
     // The marker rides a non-special helper rule — `root` (like
-    // `trivia` / `wb`) rejects every ascription.
+    // `ignore` / `boundary`) rejects every ascription.
     let plain = parse("root = r\nr = 'x'+").compile().unwrap();
     let lenient = parse("root = r\nr: partial = 'x'+").compile().unwrap();
     assert_eq!(plain.code, lenient.code, "`partial` is runtime-transparent");

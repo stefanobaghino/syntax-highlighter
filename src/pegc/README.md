@@ -26,36 +26,36 @@ name2 =  body2
 ```
 
 - Every grammar must define a **`root` rule** — that's the entry
-  point. The compiler wraps its body as `trivia? root_body trivia? !.`
+  point. The compiler wraps its body as `ignore? root_body ignore? !.`
   so end-of-input is implicit (any trailing junk fails the parse).
-- An optional **`trivia` rule** acts as the auto-insertion target:
-  when present, the compiler splices a `trivia` call between every
+- An optional **`ignore` rule** acts as the auto-insertion target:
+  when present, the compiler splices a `ignore` call between every
   pair of consecutive items in non-atomic rule bodies, including
-  between iterations of `*` / `+`. Without a `trivia` rule, no
+  between iterations of `*` / `+`. Without a `ignore` rule, no
   auto-insertion happens.
-- An optional **`wb` rule** is the word-boundary target consumed by
-  `reserved` rules (see below); it is typically `wb = !ident_body`.
+- An optional **`boundary` rule** is the word-boundary target consumed by
+  `reserved` rules (see below); it is typically `boundary = !ident_body`.
   Defining it is only required when the grammar has at least one
   `reserved` rule.
 - Rules may carry postfix **ascriptions** between the name and `=`,
   `name: kw [kw ...] =`: `partial` (the intentional-leniency marker),
-  `atomic` (no `trivia` injected inside this rule's body), `reserved`
-  (atomic *and* appends a trailing `wb` call inside the rule's terminal
+  `atomic` (no `ignore` injected inside this rule's body), `reserved`
+  (atomic *and* appends a trailing `boundary` call inside the rule's terminal
   captures), and `preferred` (a sibling of `reserved` for
   identifier-eligible distinguished tokens). The keywords are
   *contextual* — special only in this slot, usable as ordinary rule
   names elsewhere. `atomic` / `reserved` / `preferred` are mutually
   exclusive (each makes a rule atomic); `partial` composes with any and,
   when present, must be written first (`name: partial atomic =`). The
-  three special rules `root`, `trivia`, and `wb` carry no ascriptions at
+  three special rules `root`, `ignore`, and `boundary` carry no ascriptions at
   all (any ascription on them is a parse error); whitespace
-  auto-insertion is disabled by omitting `trivia`, not by ascribing it.
+  auto-insertion is disabled by omitting `ignore`, not by ascribing it.
 - Two special rules, **`reserved`** and **`preferred`**, are
   *synthesized* by the compiler from the `reserved` / `preferred` rules
   (see below) — a grammar references them (`!reserved`) but never
   defines them.
 - **Position constraint:** `root` is always the first rule. The
-  optional special rules `trivia` and `wb` occupy the contiguous slots
+  optional special rules `ignore` and `boundary` occupy the contiguous slots
   immediately after `root` (positions 1..2, in either order). Other
   rules follow in any order.
 - **Identifiers** are ASCII `[A-Za-z_][A-Za-z0-9_]*`.
@@ -539,83 +539,83 @@ planned tightening.
 Three rule names get compile-time treatment. All three are structural
 slots the compiler wraps or injects, not lexable tokens, so none of
 them accepts an ascription — `partial` / `atomic` / `reserved` /
-`preferred` on `root`, `trivia`, or `wb` is a parse error.
+`preferred` on `root`, `ignore`, or `boundary` is a parse error.
 
 - **`root`** — the start rule (mandatory). The compiler wraps its
-  body as `trivia? root_body trivia? !.` so end-of-input is always
-  asserted, and a `trivia` rule (when present) pads the leading and
+  body as `ignore? root_body ignore? !.` so end-of-input is always
+  asserted, and a `ignore` rule (when present) pads the leading and
   trailing whitespace. The wrap means a grammar
   source like `root = value` parses whole inputs, not just longest
   prefixes — the implicit `!.` rejects trailing junk.
 
-- **`trivia`** — the optional auto-insertion target. When defined,
-  the compiler injects a call to `trivia` between
+- **`ignore`** — the optional auto-insertion target. When defined,
+  the compiler injects a call to `ignore` between
   every pair of consecutive items in every non-atomic rule's
   `Sequence`, plus prepends one to each iteration of `*` / `+`.
   This replaces the explicit `ws` / `spacing` calls that used to
   appear between tokens.
 
-  The rule also seeds the diagnostic *trivia cascade*: every rule
-  transitively reachable from `trivia` through the call graph gets
-  `Program::rule_is_trivia = true`, and `pegdb recoveries explain`
-  pops trailing trivia frames from the rule_stack when picking the
+  The rule also seeds the diagnostic *ignore cascade*: every rule
+  transitively reachable from `ignore` through the call graph gets
+  `Program::rule_is_ignore = true`, and `pegdb recoveries explain`
+  pops trailing ignore frames from the rule_stack when picking the
   displayed leaf of each cluster. Rules whose body contains a
   recovery catch (`^lbl`, `^^lbl`, `*^`) are pinned out of the
   cascade so the catch's diagnostic frame stays visible.
 
   Indentation-sensitive grammars (`#43`) keep significant-whitespace
-  rules outside the `trivia` subgraph; only ignorable bytes go in.
+  rules outside the `ignore` subgraph; only ignorable bytes go in.
 
   ```peg
-  trivia        = (comment / \s)*
+  ignore        = (comment / \s)*
   comment       = @comment ('//' .. '\n' / '/*' ..= '*/')
   ```
 
-  Grammars without a `trivia` rule (e.g. indent-sensitive shapes)
-  get no auto-insertion and no trivia-padding wrap on `root`; the
+  Grammars without a `ignore` rule (e.g. indent-sensitive shapes)
+  get no auto-insertion and no ignore-padding wrap on `root`; the
   EOF assertion is still applied. To keep a callable whitespace rule
   while leaving auto-insertion off, name it anything other than
-  `trivia` and thread it by hand — the `trivia` rule carries no
+  `ignore` and thread it by hand — the `ignore` rule carries no
   qualifiers, so its mere presence turns auto-insertion on. Such a
   hand-threaded rule sits outside the diagnostic cascade, which is
-  keyed on the name `trivia`.
+  keyed on the name `ignore`.
 
   *Why the per-iteration prepend matters.* The auto-insertion
-  splices `trivia` at every inter-item boundary of a `Sequence`, but
+  splices `ignore` at every inter-item boundary of a `Sequence`, but
   `Repeat` iterations have no parent `Sequence` to splice into —
   inserting between items of the body covers one iteration's
   interior, not the boundary between iteration N and iteration
-  N+1. So the rewriter also prepends a `trivia` call to the body of
+  N+1. So the rewriter also prepends a `ignore` call to the body of
   every `Repeat` / `RepeatOne`. Consider `pair (',' pair)*` parsing
   `pair, pair, pair` with spaces between every token. Without the
-  prepend, the Repeat body is `',' trivia pair`: the first
+  prepend, the Repeat body is `',' ignore pair`: the first
   iteration's `,` matches at the position just after the outer
-  Sequence's `pair trivia` — but the second iteration starts on a
+  Sequence's `pair ignore` — but the second iteration starts on a
   space, so its `,` rejects and the loop ends with one pair
-  missing. With the prepend the body becomes `trivia ',' trivia
+  missing. With the prepend the body becomes `ignore ',' ignore
   pair`, and each iteration begins by consuming whatever
   inter-iteration whitespace is sitting in front of it.
 
-- **`wb`** — the optional word-boundary target for `reserved` /
+- **`boundary`** — the optional word-boundary target for `reserved` /
   `preferred` rules. Its body is a bare boundary predicate (typically
-  `wb = !ident_body`, or `!ident_cont` for a Unicode-aware continuation
-  class). The compiler appends a `wb` call inside the terminal captures
+  `boundary = !ident_body`, or `!ident_cont` for a Unicode-aware continuation
+  class). The compiler appends a `boundary` call inside the terminal captures
   of every `reserved` / `preferred` rule (see
   [`name: reserved`](#name-reserved--reserved-word-ascription)); it
   is required only when the grammar has at least one such rule. Like
-  `trivia`, `wb` is exempt from trivia auto-insertion and must sit in
+  `ignore`, `boundary` is exempt from ignore auto-insertion and must sit in
   the reserved slots immediately after `root`. It is **not** part of
-  the trivia diagnostic cascade.
+  the ignore diagnostic cascade.
 
   ```peg
-  wb            = !ident_body
+  boundary            = !ident_body
   ```
 
 ### `name: atomic` — atomic-rule ascription
 
-The `atomic` ascription opts the rule out of `trivia`
+The `atomic` ascription opts the rule out of `ignore`
 auto-insertion: the rewriter walks the body but does not splice
-`trivia` between `Sequence` items or prepend one to `Repeat`
+`ignore` between `Sequence` items or prepend one to `Repeat`
 iterations. `partial` composes with it (`name: partial atomic =`).
 
 ```peg
@@ -624,7 +624,7 @@ ident: atomic      = [A-Za-z_] [A-Za-z0-9_]*
 ```
 
 Used on token-shape rules — string / number / char literals,
-identifiers, multi-byte keyword spellings — where injecting trivia
+identifiers, multi-byte keyword spellings — where injecting ignore
 between adjacent bytes would let whitespace appear inside the
 token. The atomic boundary stops at `NonTerminal` calls: a
 non-atomic rule called from inside an atomic body still gets
@@ -638,27 +638,27 @@ hand-write `!ident_body`.
 ### `name: reserved` — reserved-word ascription
 
 The `reserved` ascription marks a rule as a **reserved word**: it is
-compiled atomic *and* the compiler appends a call to the `wb` rule
+compiled atomic *and* the compiler appends a call to the `boundary` rule
 inside the rule's terminal captures, so the match must be followed by
 a word boundary. This keeps a keyword from firing on the prefix of a
 longer identifier — `if` must not match the start of `ifx`.
 
 ```peg
-wb                  = !ident_body
+boundary                  = !ident_body
 kw_if: reserved     = @keyword 'if'
 storage_spec: reserved = @keyword 'typedef' / @keyword 'extern' / @keyword 'static'
 ```
 
-The `wb` call is pushed inside each leaf capture (and distributed
+The `boundary` call is pushed inside each leaf capture (and distributed
 across choice branches), not appended after the rule body. That
 placement matters: it means the `@keyword` capture only commits when
 the boundary holds, so a rejected keyword leaves no stray capture for
 top-level `*^` recovery to surface. Because the rule is atomic, no
-`trivia` is spliced between the literal and the appended `wb` call.
+`ignore` is spliced between the literal and the appended `boundary` call.
 
 When a `reserved` / `preferred` rule's body is a **capture-less
 alternation of plain literals**, the compiler prefix-factors it into a
-longest-match **trie** (with `wb` at each accepting leaf) instead of a
+longest-match **trie** (with `boundary` at each accepting leaf) instead of a
 flat alternation. The trie is order-independent, so a shorter keyword
 can't shadow a longer one that extends it — `do` / `double`, `go` /
 `goto`, `int` / `int8` all match maximally regardless of source order.
@@ -666,11 +666,11 @@ can't shadow a longer one that extends it — `do` / `double`, `go` /
 not plain literals, so they keep the flat form — the synthesizer below
 emits those longest-first so maximal munch still holds.)
 
-- Requires a `wb` rule; with none defined, the synthesized
-  `NonTerminal("wb")` surfaces as `CompileError::UndefinedRule("wb")`.
+- Requires a `boundary` rule; with none defined, the synthesized
+  `NonTerminal("boundary")` surfaces as `CompileError::UndefinedRule("boundary")`.
 - Composes with `partial` (written first); mutually exclusive with
   `atomic` / `preferred`.
-- Rejected on the reserved rules `root` / `trivia` / `wb`.
+- Rejected on the reserved rules `root` / `ignore` / `boundary`.
 
 ### `name: preferred` — preferred-word ascription
 
@@ -678,7 +678,7 @@ The `preferred` ascription is the sibling of `reserved` for
 **preferred words**: identifier-eligible distinguished tokens such as
 Go's predeclared `int` / `len` / `true` or JavaScript's contextual
 `async` / `let`. It behaves exactly like `reserved` — atomic, with the
-same `wb` boundary and the same trie treatment — and differs only in
+same `boundary` boundary and the same trie treatment — and differs only in
 *which synthesized set the rule's literals feed*: a `preferred` rule's
 words go into `preferred` and are **excluded** from `reserved`, so they
 stay usable as identifiers.
@@ -711,12 +711,12 @@ rules above:
   for symmetry / inspection (e.g. `pegdb`); a grammar usually doesn't
   reference it.
 
-Both are emitted as `reserved` rules (trie + `wb`), so `!reserved` does
+Both are emitted as `reserved` rules (trie + `boundary`), so `!reserved` does
 correct maximal-munch: `int` is reserved, but `integer` — a longer word
 that merely starts with it — is not. A rule whose body isn't a fixed
 keyword shape (it has a quantifier / wildcard / predicate, e.g. a number
 body like `'0x' [\da-fA-F]+`) contributes nothing; keep such
-boundary-only helpers as `name: atomic = … wb` rather than `reserved`.
+boundary-only helpers as `name: atomic = … boundary` rather than `reserved`.
 Authors **reference** these
 two names but never **define** them (a definition is a parse error).
 

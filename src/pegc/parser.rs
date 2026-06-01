@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::analysis::{
-    append_wb_check, inject_auto_trivia, lint_partial_match, resolve_inferred_boundaries,
+    append_boundary_check, inject_auto_ignore, lint_partial_match, resolve_inferred_boundaries,
     synthesize_reserved_preferred, wrap_root,
 };
 use super::compiler::{compile_rules, CompileError};
@@ -34,25 +34,25 @@ fn case_fold_codepoint(c: char) -> CharSet {
 /// Reserved rule name for the grammar's start rule. Every grammar must
 /// define exactly one rule named [`ROOT_RULE`]; the compiler wraps its
 /// body to assert end-of-input and to splice optional leading / trailing
-/// `trivia` calls when an auto-insertion target exists.
+/// `ignore` calls when an auto-insertion target exists.
 pub const ROOT_RULE: &str = "root";
 
 /// Reserved rule name for the (optional) auto-insertion target. When a
-/// grammar defines a rule named [`TRIVIA_RULE`], the compiler injects a
+/// grammar defines a rule named [`IGNORE_RULE`], the compiler injects a
 /// call to it between consecutive `Sequence` items in every non-atomic
 /// rule's body. The rule carries no qualifiers; auto-insertion is
-/// disabled grammar-wide by omitting `trivia`, not by marking it.
-pub const TRIVIA_RULE: &str = "trivia";
+/// disabled grammar-wide by omitting `ignore`, not by marking it.
+pub const IGNORE_RULE: &str = "ignore";
 
 /// Reserved rule name for the (optional) word-boundary target. A rule
 /// ascribed `reserved` is compiled atomic and has a trailing call to
-/// [`WB_RULE`] appended inside its terminal captures by
-/// [`append_wb_check`](super::analysis::append_wb_check), so a keyword
-/// can't fire on the prefix of a longer identifier. Defining `wb` is
+/// [`BOUNDARY_RULE`] appended inside its terminal captures by
+/// [`append_boundary_check`](super::analysis::append_boundary_check), so a keyword
+/// can't fire on the prefix of a longer identifier. Defining `boundary` is
 /// only required when at least one `reserved` rule exists; like
-/// [`TRIVIA_RULE`] it must sit in the reserved slots immediately after
+/// [`IGNORE_RULE`] it must sit in the reserved slots immediately after
 /// [`ROOT_RULE`].
-pub const WB_RULE: &str = "wb";
+pub const BOUNDARY_RULE: &str = "boundary";
 
 /// Compiler-generated rule name for the reserved-word set. Synthesized
 /// by [`synthesize_reserved_preferred`](super::analysis::synthesize_reserved_preferred)
@@ -79,22 +79,22 @@ pub struct Grammar {
     pub rules: HashMap<String, Pattern>,
     /// Names of rules ascribed `atomic`. The auto-insertion rewriter
     /// skips these rules: `Sequence` items inside an atomic body don't
-    /// get a synthesized `trivia` call spliced between them. The `trivia`
+    /// get a synthesized `ignore` call spliced between them. The `ignore`
     /// rule itself never appears here — it carries no ascriptions;
     /// auto-insertion is disabled by omitting the rule, not by ascribing
     /// it.
     pub atomic_rules: HashSet<String>,
     /// Names of rules ascribed `reserved` (and `preferred`, which is a
     /// subset — every `preferred` rule is also here so it still gets a
-    /// boundary). Each such rule is also in `atomic_rules` (so trivia is
+    /// boundary). Each such rule is also in `atomic_rules` (so ignore is
     /// not auto-inserted inside it); membership here additionally drives
-    /// [`append_wb_check`](super::analysis::append_wb_check), which
-    /// appends a [`WB_RULE`] call inside the rule's terminal captures.
+    /// [`append_boundary_check`](super::analysis::append_boundary_check), which
+    /// appends a [`BOUNDARY_RULE`] call inside the rule's terminal captures.
     pub percent_rules: HashSet<String>,
     /// Names of rules ascribed `preferred` — identifier-eligible
     /// distinguished tokens (Go predeclared `int` / `len`, JS contextual
     /// `async` / `let`). A strict subset of `percent_rules`: a
-    /// `preferred` rule still gets the [`WB_RULE`] boundary,
+    /// `preferred` rule still gets the [`BOUNDARY_RULE`] boundary,
     /// but its literals are *excluded* from the synthesized
     /// [`RESERVED_RULE`] and instead collected into [`PREFERRED_RULE`] by
     /// [`synthesize_reserved_preferred`](super::analysis::synthesize_reserved_preferred).
@@ -166,22 +166,22 @@ impl Grammar {
     ///    `CompileError::PartialMatchLeniency`. Anchor real bugs with
     ///    `^^lbl B` (or `^^lbl`); mark intentional leniency with the
     ///    `name: partial` ascription at the rule definition.
-    /// 3. Inject auto-trivia calls into every non-atomic rule's body
-    ///    (no-op when the grammar has no `trivia` rule).
-    /// 4. Wrap `root`'s body with `trivia? body trivia? !.` (the
-    ///    `trivia?` calls are present iff auto-insertion is active).
+    /// 3. Inject auto-ignore calls into every non-atomic rule's body
+    ///    (no-op when the grammar has no `ignore` rule).
+    /// 4. Wrap `root`'s body with `ignore? body ignore? !.` (the
+    ///    `ignore?` calls are present iff auto-insertion is active).
     /// 5. Emit bytecode via `compile_rules`.
     ///
     /// The lint and FOLLOW-driven boundary resolver see the author's
     /// original body — auto-insertion and the `root` wrap run after
-    /// both, so synthesized `trivia` calls and the EOF assertion can't
+    /// both, so synthesized `ignore` calls and the EOF assertion can't
     /// confuse the lint walker or the FOLLOW set.
     pub fn compile(&self) -> Result<Program, CompileError> {
         if !self.rules.contains_key(ROOT_RULE) {
             return Err(CompileError::MissingRootRule);
         }
         // When the grammar was parsed from source, enforce that `root`
-        // is the first rule and `trivia` — when present — is the
+        // is the first rule and `ignore` — when present — is the
         // second. Hand-built grammars from `Grammar::new` skip this —
         // `rule_headers` is empty for them.
         if !self.rule_headers.is_empty() {
@@ -193,7 +193,7 @@ impl Grammar {
             if root_pos != 0 {
                 return Err(CompileError::RootRulePosition {
                     expected_pos: 0,
-                    has_trivia: self.rules.contains_key(TRIVIA_RULE),
+                    has_ignore: self.rules.contains_key(IGNORE_RULE),
                 });
             }
         }
@@ -209,19 +209,19 @@ impl Grammar {
         if !findings.is_empty() {
             return Err(CompileError::PartialMatchLeniency(findings));
         }
-        inject_auto_trivia(&mut resolved);
+        inject_auto_ignore(&mut resolved);
         // Synthesize the `reserved` / `preferred` rules from the literals
-        // of the `reserved` / `preferred` rules. Runs after trivia injection (so the
+        // of the `reserved` / `preferred` rules. Runs after ignore injection (so the
         // synthesized atomic rules aren't walked) and before
-        // `append_wb_check` (so the synthesized rules pick up the trie +
-        // `wb` like any other `reserved` rule, and exist before
+        // `append_boundary_check` (so the synthesized rules pick up the trie +
+        // `boundary` like any other `reserved` rule, and exist before
         // `compile_rules`' reference check).
         synthesize_reserved_preferred(&mut resolved)?;
-        // After trivia injection (which skips the atomic `reserved` rules)
-        // and before the root wrap: append the `wb` boundary call inside
-        // each `reserved` rule's terminal captures. An undefined `wb` surfaces as
-        // `CompileError::UndefinedRule("wb")` from `compile_rules`.
-        append_wb_check(&mut resolved);
+        // After ignore injection (which skips the atomic `reserved` rules)
+        // and before the root wrap: append the `boundary` boundary call inside
+        // each `reserved` rule's terminal captures. An undefined `boundary` surfaces as
+        // `CompileError::UndefinedRule("boundary")` from `compile_rules`.
+        append_boundary_check(&mut resolved);
         wrap_root(&mut resolved);
         compile_rules(&resolved.rules)
     }
@@ -318,14 +318,14 @@ impl<'a> Parser<'a> {
             //   call sites; the body is wrapped in `Pattern::Lenient` so
             //   the lint walker sees the same shape as a per-call-site
             //   leniency.
-            // - `atomic` opts the rule out of `trivia` auto-insertion (no
-            //   `trivia` spliced between `Sequence` items).
+            // - `atomic` opts the rule out of `ignore` auto-insertion (no
+            //   `ignore` spliced between `Sequence` items).
             // - `reserved` implies `atomic` and additionally appends a
-            //   `wb` boundary call inside the rule's terminal captures
-            //   (see `append_wb_check`); its literals seed the synthesized
+            //   `boundary` boundary call inside the rule's terminal captures
+            //   (see `append_boundary_check`); its literals seed the synthesized
             //   `reserved` set.
             // - `preferred` is the sibling of `reserved` (same atomic +
-            //   `wb` behavior) whose literals feed `preferred` instead and
+            //   `boundary` behavior) whose literals feed `preferred` instead and
             //   stay identifier-eligible.
             //
             // `atomic` / `reserved` / `preferred` are mutually exclusive
@@ -414,20 +414,20 @@ impl<'a> Parser<'a> {
                 )));
             }
             // The three special rules — the start rule `root` and the two
-            // auto-insertion targets `trivia` (whitespace) and `wb` (word
+            // auto-insertion targets `ignore` (whitespace) and `boundary` (word
             // boundary) — are structural slots wrapped or injected by the
             // compiler, not lexable tokens, so every ascription
             // (`partial`, `atomic`, `reserved`, `preferred`) is meaningless
             // on them and rejected. Disabling whitespace auto-insertion is
-            // done by omitting `trivia`, not by ascribing it.
+            // done by omitting `ignore`, not by ascribing it.
             if (definition_atomic
                 || definition_percent
                 || definition_preferred
                 || definition_lenient)
-                && (name == ROOT_RULE || name == TRIVIA_RULE || name == WB_RULE)
+                && (name == ROOT_RULE || name == IGNORE_RULE || name == BOUNDARY_RULE)
             {
-                let disable_hint = if name == TRIVIA_RULE {
-                    "; to disable auto-insertion, omit `trivia` and thread \
+                let disable_hint = if name == IGNORE_RULE {
+                    "; to disable auto-insertion, omit `ignore` and thread \
                      whitespace through a plainly-named rule"
                 } else {
                     ""
@@ -467,10 +467,10 @@ impl<'a> Parser<'a> {
         // that lets AST-only parser tests build fixtures with arbitrary
         // rule names without inventing a `root` placeholder.
         //
-        // `trivia` and `wb`, when present, occupy the contiguous slots
+        // `ignore` and `boundary`, when present, occupy the contiguous slots
         // immediately after `root` (positions 1..=n in either order),
         // where n is how many of them the grammar defines.
-        let specials = [TRIVIA_RULE, WB_RULE];
+        let specials = [IGNORE_RULE, BOUNDARY_RULE];
         let n_special = rule_headers
             .iter()
             .filter(|h| specials.contains(&h.name.as_str()))
@@ -483,11 +483,11 @@ impl<'a> Parser<'a> {
                 )));
             }
         }
-        // `wb`, like `trivia`, is exempt from trivia auto-insertion: its
+        // `boundary`, like `ignore`, is exempt from ignore auto-insertion: its
         // body is a bare boundary predicate that must stay adjacent to
         // the keyword it follows.
-        if rules.contains_key(WB_RULE) {
-            atomic_rules.insert(WB_RULE.to_string());
+        if rules.contains_key(BOUNDARY_RULE) {
+            atomic_rules.insert(BOUNDARY_RULE.to_string());
         }
         Ok(Grammar {
             rules,

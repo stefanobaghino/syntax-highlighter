@@ -101,7 +101,7 @@ every rule appears, including unreferenced ones):
 | `references` | Total occurrences of `<rule>` as a `NonTerminal` across every rule's body.   |
 | `body_chars` | Source character count of the rule's body (after `=`), trimmed.             |
 
-`references` counts **author-written** `NonTerminal` calls in rule bodies. The auto-injected `trivia` calls produced by `src/pegc/analysis.rs::inject_auto_trivia` are not counted, so the reserved `trivia` rule typically reports `references: 0` even though it is the most-invoked rule at runtime. Use the count to find dead or single-use rules in *authored* grammar source; do not read it as runtime call frequency.
+`references` counts **author-written** `NonTerminal` calls in rule bodies. The auto-injected `ignore` calls produced by `src/pegc/analysis.rs::inject_auto_ignore` are not counted, so the reserved `ignore` rule typically reports `references: 0` even though it is the most-invoked rule at runtime. Use the count to find dead or single-use rules in *authored* grammar source; do not read it as runtime call frequency.
 
 **Stdin:** not accepted — `stats` always takes a `<grammar.peg>` path.
 
@@ -250,7 +250,7 @@ for "what did the parser actually recover from, and where?"
 | `kind`       | Capture-kind name — always `"recovery"`. Emitted for symmetry with `captures dump`. |
 | `label`      | The catch's label name — author-supplied for `^label`, or `recovery_kind`'s intern for bare `*^`. |
 | `pos`        | Deepest byte offset reached by the failed iterations that contributed to this span. May sit anywhere relative to `end` — it's where the deepest dive happened, not where resync succeeded. |
-| `rule_stack` | The full trivia-trimmed call stack at the moment `pos` was set, root-to-leaf. Trailing frames reached from the reserved `trivia` rule are popped; the leaf is the deepest semantically interesting rule. |
+| `rule_stack` | The full ignore-trimmed call stack at the moment `pos` was set, root-to-leaf. Trailing frames reached from the reserved `ignore` rule are popped; the leaf is the deepest semantically interesting rule. |
 | `literal`    | The span's bytes as a JSON string (subject to `--max-literal=N`).                   |
 
 A *recovery span* is a maximal contiguous run of `kind == "recovery"`
@@ -308,7 +308,7 @@ thousands of recovery rows into a handful of bug-class lines.
 
 **Output:** one cluster per line on stdout in the form
 `<count> recoveries — farthest reach ends at <rule> (label: <name>)`,
-where `<rule>` is the leaf of the trivia-trimmed rule stack the failed
+where `<rule>` is the leaf of the ignore-trimmed rule stack the failed
 iterations reached deepest, and `<name>` is the catch label.
 Clusters are sorted by `<count>` descending. When the parse produces
 no recoveries and no orphan rows, the single line `no recoveries` is
@@ -339,7 +339,7 @@ $ pegdb recoveries explain -g grammars/rust.peg /tmp/broken.rs
 $ pegdb recoveries explain -g grammars/go.peg benches/fixtures/xlarge.go | head -1
 ```
 
-The cluster key is the full trivia-trimmed rule stack plus the catch
+The cluster key is the full ignore-trimmed rule stack plus the catch
 label — two recoveries are in the same cluster iff they reached the
 same leaf via the same intermediate frames under the same label.
 

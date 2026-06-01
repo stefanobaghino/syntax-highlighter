@@ -33,14 +33,14 @@ pub struct Program {
     /// recovery firing back to its source name. Empty for grammars
     /// that don't use labeled failures.
     pub label_kinds: Vec<String>,
-    /// Per-rule trivia flags, indexed by `MemoId.0`. `true` when the
-    /// rule is reachable from a `trivia = …` reserved-name root in
+    /// Per-rule ignore flags, indexed by `MemoId.0`. `true` when the
+    /// rule is reachable from a `ignore = …` reserved-name root in
     /// the grammar; a rule containing a recovery catch is pinned out
     /// of inference so the catch's frame stays visible. The
-    /// `recoveries` subcommands consult this to drop trailing trivia
+    /// `recoveries` subcommands consult this to drop trailing ignore
     /// frames from the rule_stack when picking the displayed leaf of
     /// a recovery cluster or span. Length is exactly `rule_count`.
-    pub rule_is_trivia: Vec<bool>,
+    pub rule_is_ignore: Vec<bool>,
     /// Character sets interned by the compiler. Indexed by
     /// [`crate::pegvm::SetId`]; each
     /// [`crate::pegvm::Instruction::CharSet`] payload is the index of

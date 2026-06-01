@@ -26,16 +26,16 @@
 
 root = (item)*^
 
-trivia = (comment / \s)*
+ignore = (comment / \s)*
 
 # Word boundary for `%` reserved-word rules: a keyword can't be the
 # prefix of a longer identifier (Rust Reference XID_Continue).
-wb = !ident_body
+boundary = !ident_body
 
 # --- Keyword tokens ----------------------------------------------------
 #
 # One `%` reserved-word rule per keyword, referenced wherever the
-# keyword appears so the `wb` boundary is applied uniformly: a keyword
+# keyword appears so the `boundary` boundary is applied uniformly: a keyword
 # can't fire on a longer identifier that starts with it (`fnfoo`).
 kw_use: reserved = @keyword 'use'
 kw_as: reserved = @keyword 'as'
@@ -454,7 +454,7 @@ let_stmt = kw_let pattern (@punctuation ':' type_expr)?
 # and Rust string / char / comment literals so we don't mis-balance
 # a `}` inside a string. This is the pragmatic alternative to a real
 # token-tree grammar. These rules stay non-atomic so the call-site
-# `trivia` auto-insertion still consumes leading whitespace inside
+# `ignore` auto-insertion still consumes leading whitespace inside
 # the brackets — necessary for multi-line macro argument lists like
 # `vec![\n  1,\n]`.
 
@@ -474,7 +474,7 @@ balanced_atom = brace_block
 
 literal = string_lit / char_lit / number_lit / lit_const
 
-# Boolean constants as a `%` reserved-word alternation so the `wb`
+# Boolean constants as a `%` reserved-word alternation so the `boundary`
 # boundary keeps `trueish` from matching the `true` prefix.
 lit_const: reserved = @constant 'true' / @constant 'false'
 
