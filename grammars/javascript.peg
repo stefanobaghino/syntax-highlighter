@@ -29,13 +29,13 @@
 # function/control-flow bodies resync at the closing `}` instead of
 # failing the enclosing statement.
 
-root           =  (stmt)*^
+root = (stmt)*^
 
-trivia         =  (comment / \s)*
+trivia = (comment / \s)*
 
 # Word boundary for `%` reserved-word rules: a keyword can't be the
 # prefix of a longer identifier (ECMAScript IdentifierPartChar).
-wb             =  !ident_body
+wb = !ident_body
 
 # --- Keyword tokens ---------------------------------------------------
 #
@@ -45,47 +45,47 @@ wb             =  !ident_body
 # `from`, `get`, `set`, `static`, `yield`) deliberately kept out of
 # `reserved` so they remain usable as identifiers: `{ asyncFoo() {} }`
 # must stay one method name.
-%kw_import     =  @keyword{'import'}
-%?kw_from      =  @keyword{'from'}
-%?kw_as        =  @keyword{'as'}
-%kw_export     =  @keyword{'export'}
-%kw_default    =  @keyword{'default'}
-%?kw_async     =  @keyword{'async'}
-%kw_function   =  @keyword{'function'}
-%kw_class      =  @keyword{'class'}
-%kw_extends    =  @keyword{'extends'}
-%?kw_static    =  @keyword{'static'}
-%?kw_get       =  @keyword{'get'}
-%?kw_set       =  @keyword{'set'}
-%kw_var        =  @keyword{'var'}
-%?kw_let       =  @keyword{'let'}
-%kw_const      =  @keyword{'const'}
-%kw_if         =  @keyword{'if'}
-%kw_else       =  @keyword{'else'}
-%kw_for        =  @keyword{'for'}
-%?kw_await     =  @keyword{'await'}
-%kw_in         =  @keyword{'in'}
-%?kw_of        =  @keyword{'of'}
-%kw_while      =  @keyword{'while'}
-%kw_do         =  @keyword{'do'}
-%kw_switch     =  @keyword{'switch'}
-%kw_case       =  @keyword{'case'}
-%kw_try        =  @keyword{'try'}
-%kw_catch      =  @keyword{'catch'}
-%kw_finally    =  @keyword{'finally'}
-%kw_throw      =  @keyword{'throw'}
-%kw_return     =  @keyword{'return'}
-%kw_break      =  @keyword{'break'}
-%kw_continue   =  @keyword{'continue'}
-%kw_debugger   =  @keyword{'debugger'}
-%kw_yield      =  @keyword{'yield'}
-%kw_instanceof =  @keyword{'instanceof'}
-%kw_typeof     =  @keyword{'typeof'}
-%kw_void       =  @keyword{'void'}
-%kw_delete     =  @keyword{'delete'}
-%kw_new        =  @keyword{'new'}
-%kw_this       =  @keyword{'this'}
-%kw_super      =  @keyword{'super'}
+%kw_import = @keyword{'import'}
+%?kw_from = @keyword{'from'}
+%?kw_as = @keyword{'as'}
+%kw_export = @keyword{'export'}
+%kw_default = @keyword{'default'}
+%?kw_async = @keyword{'async'}
+%kw_function = @keyword{'function'}
+%kw_class = @keyword{'class'}
+%kw_extends = @keyword{'extends'}
+%?kw_static = @keyword{'static'}
+%?kw_get = @keyword{'get'}
+%?kw_set = @keyword{'set'}
+%kw_var = @keyword{'var'}
+%?kw_let = @keyword{'let'}
+%kw_const = @keyword{'const'}
+%kw_if = @keyword{'if'}
+%kw_else = @keyword{'else'}
+%kw_for = @keyword{'for'}
+%?kw_await = @keyword{'await'}
+%kw_in = @keyword{'in'}
+%?kw_of = @keyword{'of'}
+%kw_while = @keyword{'while'}
+%kw_do = @keyword{'do'}
+%kw_switch = @keyword{'switch'}
+%kw_case = @keyword{'case'}
+%kw_try = @keyword{'try'}
+%kw_catch = @keyword{'catch'}
+%kw_finally = @keyword{'finally'}
+%kw_throw = @keyword{'throw'}
+%kw_return = @keyword{'return'}
+%kw_break = @keyword{'break'}
+%kw_continue = @keyword{'continue'}
+%kw_debugger = @keyword{'debugger'}
+%kw_yield = @keyword{'yield'}
+%kw_instanceof = @keyword{'instanceof'}
+%kw_typeof = @keyword{'typeof'}
+%kw_void = @keyword{'void'}
+%kw_delete = @keyword{'delete'}
+%kw_new = @keyword{'new'}
+%kw_this = @keyword{'this'}
+%kw_super = @keyword{'super'}
 
 # --- Statements -------------------------------------------------------
 #
@@ -93,178 +93,178 @@ wb             =  !ident_body
 # expression-statements so their leading keywords aren't misparsed as
 # identifiers.
 
-stmt           =  import_decl
-                / export_decl
-                / fn_decl
-                / class_decl
-                / var_decl opt_semi
-                / if_stmt
-                / for_stmt
-                / while_stmt
-                / do_while_stmt
-                / switch_stmt
-                / try_stmt
-                / throw_stmt
-                / return_stmt
-                / break_stmt
-                / continue_stmt
-                / debugger_stmt
-                / labeled_stmt
-                / block
-                / empty_stmt
-                / expr opt_semi
+stmt = import_decl
+     / export_decl
+     / fn_decl
+     / class_decl
+     / var_decl opt_semi
+     / if_stmt
+     / for_stmt
+     / while_stmt
+     / do_while_stmt
+     / switch_stmt
+     / try_stmt
+     / throw_stmt
+     / return_stmt
+     / break_stmt
+     / continue_stmt
+     / debugger_stmt
+     / labeled_stmt
+     / block
+     / empty_stmt
+     / expr opt_semi
 
 # Definition-level `~` on `~opt_semi` covers every ASI call site; the
 # missing-else / missing-catch / missing-finally leniency on the other
 # `~`-marked stmts below is absorbed by stmt-level `*^` and
 # `block`'s `^block_close` recovery.
-~opt_semi      =  @punctuation{';'}?
-empty_stmt     =  @punctuation{';'}
+~opt_semi = @punctuation{';'}?
+empty_stmt = @punctuation{';'}
 
 # --- Imports / exports ------------------------------------------------
 
-import_decl    =  kw_import import_body opt_semi
-import_body    =  import_clause kw_from string_lit
-                / string_lit
-import_clause  =  import_default @punctuation{','} import_ns_or_named
-                / import_default
-                / import_ns_or_named
-import_default =  @variable{ident}
-import_ns_or_named =  import_namespace / import_named
-import_namespace =  @operator{'*'} kw_as @variable{ident}
-import_named   =  @punctuation{'{'} import_specifier_list? @punctuation{'}'}
-import_specifier_list =  import_specifier (@punctuation{','} import_specifier)* (@punctuation{','})?
-import_specifier =  @variable{ident_name} kw_as @variable{ident}
-                  / @variable{ident}
+import_decl = kw_import import_body opt_semi
+import_body = import_clause kw_from string_lit
+            / string_lit
+import_clause = import_default @punctuation{','} import_ns_or_named
+              / import_default
+              / import_ns_or_named
+import_default = @variable{ident}
+import_ns_or_named = import_namespace / import_named
+import_namespace = @operator{'*'} kw_as @variable{ident}
+import_named = @punctuation{'{'} import_specifier_list? @punctuation{'}'}
+import_specifier_list = import_specifier (@punctuation{','} import_specifier)* (@punctuation{','})?
+import_specifier = @variable{ident_name} kw_as @variable{ident}
+                 / @variable{ident}
 
-export_decl    =  kw_export kw_default export_default_body
-                / kw_export @operator{'*'} (kw_as @variable{ident_name})? kw_from string_lit opt_semi
-                / kw_export export_named
-                / kw_export fn_decl
-                / kw_export class_decl
-                / kw_export var_decl opt_semi
-export_default_body =  fn_decl
-                     / class_decl
-                     / expr opt_semi
+export_decl = kw_export kw_default export_default_body
+            / kw_export @operator{'*'} (kw_as @variable{ident_name})? kw_from string_lit opt_semi
+            / kw_export export_named
+            / kw_export fn_decl
+            / kw_export class_decl
+            / kw_export var_decl opt_semi
+export_default_body = fn_decl
+                    / class_decl
+                    / expr opt_semi
 # Trailing `opt_semi` on `~export_named` is absorbed by stmt-level recovery.
-~export_named  =  @punctuation{'{'} export_specifier_list? @punctuation{'}'} (kw_from string_lit)? opt_semi
-export_specifier_list =  export_specifier (@punctuation{','} export_specifier)* (@punctuation{','})?
-export_specifier =  @variable{ident_name} kw_as @variable{ident_name}
-                  / @variable{ident}
+~export_named = @punctuation{'{'} export_specifier_list? @punctuation{'}'} (kw_from string_lit)? opt_semi
+export_specifier_list = export_specifier (@punctuation{','} export_specifier)* (@punctuation{','})?
+export_specifier = @variable{ident_name} kw_as @variable{ident_name}
+                 / @variable{ident}
 
 # --- Function / class declarations ------------------------------------
 
-fn_decl        =  kw_async fn_decl_core
-                / fn_decl_core
-fn_decl_core   =  kw_function @operator{'*'}? @function{ident} fn_params block
+fn_decl = kw_async fn_decl_core
+        / fn_decl_core
+fn_decl_core = kw_function @operator{'*'}? @function{ident} fn_params block
 
-class_decl     =  kw_class @type{ident} class_heritage? class_body
-class_heritage =  kw_extends expr_lhs
-class_body     =  @punctuation{'{'} class_member* @punctuation{'}'}
-class_member   =  @punctuation{';'}
-                / class_method_or_field
-class_method_or_field =  kw_static? (class_method / class_field)
-class_method   =  kw_async? @operator{'*'}? method_head fn_params block
-                / (kw_get / kw_set) method_head fn_params block
-method_head    =  computed_prop
-                / @function{ident_name}
-                / string_lit
-                / number_lit
-class_field    =  (computed_prop / @property{ident_name}) (@operator{'='} expr_no_comma)? opt_semi
+class_decl = kw_class @type{ident} class_heritage? class_body
+class_heritage = kw_extends expr_lhs
+class_body = @punctuation{'{'} class_member* @punctuation{'}'}
+class_member = @punctuation{';'}
+             / class_method_or_field
+class_method_or_field = kw_static? (class_method / class_field)
+class_method = kw_async? @operator{'*'}? method_head fn_params block
+             / (kw_get / kw_set) method_head fn_params block
+method_head = computed_prop
+            / @function{ident_name}
+            / string_lit
+            / number_lit
+class_field = (computed_prop / @property{ident_name}) (@operator{'='} expr_no_comma)? opt_semi
 
 # --- Variable declarations -------------------------------------------
 
-var_decl       =  (kw_var / kw_let / kw_const) var_declarator_list
-var_declarator_list =  var_declarator (@punctuation{','} var_declarator)*
+var_decl = (kw_var / kw_let / kw_const) var_declarator_list
+var_declarator_list = var_declarator (@punctuation{','} var_declarator)*
 # Trailing `(= expr)?` absorbed by enclosing stmt recovery.
-~var_declarator =  pattern (@operator{'='} expr_no_comma)?
+~var_declarator = pattern (@operator{'='} expr_no_comma)?
 
 # --- Control flow -----------------------------------------------------
 
 # Trailing `(else stmt)?` leniency absorbed by stmt-level recovery.
-~if_stmt       =  kw_if @punctuation{'('} expr @punctuation{')'} stmt
-                  (kw_else stmt)?
-for_stmt       =  kw_for kw_await? @punctuation{'('} for_head @punctuation{')'} stmt
-for_head       =  for_c_style
-                / for_in_of
-for_c_style    =  for_init? @punctuation{';'} expr? @punctuation{';'} expr?
-for_in_of      =  for_binding (kw_in / kw_of) expr
-for_init       =  var_decl
-                / expr
-for_binding    =  (kw_var / kw_let / kw_const) pattern
-                / pattern
+~if_stmt = kw_if @punctuation{'('} expr @punctuation{')'} stmt
+           (kw_else stmt)?
+for_stmt = kw_for kw_await? @punctuation{'('} for_head @punctuation{')'} stmt
+for_head = for_c_style
+         / for_in_of
+for_c_style = for_init? @punctuation{';'} expr? @punctuation{';'} expr?
+for_in_of = for_binding (kw_in / kw_of) expr
+for_init = var_decl
+         / expr
+for_binding = (kw_var / kw_let / kw_const) pattern
+            / pattern
 
-while_stmt     =  kw_while @punctuation{'('} expr @punctuation{')'} stmt
-do_while_stmt  =  kw_do stmt kw_while @punctuation{'('} expr @punctuation{')'} opt_semi
-switch_stmt    =  kw_switch @punctuation{'('} expr @punctuation{')'}
-                  @punctuation{'{'} switch_case* @punctuation{'}'}
-switch_case    =  kw_case expr @punctuation{':'} (!switch_case_term stmt)*
-                / kw_default @punctuation{':'} (!switch_case_term stmt)*
-switch_case_term =  kw_case / kw_default / @punctuation{'}'}
+while_stmt = kw_while @punctuation{'('} expr @punctuation{')'} stmt
+do_while_stmt = kw_do stmt kw_while @punctuation{'('} expr @punctuation{')'} opt_semi
+switch_stmt = kw_switch @punctuation{'('} expr @punctuation{')'}
+              @punctuation{'{'} switch_case* @punctuation{'}'}
+switch_case = kw_case expr @punctuation{':'} (!switch_case_term stmt)*
+            / kw_default @punctuation{':'} (!switch_case_term stmt)*
+switch_case_term = kw_case / kw_default / @punctuation{'}'}
 # Trailing `(catch)? (finally)?` absorbed by stmt-level recovery.
-~try_stmt      =  kw_try block catch_clause? finally_clause?
-catch_clause   =  kw_catch (@punctuation{'('} pattern @punctuation{')'})? block
-finally_clause =  kw_finally block
-throw_stmt     =  kw_throw expr opt_semi
+~try_stmt = kw_try block catch_clause? finally_clause?
+catch_clause = kw_catch (@punctuation{'('} pattern @punctuation{')'})? block
+finally_clause = kw_finally block
+throw_stmt = kw_throw expr opt_semi
 # Trailing `expr?` leniency on `~return_stmt` absorbed by stmt recovery.
-~return_stmt   =  kw_return expr? opt_semi
-~break_stmt    =  kw_break (@variable{ident})? opt_semi
-~continue_stmt =  kw_continue (@variable{ident})? opt_semi
-debugger_stmt  =  kw_debugger opt_semi
-labeled_stmt   =  @variable{ident} @punctuation{':'} stmt
-block          =  @punctuation{'{'} (stmt* @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
+~return_stmt = kw_return expr? opt_semi
+~break_stmt = kw_break (@variable{ident})? opt_semi
+~continue_stmt = kw_continue (@variable{ident})? opt_semi
+debugger_stmt = kw_debugger opt_semi
+labeled_stmt = @variable{ident} @punctuation{':'} stmt
+block = @punctuation{'{'} (stmt* @punctuation{'}'} ^^block_close ..= @punctuation{'}'})
 
 # --- Function params and patterns -------------------------------------
 
-fn_params      =  @punctuation{'('} fn_param_list? @punctuation{')'}
-fn_param_list  =  fn_param (@punctuation{','} fn_param)* (@punctuation{','})?
-fn_param       =  @operator{'...'} pattern
-                / pattern (@operator{'='} expr_no_comma)?
+fn_params = @punctuation{'('} fn_param_list? @punctuation{')'}
+fn_param_list = fn_param (@punctuation{','} fn_param)* (@punctuation{','})?
+fn_param = @operator{'...'} pattern
+         / pattern (@operator{'='} expr_no_comma)?
 
 # --- Destructuring patterns ------------------------------------------
 
-pattern        =  array_pattern / object_pattern / @variable{ident}
-array_pattern  =  @punctuation{'['} array_pattern_list? @punctuation{']'}
-array_pattern_list =  array_pattern_el (@punctuation{','} array_pattern_el)* (@punctuation{','})?
-array_pattern_el =  @operator{'...'} pattern
-                  / pattern (@operator{'='} expr_no_comma)?
-                  / ''
-object_pattern =  @punctuation{'{'} object_pattern_list? @punctuation{'}'}
-object_pattern_list =  object_pattern_prop (@punctuation{','} object_pattern_prop)* (@punctuation{','})?
-object_pattern_prop =  @operator{'...'} pattern
-                     / (computed_prop / @property{ident_name}) @punctuation{':'} pattern (@operator{'='} expr_no_comma)?
-                     / @property{ident} (@operator{'='} expr_no_comma)?
+pattern = array_pattern / object_pattern / @variable{ident}
+array_pattern = @punctuation{'['} array_pattern_list? @punctuation{']'}
+array_pattern_list = array_pattern_el (@punctuation{','} array_pattern_el)* (@punctuation{','})?
+array_pattern_el = @operator{'...'} pattern
+                 / pattern (@operator{'='} expr_no_comma)?
+                 / ''
+object_pattern = @punctuation{'{'} object_pattern_list? @punctuation{'}'}
+object_pattern_list = object_pattern_prop (@punctuation{','} object_pattern_prop)* (@punctuation{','})?
+object_pattern_prop = @operator{'...'} pattern
+                    / (computed_prop / @property{ident_name}) @punctuation{':'} pattern (@operator{'='} expr_no_comma)?
+                    / @property{ident} (@operator{'='} expr_no_comma)?
 
-computed_prop  =  @punctuation{'['} expr @punctuation{']'}
+computed_prop = @punctuation{'['} expr @punctuation{']'}
 
 # --- Expressions ------------------------------------------------------
 
-expr           =  expr_no_comma (@punctuation{','} expr_no_comma)*
-expr_no_comma  =  expr_assign
-expr_assign    =  expr_arrow
-                / expr_yield
-                / expr_conditional (assign_op expr_assign)?
+expr = expr_no_comma (@punctuation{','} expr_no_comma)*
+expr_no_comma = expr_assign
+expr_assign = expr_arrow
+            / expr_yield
+            / expr_conditional (assign_op expr_assign)?
 
-assign_op      =  @operator{'**='}
-                / @operator{'<<='} / @operator{'>>>='} / @operator{'>>='}
-                / @operator{'||='} / @operator{'&&='} / @operator{'??='}
-                / @operator{'+='} / @operator{'-='} / @operator{'*='} / @operator{'/='}
-                / @operator{'%='} / @operator{'&='} / @operator{'|='} / @operator{'^='}
-                / @operator{'='} !'='
+assign_op = @operator{'**='}
+          / @operator{'<<='} / @operator{'>>>='} / @operator{'>>='}
+          / @operator{'||='} / @operator{'&&='} / @operator{'??='}
+          / @operator{'+='} / @operator{'-='} / @operator{'*='} / @operator{'/='}
+          / @operator{'%='} / @operator{'&='} / @operator{'|='} / @operator{'^='}
+          / @operator{'='} !'='
 
 # Arrow functions tried first. `async x => ...`, `x => ...`,
 # `(a, b) => ...`, `() => ...`.
-expr_arrow     =  arrow_head @operator{'=>'} arrow_body
-arrow_head     =  kw_async arrow_params
-                / arrow_params
-arrow_params   =  @variable{ident}
-                / arrow_paren_params
-arrow_paren_params =  @punctuation{'('} fn_param_list? @punctuation{')'}
-arrow_body     =  block
-                / expr_no_comma
+expr_arrow = arrow_head @operator{'=>'} arrow_body
+arrow_head = kw_async arrow_params
+           / arrow_params
+arrow_params = @variable{ident}
+             / arrow_paren_params
+arrow_paren_params = @punctuation{'('} fn_param_list? @punctuation{')'}
+arrow_body = block
+           / expr_no_comma
 
 # Trailing `(*)? (expr_assign)?` absorbed by stmt-level recovery.
-~expr_yield    =  kw_yield @operator{'*'}? expr_assign?
+~expr_yield = kw_yield @operator{'*'}? expr_assign?
 
 # Ternary. Below the ternary, precedence is encoded by direct left
 # recursion — `level_n =  level_n OP level_{n+1} / level_{n+1}` per
@@ -273,129 +273,129 @@ arrow_body     =  block
 # alternation; cross-level ambiguities (`<` vs `<<`, `&` vs `&&`,
 # operator vs compound-assign, …) need explicit `!`-lookaheads.
 # Trailing ternary leniency absorbed by stmt-level recovery.
-~expr_conditional =  expr_nullish (@operator{'?'} expr_no_comma @punctuation{':'} expr_no_comma)?
+~expr_conditional = expr_nullish (@operator{'?'} expr_no_comma @punctuation{':'} expr_no_comma)?
 
-expr_nullish   =  expr_nullish @operator{'??'} !'=' expr_lor / expr_lor
-expr_lor       =  expr_lor @operator{'||'} !'=' expr_land / expr_land
-expr_land      =  expr_land @operator{'&&'} !'=' expr_bor / expr_bor
-expr_bor       =  expr_bor @operator{'|'} !'|' !'=' expr_bxor / expr_bxor
-expr_bxor      =  expr_bxor @operator{'^'} !'=' expr_band / expr_band
-expr_band      =  expr_band @operator{'&'} !'&' !'=' expr_eq / expr_eq
-expr_eq        =  expr_eq (@operator{'==='} / @operator{'!=='} / @operator{'=='} / @operator{'!='}) expr_rel / expr_rel
-expr_rel       =  expr_rel (@operator{'<='} / @operator{'>='} / @operator{'<'} !'<' / @operator{'>'} !'>' / kw_instanceof / kw_in) expr_shift / expr_shift
-expr_shift     =  expr_shift (@operator{'>>>'} !'=' / @operator{'<<'} !'=' / @operator{'>>'} !'=') expr_add / expr_add
-expr_add       =  expr_add (@operator{'+'} !'=' / @operator{'-'} !'=') expr_mul / expr_mul
-expr_mul       =  expr_mul (@operator{'*'} !'=' !'*' / @operator{'/'} !'=' / @operator{'%'} !'=') expr_pow / expr_pow
+expr_nullish = expr_nullish @operator{'??'} !'=' expr_lor / expr_lor
+expr_lor = expr_lor @operator{'||'} !'=' expr_land / expr_land
+expr_land = expr_land @operator{'&&'} !'=' expr_bor / expr_bor
+expr_bor = expr_bor @operator{'|'} !'|' !'=' expr_bxor / expr_bxor
+expr_bxor = expr_bxor @operator{'^'} !'=' expr_band / expr_band
+expr_band = expr_band @operator{'&'} !'&' !'=' expr_eq / expr_eq
+expr_eq = expr_eq (@operator{'==='} / @operator{'!=='} / @operator{'=='} / @operator{'!='}) expr_rel / expr_rel
+expr_rel = expr_rel (@operator{'<='} / @operator{'>='} / @operator{'<'} !'<' / @operator{'>'} !'>' / kw_instanceof / kw_in) expr_shift / expr_shift
+expr_shift = expr_shift (@operator{'>>>'} !'=' / @operator{'<<'} !'=' / @operator{'>>'} !'=') expr_add / expr_add
+expr_add = expr_add (@operator{'+'} !'=' / @operator{'-'} !'=') expr_mul / expr_mul
+expr_mul = expr_mul (@operator{'*'} !'=' !'*' / @operator{'/'} !'=' / @operator{'%'} !'=') expr_pow / expr_pow
 
 # Right-associative: stays right-recursive, not LR.
-expr_pow       =  expr_unary @operator{'**'} !'=' expr_pow / expr_unary
+expr_pow = expr_unary @operator{'**'} !'=' expr_pow / expr_unary
 
-expr_unary     =  unary_op* expr_postfix
-unary_op       =  kw_typeof
-                / kw_void
-                / kw_delete
-                / kw_await
-                / @operator{'++'} / @operator{'--'}
-                / @operator{'+'} / @operator{'-'}
-                / @operator{'!'} / @operator{'~'}
+expr_unary = unary_op* expr_postfix
+unary_op = kw_typeof
+         / kw_void
+         / kw_delete
+         / kw_await
+         / @operator{'++'} / @operator{'--'}
+         / @operator{'+'} / @operator{'-'}
+         / @operator{'!'} / @operator{'~'}
 
 # Postfix: calls, member, optional chain, index, `++`/`--`.
-expr_postfix   =  expr_lhs postfix_op*
-postfix_op     =  @operator{'++'}
-                / @operator{'--'}
-                / @operator{'?.'} postfix_after_optional
-                / @punctuation{'.'} member_target
-                / @punctuation{'['} expr @punctuation{']'}
-                / call_args
-                / template_lit
-postfix_after_optional =  call_args
-                        / @punctuation{'['} expr @punctuation{']'}
-                        / member_target
-member_target  =  @function{ident_name} &(@punctuation{'('})
-                / @property{ident_name}
-call_args      =  @punctuation{'('} arg_list? @punctuation{')'}
-arg_list       =  arg (@punctuation{','} arg)* (@punctuation{','})?
-arg            =  @operator{'...'} expr_no_comma
-                / expr_no_comma
+expr_postfix = expr_lhs postfix_op*
+postfix_op = @operator{'++'}
+           / @operator{'--'}
+           / @operator{'?.'} postfix_after_optional
+           / @punctuation{'.'} member_target
+           / @punctuation{'['} expr @punctuation{']'}
+           / call_args
+           / template_lit
+postfix_after_optional = call_args
+                       / @punctuation{'['} expr @punctuation{']'}
+                       / member_target
+member_target = @function{ident_name} &(@punctuation{'('})
+              / @property{ident_name}
+call_args = @punctuation{'('} arg_list? @punctuation{')'}
+arg_list = arg (@punctuation{','} arg)* (@punctuation{','})?
+arg = @operator{'...'} expr_no_comma
+    / expr_no_comma
 
-expr_lhs       =  expr_new / expr_primary
-expr_new       =  kw_new expr_new_target
-expr_new_target =  @type{upper_ident} new_tail?
-                 / @variable{lower_ident} new_tail?
-                 / expr_primary new_tail?
-new_tail       =  postfix_op+
+expr_lhs = expr_new / expr_primary
+expr_new = kw_new expr_new_target
+expr_new_target = @type{upper_ident} new_tail?
+                / @variable{lower_ident} new_tail?
+                / expr_primary new_tail?
+new_tail = postfix_op+
 
-expr_primary   =  literal
-                / expr_this
-                / expr_super
-                / expr_fn
-                / expr_class
-                / expr_array
-                / expr_object
-                / expr_paren
-                / call_ident
-                / @type{upper_ident}
-                / @variable{lower_ident}
+expr_primary = literal
+             / expr_this
+             / expr_super
+             / expr_fn
+             / expr_class
+             / expr_array
+             / expr_object
+             / expr_paren
+             / call_ident
+             / @type{upper_ident}
+             / @variable{lower_ident}
 
-call_ident     =  @function{ident} &(@punctuation{'('})
+call_ident = @function{ident} &(@punctuation{'('})
 
-expr_this      =  kw_this
-expr_super     =  kw_super
-expr_fn        =  kw_async? kw_function @operator{'*'}? @function{ident}? fn_params block
-expr_class     =  kw_class @type{ident}? class_heritage? class_body
-expr_array     =  @punctuation{'['} array_elem_list? @punctuation{']'}
-array_elem_list =  array_elem (@punctuation{','} array_elem)* (@punctuation{','})?
-array_elem     =  @operator{'...'} expr_no_comma
-                / expr_no_comma
-                / ''
-expr_object    =  @punctuation{'{'} object_props? @punctuation{'}'}
-object_props   =  object_prop (@punctuation{','} object_prop)* (@punctuation{','})?
-object_prop    =  @operator{'...'} expr_no_comma
-                / object_method
-                / (computed_prop / string_lit / number_lit / @property{ident_name}) @punctuation{':'} expr_no_comma
-                / @property{ident}
-object_method  =  kw_async? @operator{'*'}? method_head fn_params block
-                / (kw_get / kw_set) method_head fn_params block
-expr_paren     =  @punctuation{'('} expr @punctuation{')'}
+expr_this = kw_this
+expr_super = kw_super
+expr_fn = kw_async? kw_function @operator{'*'}? @function{ident}? fn_params block
+expr_class = kw_class @type{ident}? class_heritage? class_body
+expr_array = @punctuation{'['} array_elem_list? @punctuation{']'}
+array_elem_list = array_elem (@punctuation{','} array_elem)* (@punctuation{','})?
+array_elem = @operator{'...'} expr_no_comma
+           / expr_no_comma
+           / ''
+expr_object = @punctuation{'{'} object_props? @punctuation{'}'}
+object_props = object_prop (@punctuation{','} object_prop)* (@punctuation{','})?
+object_prop = @operator{'...'} expr_no_comma
+            / object_method
+            / (computed_prop / string_lit / number_lit / @property{ident_name}) @punctuation{':'} expr_no_comma
+            / @property{ident}
+object_method = kw_async? @operator{'*'}? method_head fn_params block
+              / (kw_get / kw_set) method_head fn_params block
+expr_paren = @punctuation{'('} expr @punctuation{')'}
 
 # --- Literals ---------------------------------------------------------
 
-literal        =  template_lit
-                / string_lit
-                / number_lit
-                / lit_const
-                / lit_undefined
+literal = template_lit
+        / string_lit
+        / number_lit
+        / lit_const
+        / lit_undefined
 
 # Boolean / null / undefined constants; the `wb` boundary keeps
 # `trueish` / `nullish` from matching the prefix.
-%lit_const     =  @constant{'true'} / @constant{'false'} / @constant{'null'}
-%?lit_undefined =  @constant{'undefined'}
+%lit_const = @constant{'true'} / @constant{'false'} / @constant{'null'}
+%?lit_undefined = @constant{'undefined'}
 
-string_lit     =  @string{sq_string / dq_string}
-*sq_string     =  "'" ('\\' . / !"'" !'\n' .)* "'"
-*dq_string     =  '"' ('\\' . / !'"' !'\n' .)* '"'
+string_lit = @string{sq_string / dq_string}
+*sq_string = "'" ('\\' . / !"'" !'\n' .)* "'"
+*dq_string = '"' ('\\' . / !'"' !'\n' .)* '"'
 
 # Template literals with ${...} interpolation. Chunks outside the
 # interpolations get @string; the interpolation braces stay
 # @punctuation and the inner expression is parsed as normal.
-*template_lit  =  @string{'`'} template_body @string{'`'}
-*template_body =  (template_chunk / template_interp)*
-*template_chunk =  @string{('\\' . / !'`' !'${' .)+}
-template_interp =  @punctuation{'${'} expr @punctuation{'}'}
+*template_lit = @string{'`'} template_body @string{'`'}
+*template_body = (template_chunk / template_interp)*
+*template_chunk = @string{('\\' . / !'`' !'${' .)+}
+template_interp = @punctuation{'${'} expr @punctuation{'}'}
 
-number_lit     =  @number{num_body}
-*num_body      =  '0x' hex_digits 'n'?
-                / '0o' oct_digits 'n'?
-                / '0b' bin_digits 'n'?
-                / decimal_num 'n'?
-*decimal_num   =  digit_seq '.' digit_seq? exp_part?
-                / '.' digit_seq exp_part?
-                / digit_seq exp_part?
-*digit_seq     =  \d ([\d_])*
-*hex_digits    =  [\da-fA-F] [\da-fA-F_]*
-*oct_digits    =  [0-7] [0-7_]*
-*bin_digits    =  [01] [01_]*
-*exp_part      =  [eE] [+\-]? \d+
+number_lit = @number{num_body}
+*num_body = '0x' hex_digits 'n'?
+          / '0o' oct_digits 'n'?
+          / '0b' bin_digits 'n'?
+          / decimal_num 'n'?
+*decimal_num = digit_seq '.' digit_seq? exp_part?
+             / '.' digit_seq exp_part?
+             / digit_seq exp_part?
+*digit_seq = \d ([\d_])*
+*hex_digits = [\da-fA-F] [\da-fA-F_]*
+*oct_digits = [0-7] [0-7_]*
+*bin_digits = [01] [01_]*
+*exp_part = [eE] [+\-]? \d+
 
 # --- Identifiers / reserved words ------------------------------------
 
@@ -405,26 +405,26 @@ number_lit     =  @number{num_body}
 # Unicode's identifier properties); same for the ZWNJ/ZWJ continuation
 # extras. Escape forms `\uHHHH` and `\u{H..}` are admitted in both
 # positions.
-*ident         =  !reserved ([\p{ID_Start}_$] / js_uesc) ident_body_part*
+*ident = !reserved ([\p{ID_Start}_$] / js_uesc) ident_body_part*
 # `ident_name` mirrors ECMA's `IdentifierName`: like `ident`, but the
 # `!reserved` guard is dropped so reserved words are accepted. Use at
 # positions where ES allows IdentifierName but not BindingIdentifier
 # (member access after `.` / `?.`, property keys, imported/exported
 # names that aren't local bindings).
-*ident_name    =  ([\p{ID_Start}_$] / js_uesc) ident_body_part*
+*ident_name = ([\p{ID_Start}_$] / js_uesc) ident_body_part*
 # Per §12.7.1 UnicodeEscapeSequence: 4 fixed hex digits or `{H..}` for
 # 1-6 hex digits inside braces. Atomic so the prefix-then-fail shape
 # stays internal.
-*js_uesc       =  '\\u{' [0-9A-Fa-f]+ '}' / '\\u' [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]
+*js_uesc = '\\u{' [0-9A-Fa-f]+ '}' / '\\u' [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]
 # `upper_ident` / `lower_ident` keep their ASCII-only start so the
 # case-based shape gate (PascalCase → @type, etc.) doesn't dissolve
 # into "any ID_Start letter". Future refinement via `\p{Lu}` /
 # `\p{Ll}` if a non-ASCII-aware variant is needed.
-*upper_ident   =  !reserved [A-Z] ident_body_part*
-*lower_ident   =  !reserved [a-z_$] ident_body_part*
-ident_body_part =  ident_body / js_uesc
-ident_body     =  [\p{ID_Continue}$\u{200C}\u{200D}]
+*upper_ident = !reserved [A-Z] ident_body_part*
+*lower_ident = !reserved [a-z_$] ident_body_part*
+ident_body_part = ident_body / js_uesc
+ident_body = [\p{ID_Continue}$\u{200C}\u{200D}]
 
 # --- Whitespace / comments --------------------------------------------
 
-*comment       =  @comment{'//' .. '\n' / '/*' ..= '*/'}
+*comment = @comment{'//' .. '\n' / '/*' ..= '*/'}
