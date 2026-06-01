@@ -22,12 +22,12 @@ array = @punctuation '['
         (value (@punctuation ',' value)*)?
         @punctuation ']'
 
-*string = '"' string_char* '"'
-*string_char = '\\' ["\\/bfnrt]
-             / '\\' 'u' [\da-fA-F]{4}
-             / [^"\\]
+string: atomic = '"' string_char* '"'
+string_char: atomic = '\\' ["\\/bfnrt]
+                    / '\\' 'u' [\da-fA-F]{4}
+                    / [^"\\]
 
-*number = '-'? int frac? exp?
-*int = '0' / [1-9] \d*
-*frac = '.' \d+
-*exp = [eE] [+\-]? \d+
+number: atomic = '-'? int frac? exp?
+int: atomic = '0' / [1-9] \d*
+frac: atomic = '.' \d+
+exp: atomic = [eE] [+\-]? \d+

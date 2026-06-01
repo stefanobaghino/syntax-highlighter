@@ -40,9 +40,9 @@ wb = !ident_body
 # --- Preprocessor directives (absorbed as @comment) ------------------
 
 pp_line = @keyword pp_body
-*pp_body = '#' (pp_cont / [^\n])*
-*pp_cont = '\\' '\n'
-          / '\\' '\r' '\n'
+pp_body: atomic = '#' (pp_cont / [^\n])*
+pp_cont: atomic = '\\' '\n'
+                 / '\\' '\r' '\n'
 
 # --- External declarations -------------------------------------------
 
@@ -68,38 +68,38 @@ decl_spec = storage_spec
 # appended inside each keyword capture. A keyword can't fire on a longer
 # identifier that merely starts with it (`static MyType`, `typedefx`),
 # and a rejected keyword leaves no stray capture for recovery to surface.
-%storage_spec = @keyword 'typedef'
-              / @keyword 'extern'
-              / @keyword 'static'
-              / @keyword 'auto'
-              / @keyword 'register'
-              / @keyword '_Thread_local'
-%type_qualifier = @keyword 'const'
-                / @keyword 'volatile'
-                / @keyword 'restrict'
-                / @keyword '_Atomic'
-%fn_spec = @keyword 'inline'
-         / @keyword '_Noreturn'
+storage_spec: reserved = @keyword 'typedef'
+                       / @keyword 'extern'
+                       / @keyword 'static'
+                       / @keyword 'auto'
+                       / @keyword 'register'
+                       / @keyword '_Thread_local'
+type_qualifier: reserved = @keyword 'const'
+                         / @keyword 'volatile'
+                         / @keyword 'restrict'
+                         / @keyword '_Atomic'
+fn_spec: reserved = @keyword 'inline'
+                  / @keyword '_Noreturn'
 
 # Embedded keyword tokens: one `%` rule per keyword, referenced wherever
 # the keyword appears so the `wb` boundary is applied uniformly.
-%kw_struct = @keyword 'struct'
-%kw_union = @keyword 'union'
-%kw_enum = @keyword 'enum'
-%kw_case = @keyword 'case'
-%kw_default = @keyword 'default'
-%kw_if = @keyword 'if'
-%kw_else = @keyword 'else'
-%kw_for = @keyword 'for'
-%kw_while = @keyword 'while'
-%kw_do = @keyword 'do'
-%kw_switch = @keyword 'switch'
-%kw_return = @keyword 'return'
-%kw_break = @keyword 'break'
-%kw_continue = @keyword 'continue'
-%kw_goto = @keyword 'goto'
-%kw_sizeof = @keyword 'sizeof'
-%kw_alignof = @keyword '_Alignof'
+kw_struct: reserved = @keyword 'struct'
+kw_union: reserved = @keyword 'union'
+kw_enum: reserved = @keyword 'enum'
+kw_case: reserved = @keyword 'case'
+kw_default: reserved = @keyword 'default'
+kw_if: reserved = @keyword 'if'
+kw_else: reserved = @keyword 'else'
+kw_for: reserved = @keyword 'for'
+kw_while: reserved = @keyword 'while'
+kw_do: reserved = @keyword 'do'
+kw_switch: reserved = @keyword 'switch'
+kw_return: reserved = @keyword 'return'
+kw_break: reserved = @keyword 'break'
+kw_continue: reserved = @keyword 'continue'
+kw_goto: reserved = @keyword 'goto'
+kw_sizeof: reserved = @keyword 'sizeof'
+kw_alignof: reserved = @keyword '_Alignof'
 
 type_spec = struct_or_union_spec
           / enum_spec
@@ -107,18 +107,18 @@ type_spec = struct_or_union_spec
           / @type typedef_name
 
 predef_type = @type predef_type_name
-%predef_type_name = 'void' / 'char' / 'short' / 'long long' / 'long'
-                  / 'int' / 'float' / 'double' / 'signed' / 'unsigned'
-                  / '_Bool' / '_Complex' / '_Imaginary'
+predef_type_name: reserved = 'void' / 'char' / 'short' / 'long long' / 'long'
+                           / 'int' / 'float' / 'double' / 'signed' / 'unsigned'
+                           / '_Bool' / '_Complex' / '_Imaginary'
 
 # Heuristic typedef-name: PascalCase or `*_t` tail. If this mismatches
 # an actual declaration, the decl path will fail and we fall back to
 # expression statement. The `_t` arm uses the standard PEG non-greedy
 # idiom `(!end_t ident_body)*` because PEG `*` is possessive — a
 # greedy `ident_body*` would swallow the trailing `_t`.
-*typedef_name = [A-Z] ident_body*
-              / [a-z_] (!typedef_t_end ident_body)* typedef_t_end
-*typedef_t_end = '_t' wb
+typedef_name: atomic = [A-Z] ident_body*
+                     / [a-z_] (!typedef_t_end ident_body)* typedef_t_end
+typedef_t_end: atomic = '_t' wb
 
 struct_or_union_spec = (kw_struct / kw_union)
                       (@type ident)? (@punctuation '{' struct_decl* @punctuation '}')?
@@ -195,8 +195,8 @@ labeled_stmt = @variable ident @punctuation ':' stmt
              / kw_case expr_cond @punctuation ':' stmt
              / kw_default @punctuation ':' stmt
 # Trailing `(else stmt)?` leniency absorbed by top-level `*^` and `^block_close`.
-~if_stmt = kw_if @punctuation '(' expr @punctuation ')' stmt
-           (kw_else stmt)?
+if_stmt: partial = kw_if @punctuation '(' expr @punctuation ')' stmt
+                   (kw_else stmt)?
 for_stmt = kw_for @punctuation '(' for_init expr? @punctuation ';' expr? @punctuation ')' stmt
 for_init = decl
          / expr? @punctuation ';'
@@ -231,7 +231,7 @@ assign_op = @operator '<<=' / @operator '>>='
           / @operator '=' !'='
 
 # Trailing ternary `?` leniency absorbed by top-level `*^`.
-~expr_cond = expr_lor (@operator '?' expr @punctuation ':' expr_assign)?
+expr_cond: partial = expr_lor (@operator '?' expr @punctuation ':' expr_assign)?
 
 expr_lor = expr_lor @operator '||' expr_land / expr_land
 expr_land = expr_land @operator '&&' expr_bor / expr_bor
@@ -281,9 +281,9 @@ expr_primary = string_lit
 
 # Boolean / null constants as a `%?` preferred-word alternation so the
 # `wb` boundary keeps `trueish` / `NULLify` from matching the prefix.
-%?lit_const = @constant 'true'
-            / @constant 'false'
-            / @constant 'NULL'
+lit_const: preferred = @constant 'true'
+                     / @constant 'false'
+                     / @constant 'NULL'
 
 # `sizeof(T)` must eat the whole type-name expression as a sizeof argument.
 sizeof_type = kw_sizeof @punctuation '(' type_name @punctuation ')'
@@ -300,24 +300,24 @@ call_ident = @function ident &(@punctuation '(')
 # --- Literals --------------------------------------------------------
 
 string_lit = @string (string_piece+)
-*string_piece = ('L' / 'u8' / 'u' / 'U')? '"' ('\\' . / !'"' !'\n' .)* '"'
+string_piece: atomic = ('L' / 'u8' / 'u' / 'U')? '"' ('\\' . / !'"' !'\n' .)* '"'
 
 char_lit = @string char_body
-*char_body = ('L' / 'u' / 'U')? "'" ('\\' . / !"'" .)* "'"
+char_body: atomic = ('L' / 'u' / 'U')? "'" ('\\' . / !"'" .)* "'"
 
 number_lit = @number num_body
-*num_body = '0x' hex_digits ('.' hex_digits?)? ([pP] [+\-]? \d+)? int_suffix?
-          / '0X' hex_digits ('.' hex_digits?)? ([pP] [+\-]? \d+)? int_suffix?
-          / '0b' bin_digits int_suffix?
-          / '0' [0-7]* int_suffix?
-          / digit_seq '.' digit_seq? exp_part? float_suffix?
-          / '.' digit_seq exp_part? float_suffix?
-          / digit_seq exp_part float_suffix?
-          / digit_seq int_suffix?
-*digit_seq = \d [\d']*
-*hex_digits = [\da-fA-F] [\da-fA-F']*
-*bin_digits = [01] [01']*
-*exp_part = [eE] [+\-]? \d+
+num_body: atomic = '0x' hex_digits ('.' hex_digits?)? ([pP] [+\-]? \d+)? int_suffix?
+                 / '0X' hex_digits ('.' hex_digits?)? ([pP] [+\-]? \d+)? int_suffix?
+                 / '0b' bin_digits int_suffix?
+                 / '0' [0-7]* int_suffix?
+                 / digit_seq '.' digit_seq? exp_part? float_suffix?
+                 / '.' digit_seq exp_part? float_suffix?
+                 / digit_seq exp_part float_suffix?
+                 / digit_seq int_suffix?
+digit_seq: atomic = \d [\d']*
+hex_digits: atomic = [\da-fA-F] [\da-fA-F']*
+bin_digits: atomic = [01] [01']*
+exp_part: atomic = [eE] [+\-]? \d+
 int_suffix = ('ULL' / 'ull' / 'LL' / 'll' / 'UL' / 'ul' / 'LU' / 'lu' / 'U' / 'u' / 'L' / 'l')
 float_suffix = [fFlL]
 
@@ -327,10 +327,10 @@ float_suffix = [fFlL]
 # | digit)*; nondigit = `_ A-Z a-z` | universal-character-name (UCN);
 # UCNs are `\uHHHH` (4 hex) or `\UHHHHHHHH` (8 hex). C23 §6.4.3 also
 # admits raw non-ASCII letters (General_Category=L) directly.
-*ident = !reserved ([\p{L}_] / ucn) ident_body*
+ident: atomic = !reserved ([\p{L}_] / ucn) ident_body*
 ident_body = [\p{L}\p{Nd}_] / ucn
 ucn = '\\u' [0-9A-Fa-f]{4} / '\\U' [0-9A-Fa-f]{8}
 
 # --- Whitespace / comments ------------------------------------------
 
-*comment = @comment ('//' .. '\n' / '/*' ..= '*/')
+comment: atomic = @comment ('//' .. '\n' / '/*' ..= '*/')

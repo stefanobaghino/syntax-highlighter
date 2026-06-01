@@ -17,7 +17,7 @@ A periodic cleanup sweep over `grammars/*.peg`. Each sweep tends to harvest a sm
 Each candidate falls into one of four categories. The first two are mechanical, the next two are judgment calls.
 
 1. **Char-class re-aliases (mechanical).** A rule whose body is just `[...]` (one or two character classes in sequence), and the rule name doesn't carry documentary intent beyond "this char class." Inline the class at use sites unless the name appears at many sites — a high-ref alias *is* the documentation.
-2. **Duplicate-body rules (mechanical).** Two atomic rules with byte-identical bodies under different names — e.g. a grammar carrying both `*ident_cont = [a-zA-Z\d_]` and a separate `*ident_char = [a-zA-Z\d_]` boundary class. Merge to one name unless the dual naming documents a future divergence.
+2. **Duplicate-body rules (mechanical).** Two atomic rules with byte-identical bodies under different names — e.g. a grammar carrying both `ident_cont: atomic = [a-zA-Z\d_]` and a separate `ident_char: atomic = [a-zA-Z\d_]` boundary class. Merge to one name unless the dual naming documents a future divergence.
 3. **Refs=1 single-use rules (judgment).** Many rules are referenced once. Most are NOT inline candidates — they exist to name a multi-line cascade entry, an alternation, or a spec-significant phrase. Only inline when the body is a single `name+` / `name*` / `name` / `[...]` / literal — i.e. a textbook thin wrapper.
 4. **Name ≥ body (judgment).** When the rule name is at least as long as the body string, the indirection isn't paying its way. Same evaluation as refs=1: only inline trivial wrappers.
 
@@ -47,7 +47,7 @@ grep -n -E '^\s*\*?[a-z_]+\s*=\s*\[[^]]+\]\s*$' grammars/*.peg
 
 **Duplicate atomic-rule bodies (same body, different names):**
 
-Walk each grammar, normalize the body source (strip leading `*` and the `=`), group by body string, flag groups of size > 1.
+Walk each grammar, normalize the body source (strip the name, any `: ascription` clause, and the `=`), group by body string, flag groups of size > 1.
 
 **Refs=1 (single-use) and name ≥ body:**
 
@@ -62,7 +62,7 @@ for f in /tmp/grammar-refactor/*.ndjson; do
 done
 ```
 
-`root`, `trivia`, and `wb` are reserved (`src/pegc/parser.rs` enforces) — never candidates. `reserved` and `preferred` are compiler-*synthesized* (from the `%` / `%?` rules) and can't be defined at all. A `%`- or `%?`-marked rule is also off-limits to inlining: see the *Atomicity check* below.
+`root`, `trivia`, and `wb` are reserved (`src/pegc/parser.rs` enforces) — never candidates. `reserved` and `preferred` are compiler-*synthesized* (from the `reserved` / `preferred` rules) and can't be defined at all. A `reserved`- or `preferred`-ascribed rule is also off-limits to inlining: see the *Atomicity check* below.
 
 ### 3. For each candidate, evaluate
 
@@ -84,9 +84,9 @@ Inlining changes which rule the auto-trivia rewriter is walking. From `src/pegc/
 Safe shapes regardless of atomicity:
 - Body is a single char class, single literal, single NonTerminal, or single Repeat-of-NonTerminal — no internal Sequence, so no internal trivia injection to gain or lose.
 
-When the body has internal Sequence elements (e.g. `'foo' bar baz`), inlining is **only safe when source and target rule atomicity match**. Verify by reading the `*` sigil on both rule headers before changing anything.
+When the body has internal Sequence elements (e.g. `'foo' bar baz`), inlining is **only safe when source and target rule atomicity match**. Verify by reading the `atomic` (or `reserved` / `preferred`) ascription on both rule headers before changing anything.
 
-**`%` / `%?` reserved-word rules are never inline candidates.** A `%name =` (or `%?name =`) rule carries an *implicit* trailing `wb` boundary that the compiler appends inside the rule's captures; the boundary is invisible in the rule body, so inlining the body silently drops it — the same class of hazard as the atomic case above, but worse because there's no `!ident_body` in the source to tip you off. The rule's literals are also collected into the synthesized `reserved` / `preferred` sets, so renaming or splitting it shifts what `!reserved` blocks. Leave `%` / `%?` rules (and the `wb` rule itself) alone.
+**`reserved` / `preferred` rules are never inline candidates.** A `name: reserved =` (or `name: preferred =`) rule carries an *implicit* trailing `wb` boundary that the compiler appends inside the rule's captures; the boundary is invisible in the rule body, so inlining the body silently drops it — the same class of hazard as the atomic case above, but worse because there's no `!ident_body` in the source to tip you off. The rule's literals are also collected into the synthesized `reserved` / `preferred` sets, so renaming or splitting it shifts what `!reserved` blocks. Leave `reserved` / `preferred` rules (and the `wb` rule itself) alone.
 
 ### 5. Report
 
@@ -109,8 +109,8 @@ The applied edit is mechanical at this point — the judgment was the previous s
 - **Bulk-inlining all refs=1 rules.** Most refs=1 rules are spec-significant cascade entries (every binary-precedence level, every statement form, every type-position-specific entry). Inlining them produces an unreadable wall of alternation.
 - **Inlining across atomicity boundaries without checking.** Will silently change parsing behavior — usually in a way that's not caught by the unit tests but shows up in the highlighter fixtures or recovery baselines.
 - **Forgetting to update the grammar header comment** when removing a rule that's named there.
-- **Touching `root`, `trivia`, `wb`, `reserved`, `preferred`, or any `%` / `%?` rule.** `root` / `trivia` / `wb` are reserved (the parser rejects grammars that mangle their position); `reserved` / `preferred` are compiler-synthesized (defining them is a parse error); `%` / `%?` rules carry an invisible trailing `wb` boundary that inlining would drop *and* feed the synthesized sets. Filter all of these out before evaluating.
-- **Touching the `sqlite.peg` `kw_*` / `*_body` cluster.** Each `kw_*` rule has refs=1 by construction (one keyword, one statement-rule use), but the two-tier `kw_*` → `*_body` design is a deliberate convention. The `%kw_*` literals are also the source of the synthesized `reserved` set (the no-keyword-as-identifier lookahead, `!reserved`); window-vocabulary keywords are `%?kw_*` so they stay usable as identifiers. Don't sweep these.
+- **Touching `root`, `trivia`, `wb`, `reserved`, `preferred`, or any `reserved` / `preferred` rule.** `root` / `trivia` / `wb` are reserved (the parser rejects grammars that mangle their position); `reserved` / `preferred` are compiler-synthesized (defining them is a parse error); `reserved` / `preferred` rules carry an invisible trailing `wb` boundary that inlining would drop *and* feed the synthesized sets. Filter all of these out before evaluating.
+- **Touching the `sqlite.peg` `kw_*` / `*_body` cluster.** Each `kw_*` rule has refs=1 by construction (one keyword, one statement-rule use), but the two-tier `kw_*` → `*_body` design is a deliberate convention. The `kw_*: reserved` literals are also the source of the synthesized `reserved` set (the no-keyword-as-identifier lookahead, `!reserved`); window-vocabulary keywords are `kw_*: preferred` so they stay usable as identifiers. Don't sweep these.
 
 ## Reference PRs
 

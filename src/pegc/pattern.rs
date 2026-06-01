@@ -114,7 +114,7 @@ pub enum Pattern {
     /// `lint_partial_match` walker treats this as an opaque barrier and
     /// does not descend into it for call-site detection. At runtime the
     /// wrapper is transparent: the compiler emits exactly the inner
-    /// pattern's bytecode. Surface syntax: postfix `~p`.
+    /// pattern's bytecode. Surface syntax: the `name: partial` ascription.
     Lenient {
         inner: Box<Pattern>,
         span: Span,

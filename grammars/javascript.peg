@@ -45,47 +45,47 @@ wb = !ident_body
 # `from`, `get`, `set`, `static`, `yield`) deliberately kept out of
 # `reserved` so they remain usable as identifiers: `{ asyncFoo() {} }`
 # must stay one method name.
-%kw_import = @keyword 'import'
-%?kw_from = @keyword 'from'
-%?kw_as = @keyword 'as'
-%kw_export = @keyword 'export'
-%kw_default = @keyword 'default'
-%?kw_async = @keyword 'async'
-%kw_function = @keyword 'function'
-%kw_class = @keyword 'class'
-%kw_extends = @keyword 'extends'
-%?kw_static = @keyword 'static'
-%?kw_get = @keyword 'get'
-%?kw_set = @keyword 'set'
-%kw_var = @keyword 'var'
-%?kw_let = @keyword 'let'
-%kw_const = @keyword 'const'
-%kw_if = @keyword 'if'
-%kw_else = @keyword 'else'
-%kw_for = @keyword 'for'
-%?kw_await = @keyword 'await'
-%kw_in = @keyword 'in'
-%?kw_of = @keyword 'of'
-%kw_while = @keyword 'while'
-%kw_do = @keyword 'do'
-%kw_switch = @keyword 'switch'
-%kw_case = @keyword 'case'
-%kw_try = @keyword 'try'
-%kw_catch = @keyword 'catch'
-%kw_finally = @keyword 'finally'
-%kw_throw = @keyword 'throw'
-%kw_return = @keyword 'return'
-%kw_break = @keyword 'break'
-%kw_continue = @keyword 'continue'
-%kw_debugger = @keyword 'debugger'
-%kw_yield = @keyword 'yield'
-%kw_instanceof = @keyword 'instanceof'
-%kw_typeof = @keyword 'typeof'
-%kw_void = @keyword 'void'
-%kw_delete = @keyword 'delete'
-%kw_new = @keyword 'new'
-%kw_this = @keyword 'this'
-%kw_super = @keyword 'super'
+kw_import: reserved = @keyword 'import'
+kw_from: preferred = @keyword 'from'
+kw_as: preferred = @keyword 'as'
+kw_export: reserved = @keyword 'export'
+kw_default: reserved = @keyword 'default'
+kw_async: preferred = @keyword 'async'
+kw_function: reserved = @keyword 'function'
+kw_class: reserved = @keyword 'class'
+kw_extends: reserved = @keyword 'extends'
+kw_static: preferred = @keyword 'static'
+kw_get: preferred = @keyword 'get'
+kw_set: preferred = @keyword 'set'
+kw_var: reserved = @keyword 'var'
+kw_let: preferred = @keyword 'let'
+kw_const: reserved = @keyword 'const'
+kw_if: reserved = @keyword 'if'
+kw_else: reserved = @keyword 'else'
+kw_for: reserved = @keyword 'for'
+kw_await: preferred = @keyword 'await'
+kw_in: reserved = @keyword 'in'
+kw_of: preferred = @keyword 'of'
+kw_while: reserved = @keyword 'while'
+kw_do: reserved = @keyword 'do'
+kw_switch: reserved = @keyword 'switch'
+kw_case: reserved = @keyword 'case'
+kw_try: reserved = @keyword 'try'
+kw_catch: reserved = @keyword 'catch'
+kw_finally: reserved = @keyword 'finally'
+kw_throw: reserved = @keyword 'throw'
+kw_return: reserved = @keyword 'return'
+kw_break: reserved = @keyword 'break'
+kw_continue: reserved = @keyword 'continue'
+kw_debugger: reserved = @keyword 'debugger'
+kw_yield: reserved = @keyword 'yield'
+kw_instanceof: reserved = @keyword 'instanceof'
+kw_typeof: reserved = @keyword 'typeof'
+kw_void: reserved = @keyword 'void'
+kw_delete: reserved = @keyword 'delete'
+kw_new: reserved = @keyword 'new'
+kw_this: reserved = @keyword 'this'
+kw_super: reserved = @keyword 'super'
 
 # --- Statements -------------------------------------------------------
 #
@@ -118,7 +118,7 @@ stmt = import_decl
 # missing-else / missing-catch / missing-finally leniency on the other
 # `~`-marked stmts below is absorbed by stmt-level `*^` and
 # `block`'s `^block_close` recovery.
-~opt_semi = @punctuation ';'?
+opt_semi: partial = @punctuation ';'?
 empty_stmt = @punctuation ';'
 
 # --- Imports / exports ------------------------------------------------
@@ -147,7 +147,7 @@ export_default_body = fn_decl
                     / class_decl
                     / expr opt_semi
 # Trailing `opt_semi` on `~export_named` is absorbed by stmt-level recovery.
-~export_named = @punctuation '{' export_specifier_list? @punctuation '}' (kw_from string_lit)? opt_semi
+export_named: partial = @punctuation '{' export_specifier_list? @punctuation '}' (kw_from string_lit)? opt_semi
 export_specifier_list = export_specifier (@punctuation ',' export_specifier)* (@punctuation ',')?
 export_specifier = @variable ident_name kw_as @variable ident_name
                  / @variable ident
@@ -177,13 +177,13 @@ class_field = (computed_prop / @property ident_name) (@operator '=' expr_no_comm
 var_decl = (kw_var / kw_let / kw_const) var_declarator_list
 var_declarator_list = var_declarator (@punctuation ',' var_declarator)*
 # Trailing `(= expr)?` absorbed by enclosing stmt recovery.
-~var_declarator = pattern (@operator '=' expr_no_comma)?
+var_declarator: partial = pattern (@operator '=' expr_no_comma)?
 
 # --- Control flow -----------------------------------------------------
 
 # Trailing `(else stmt)?` leniency absorbed by stmt-level recovery.
-~if_stmt = kw_if @punctuation '(' expr @punctuation ')' stmt
-           (kw_else stmt)?
+if_stmt: partial = kw_if @punctuation '(' expr @punctuation ')' stmt
+                   (kw_else stmt)?
 for_stmt = kw_for kw_await? @punctuation '(' for_head @punctuation ')' stmt
 for_head = for_c_style
          / for_in_of
@@ -202,14 +202,14 @@ switch_case = kw_case expr @punctuation ':' (!switch_case_term stmt)*
             / kw_default @punctuation ':' (!switch_case_term stmt)*
 switch_case_term = kw_case / kw_default / @punctuation '}'
 # Trailing `(catch)? (finally)?` absorbed by stmt-level recovery.
-~try_stmt = kw_try block catch_clause? finally_clause?
+try_stmt: partial = kw_try block catch_clause? finally_clause?
 catch_clause = kw_catch (@punctuation '(' pattern @punctuation ')')? block
 finally_clause = kw_finally block
 throw_stmt = kw_throw expr opt_semi
 # Trailing `expr?` leniency on `~return_stmt` absorbed by stmt recovery.
-~return_stmt = kw_return expr? opt_semi
-~break_stmt = kw_break (@variable ident)? opt_semi
-~continue_stmt = kw_continue (@variable ident)? opt_semi
+return_stmt: partial = kw_return expr? opt_semi
+break_stmt: partial = kw_break (@variable ident)? opt_semi
+continue_stmt: partial = kw_continue (@variable ident)? opt_semi
 debugger_stmt = kw_debugger opt_semi
 labeled_stmt = @variable ident @punctuation ':' stmt
 block = @punctuation '{' (stmt* @punctuation '}' ^^block_close ..= @punctuation '}')
@@ -264,7 +264,7 @@ arrow_body = block
            / expr_no_comma
 
 # Trailing `(*)? (expr_assign)?` absorbed by stmt-level recovery.
-~expr_yield = kw_yield @operator '*'? expr_assign?
+expr_yield: partial = kw_yield @operator '*'? expr_assign?
 
 # Ternary. Below the ternary, precedence is encoded by direct left
 # recursion — `level_n =  level_n OP level_{n+1} / level_{n+1}` per
@@ -273,7 +273,7 @@ arrow_body = block
 # alternation; cross-level ambiguities (`<` vs `<<`, `&` vs `&&`,
 # operator vs compound-assign, …) need explicit `!`-lookaheads.
 # Trailing ternary leniency absorbed by stmt-level recovery.
-~expr_conditional = expr_nullish (@operator '?' expr_no_comma @punctuation ':' expr_no_comma)?
+expr_conditional: partial = expr_nullish (@operator '?' expr_no_comma @punctuation ':' expr_no_comma)?
 
 expr_nullish = expr_nullish @operator '??' !'=' expr_lor / expr_lor
 expr_lor = expr_lor @operator '||' !'=' expr_land / expr_land
@@ -368,34 +368,34 @@ literal = template_lit
 
 # Boolean / null / undefined constants; the `wb` boundary keeps
 # `trueish` / `nullish` from matching the prefix.
-%lit_const = @constant 'true' / @constant 'false' / @constant 'null'
-%?lit_undefined = @constant 'undefined'
+lit_const: reserved = @constant 'true' / @constant 'false' / @constant 'null'
+lit_undefined: preferred = @constant 'undefined'
 
 string_lit = @string (sq_string / dq_string)
-*sq_string = "'" ('\\' . / !"'" !'\n' .)* "'"
-*dq_string = '"' ('\\' . / !'"' !'\n' .)* '"'
+sq_string: atomic = "'" ('\\' . / !"'" !'\n' .)* "'"
+dq_string: atomic = '"' ('\\' . / !'"' !'\n' .)* '"'
 
 # Template literals with ${...} interpolation. Chunks outside the
 # interpolations get @string; the interpolation braces stay
 # @punctuation and the inner expression is parsed as normal.
-*template_lit = @string '`' template_body @string '`'
-*template_body = (template_chunk / template_interp)*
-*template_chunk = @string (('\\' . / !'`' !'${' .)+)
+template_lit: atomic = @string '`' template_body @string '`'
+template_body: atomic = (template_chunk / template_interp)*
+template_chunk: atomic = @string (('\\' . / !'`' !'${' .)+)
 template_interp = @punctuation '${' expr @punctuation '}'
 
 number_lit = @number num_body
-*num_body = '0x' hex_digits 'n'?
-          / '0o' oct_digits 'n'?
-          / '0b' bin_digits 'n'?
-          / decimal_num 'n'?
-*decimal_num = digit_seq '.' digit_seq? exp_part?
-             / '.' digit_seq exp_part?
-             / digit_seq exp_part?
-*digit_seq = \d ([\d_])*
-*hex_digits = [\da-fA-F] [\da-fA-F_]*
-*oct_digits = [0-7] [0-7_]*
-*bin_digits = [01] [01_]*
-*exp_part = [eE] [+\-]? \d+
+num_body: atomic = '0x' hex_digits 'n'?
+                 / '0o' oct_digits 'n'?
+                 / '0b' bin_digits 'n'?
+                 / decimal_num 'n'?
+decimal_num: atomic = digit_seq '.' digit_seq? exp_part?
+                    / '.' digit_seq exp_part?
+                    / digit_seq exp_part?
+digit_seq: atomic = \d ([\d_])*
+hex_digits: atomic = [\da-fA-F] [\da-fA-F_]*
+oct_digits: atomic = [0-7] [0-7_]*
+bin_digits: atomic = [01] [01_]*
+exp_part: atomic = [eE] [+\-]? \d+
 
 # --- Identifiers / reserved words ------------------------------------
 
@@ -405,26 +405,26 @@ number_lit = @number num_body
 # Unicode's identifier properties); same for the ZWNJ/ZWJ continuation
 # extras. Escape forms `\uHHHH` and `\u{H..}` are admitted in both
 # positions.
-*ident = !reserved ([\p{ID_Start}_$] / js_uesc) ident_body_part*
+ident: atomic = !reserved ([\p{ID_Start}_$] / js_uesc) ident_body_part*
 # `ident_name` mirrors ECMA's `IdentifierName`: like `ident`, but the
 # `!reserved` guard is dropped so reserved words are accepted. Use at
 # positions where ES allows IdentifierName but not BindingIdentifier
 # (member access after `.` / `?.`, property keys, imported/exported
 # names that aren't local bindings).
-*ident_name = ([\p{ID_Start}_$] / js_uesc) ident_body_part*
+ident_name: atomic = ([\p{ID_Start}_$] / js_uesc) ident_body_part*
 # Per §12.7.1 UnicodeEscapeSequence: 4 fixed hex digits or `{H..}` for
 # 1-6 hex digits inside braces. Atomic so the prefix-then-fail shape
 # stays internal.
-*js_uesc = '\\u{' [0-9A-Fa-f]+ '}' / '\\u' [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]
+js_uesc: atomic = '\\u{' [0-9A-Fa-f]+ '}' / '\\u' [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]
 # `upper_ident` / `lower_ident` keep their ASCII-only start so the
 # case-based shape gate (PascalCase → @type, etc.) doesn't dissolve
 # into "any ID_Start letter". Future refinement via `\p{Lu}` /
 # `\p{Ll}` if a non-ASCII-aware variant is needed.
-*upper_ident = !reserved [A-Z] ident_body_part*
-*lower_ident = !reserved [a-z_$] ident_body_part*
+upper_ident: atomic = !reserved [A-Z] ident_body_part*
+lower_ident: atomic = !reserved [a-z_$] ident_body_part*
 ident_body_part = ident_body / js_uesc
 ident_body = [\p{ID_Continue}$\u{200C}\u{200D}]
 
 # --- Whitespace / comments --------------------------------------------
 
-*comment = @comment ('//' .. '\n' / '/*' ..= '*/')
+comment: atomic = @comment ('//' .. '\n' / '/*' ..= '*/')

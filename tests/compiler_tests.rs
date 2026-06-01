@@ -1723,14 +1723,13 @@ fn lint_partial_match_real_sqlite_grammar_unanchored_aliased_expr_flagged() {
     );
 }
 
-// ---- Definition-level lenient marker (~rule_name = body) -----
+// ---- Partial ascription (name: partial = body) ---------------
 
 #[test]
-fn definition_lenient_marker_wraps_rule_body() {
-    // `~rule = body` parses the body with a top-level `Pattern::Lenient`
-    // wrap, exposing the intent to the lint via the same AST node the
-    // call-site `~p` form produces.
-    let g = parse("~r = 'a'?").expect("parse");
+fn partial_ascription_wraps_rule_body() {
+    // `name: partial = body` parses the body with a top-level
+    // `Pattern::Lenient` wrap, exposing the intent to the lint.
+    let g = parse("r: partial = 'a'?").expect("parse");
     assert_eq!(
         g.rules["r"].strip_spans(),
         Pattern::lenient(Pattern::optional(Pattern::literal("a"))),
@@ -1738,10 +1737,13 @@ fn definition_lenient_marker_wraps_rule_body() {
 }
 
 #[test]
-fn definition_lenient_marker_requires_touching_name() {
-    let err = parse("~ r = 'a'?").expect_err("space between `~` and name must error");
+fn partial_must_precede_main_ascription() {
+    // `partial` composes with `atomic` / `reserved` / `preferred` but
+    // must be written first; the reversed order is a parse error.
+    parse("r: partial atomic = 'a'").expect("partial-first order parses");
+    let err = parse("r: atomic partial = 'a'").expect_err("partial after main must error");
     assert!(
-        err.message.contains("expected identifier"),
+        err.message.contains("`partial` must come before"),
         "unexpected error: {}",
         err.message
     );
@@ -1759,24 +1761,24 @@ fn definition_lenient_suppresses_lint_at_every_call_site() {
         "baseline: unmarked grammar should flag r"
     );
 
-    let marked = parse("root = (r)*^[;]\n~r = 'x' 'y'?").expect("parse marked");
+    let marked = parse("root = (r)*^[;]\nr: partial = 'x' 'y'?").expect("parse marked");
     let findings = lint_partial_match(&marked);
     assert!(
         !findings.iter().any(|f| f.rule == "r"),
-        "definition-level `~r` should suppress all r-related findings, got: {findings:?}"
+        "definition-level `r: partial` should suppress all r-related findings, got: {findings:?}"
     );
 }
 
 #[test]
 fn definition_lenient_marker_is_runtime_transparent() {
-    // The `~name =` wrap compiles to the same bytecode as the bare
-    // form. The marker rides a non-special helper rule — `root` (like
-    // `trivia` / `wb`) rejects every qualifier.
+    // The `name: partial =` wrap compiles to the same bytecode as the
+    // bare form. The marker rides a non-special helper rule — `root`
+    // (like `trivia` / `wb`) rejects every ascription.
     let plain = parse("root = r\nr = 'x'+")
         .expect("parse plain")
         .compile()
         .expect("compile plain");
-    let marked = parse("root = r\n~r = 'x'+")
+    let marked = parse("root = r\nr: partial = 'x'+")
         .expect("parse marked")
         .compile()
         .expect("compile marked");
@@ -1803,9 +1805,9 @@ fn compile_errors_on_partial_match_leniency() {
 
 #[test]
 fn compile_succeeds_with_definition_lenient_on_flagged_rule() {
-    let g = parse("root = (r)*^[;]\n~r = 'x' 'y'?").expect("parse");
+    let g = parse("root = (r)*^[;]\nr: partial = 'x' 'y'?").expect("parse");
     g.compile()
-        .expect("compile should succeed with definition-level `~r`");
+        .expect("compile should succeed with definition-level `r: partial`");
 }
 
 #[test]
@@ -2096,7 +2098,7 @@ fn pattern_nodes_carry_parser_set_spans_for_each_variant_family() {
     assert_eq!(*lit_span, Span { line: 1, col: 12 });
 }
 
-// ---- `%` reserved-word sigil + `wb` special rule -------------------
+// ---- `reserved` ascription + `wb` special rule --------------------
 
 /// Compile a grammar from source and run it, returning the captures
 /// paired with their resolved kind name and matched text.
@@ -2118,32 +2120,33 @@ fn run_grammar<'a>(src: &str, input: &'a str) -> Vec<(String, &'a str)> {
 }
 
 #[test]
-fn percent_sigil_populates_percent_and_atomic_sets() {
-    let g = parse("root = r\ntrivia = (\\s)*\nwb = !'x'\n%r = @keyword 'if'").expect("parse");
+fn reserved_ascription_populates_percent_and_atomic_sets() {
+    let g =
+        parse("root = r\ntrivia = (\\s)*\nwb = !'x'\nr: reserved = @keyword 'if'").expect("parse");
     assert!(
         g.percent_rules.contains("r"),
-        "`%r` should be a percent rule"
+        "`r: reserved` should be a percent rule"
     );
     assert!(
         g.atomic_rules.contains("r"),
-        "a `%` rule is also atomic (trivia is not auto-inserted inside it)"
+        "a `reserved` rule is also atomic (trivia is not auto-inserted inside it)"
     );
 }
 
 #[test]
-fn qualifier_on_special_rule_is_rejected() {
+fn ascription_on_special_rule_is_rejected() {
     // The three special rules — the start rule `root` and the two
     // auto-insertion targets `trivia` (whitespace) and `wb` (word
     // boundary) — are structural slots, not lexable tokens: every
-    // qualifier (`*`, `~`, `%`, `%?`) is rejected on all of them.
-    // Disabling whitespace auto-insertion is done by omitting `trivia`,
-    // not by qualifying it.
+    // ascription (`partial`, `atomic`, `reserved`, `preferred`) is
+    // rejected on all of them. Disabling whitespace auto-insertion is
+    // done by omitting `trivia`, not by ascribing it.
     for name in ["root", "trivia", "wb"] {
-        for qual in ["*", "~", "%", "%?"] {
-            let src = format!("{qual}{name} = 'a'");
-            let err = parse(&src).expect_err("a qualifier on a special rule must error");
+        for asc in ["partial", "atomic", "reserved", "preferred"] {
+            let src = format!("{name}: {asc} = 'a'");
+            let err = parse(&src).expect_err("an ascription on a special rule must error");
             assert!(
-                err.message.contains("cannot carry a qualifier"),
+                err.message.contains("cannot carry an ascription"),
                 "{src:?}: unexpected error {:?}",
                 err.message
             );
@@ -2158,31 +2161,32 @@ fn qualifier_on_special_rule_is_rejected() {
 }
 
 #[test]
-fn percent_composes_with_lenient() {
-    // `~%name` and `%~name` both parse: `~` (lenient) and `%`
-    // (reserved-word) are independent markers.
-    for src in [
-        "root = r\ntrivia = (\\s)*\nwb = !'x'\n~%r = @keyword 'if'",
-        "root = r\ntrivia = (\\s)*\nwb = !'x'\n%~r = @keyword 'if'",
-    ] {
-        let g = parse(src).unwrap_or_else(|e| panic!("parse {src:?}: {}", e.message));
-        assert!(
-            g.percent_rules.contains("r"),
-            "{src:?} should mark r percent"
-        );
-    }
+fn partial_composes_with_reserved() {
+    // `partial reserved` combines the leniency marker with the
+    // reserved-word ascription (partial written first).
+    let src = "root = r\ntrivia = (\\s)*\nwb = !'x'\nr: partial reserved = @keyword 'if'";
+    let g = parse(src).unwrap_or_else(|e| panic!("parse {src:?}: {}", e.message));
+    assert!(
+        g.percent_rules.contains("r"),
+        "{src:?} should mark r percent"
+    );
+    assert!(
+        matches!(g.rules["r"], Pattern::Lenient { .. }),
+        "{src:?} should wrap r in Lenient"
+    );
 }
 
 #[test]
 fn percent_rule_appends_wb_inside_capture() {
-    // `%kw_if` must match the keyword `if` but not fire on `ifx`, and
-    // (the leak guard) must leave no stray `if` capture behind on `ifx`.
+    // `kw_if: reserved` must match the keyword `if` but not fire on
+    // `ifx`, and (the leak guard) must leave no stray `if` capture
+    // behind on `ifx`.
     let src = "root = (token)*^\n\
                trivia = (\\s)*\n\
                wb = !ident_body\n\
                token = kw_if / @variable ident\n\
-               %kw_if = @keyword 'if'\n\
-               *ident = [a-z] ident_body*\n\
+               kw_if: reserved = @keyword 'if'\n\
+               ident: atomic = [a-z] ident_body*\n\
                ident_body = [a-z0-9_]";
     assert_eq!(
         run_grammar(src, "if ifx if"),
@@ -2196,9 +2200,9 @@ fn percent_rule_appends_wb_inside_capture() {
 
 #[test]
 fn percent_without_wb_errors_undefined_rule() {
-    // A `%` rule emits a `NonTerminal("wb")`; with no `wb` defined the
-    // reference surfaces as `UndefinedRule("wb")`.
-    let g = parse("root = r\ntrivia = (\\s)*\n%r = @keyword 'if'").expect("parse");
+    // A `reserved` rule emits a `NonTerminal("wb")`; with no `wb`
+    // defined the reference surfaces as `UndefinedRule("wb")`.
+    let g = parse("root = r\ntrivia = (\\s)*\nr: reserved = @keyword 'if'").expect("parse");
     match g.compile().expect_err("compile should fail without wb") {
         syntax_highlighter::pegc::CompileError::UndefinedRule(name) => assert_eq!(name, "wb"),
         other => panic!("expected UndefinedRule(\"wb\"), got: {other:?}"),
@@ -2206,11 +2210,11 @@ fn percent_without_wb_errors_undefined_rule() {
 }
 
 #[test]
-fn percent_and_atomic_combined_is_parse_error() {
-    for src in ["%*r = 'a'", "*%r = 'a'"] {
-        let err = parse(src).expect_err("combining `%` and `*` must error");
+fn reserved_and_atomic_combined_is_parse_error() {
+    for src in ["r: reserved atomic = 'a'", "r: atomic reserved = 'a'"] {
+        let err = parse(src).expect_err("combining `reserved` and `atomic` must error");
         assert!(
-            err.message.contains("cannot be combined"),
+            err.message.contains("mutually exclusive"),
             "{src:?} unexpected error: {}",
             err.message
         );
@@ -2238,35 +2242,42 @@ fn wb_and_trivia_compose_in_either_order() {
 #[test]
 fn wb_without_trivia_is_valid() {
     // `wb` does not require `trivia`; a grammar may define only `wb`.
-    parse("root = r\nwb = !'x'\n%r = @keyword 'if'")
+    parse("root = r\nwb = !'x'\nr: reserved = @keyword 'if'")
         .expect("parse")
         .compile()
         .expect("compile");
 }
 
-// ---- `%?` preferred-word sigil + synthesized reserved / preferred ---
+// ---- `preferred` ascription + synthesized reserved / preferred -----
 
 #[test]
-fn preferred_sigil_populates_preferred_and_percent_sets() {
-    // `%?r` is a preferred-word rule: it lands in `preferred_rules`, and
-    // also in `percent_rules` + `atomic_rules` (it still gets the `wb`
-    // boundary; it differs from `%` only in which synthesized set it
-    // feeds).
-    let g = parse("root = r\ntrivia = (\\s)*\nwb = !'x'\n%?r = @keyword 'async'").expect("parse");
-    assert!(g.preferred_rules.contains("r"), "`%?r` should be preferred");
+fn preferred_ascription_populates_preferred_and_percent_sets() {
+    // `r: preferred` is a preferred-word rule: it lands in
+    // `preferred_rules`, and also in `percent_rules` + `atomic_rules`
+    // (it still gets the `wb` boundary; it differs from `reserved` only
+    // in which synthesized set it feeds).
+    let g = parse("root = r\ntrivia = (\\s)*\nwb = !'x'\nr: preferred = @keyword 'async'")
+        .expect("parse");
+    assert!(
+        g.preferred_rules.contains("r"),
+        "`r: preferred` should be preferred"
+    );
     assert!(
         g.percent_rules.contains("r"),
-        "`%?r` is still a percent rule (gets `wb`)"
+        "`r: preferred` is still a percent rule (gets `wb`)"
     );
-    assert!(g.atomic_rules.contains("r"), "`%?r` is also atomic");
+    assert!(
+        g.atomic_rules.contains("r"),
+        "`r: preferred` is also atomic"
+    );
 }
 
 #[test]
 fn preferred_and_atomic_combined_is_parse_error() {
-    for src in ["%?*r = 'a'", "*%?r = 'a'"] {
-        let err = parse(src).expect_err("combining `%?` and `*` must error");
+    for src in ["r: preferred atomic = 'a'", "r: atomic preferred = 'a'"] {
+        let err = parse(src).expect_err("combining `preferred` and `atomic` must error");
         assert!(
-            err.message.contains("cannot be combined"),
+            err.message.contains("mutually exclusive"),
             "{src:?} unexpected error: {}",
             err.message
         );
@@ -2276,12 +2287,12 @@ fn preferred_and_atomic_combined_is_parse_error() {
 #[test]
 fn defining_synthesized_rule_is_parse_error() {
     // `reserved` / `preferred` are compiler-generated; an explicit
-    // definition (with or without a sigil) is rejected.
+    // definition (with or without an ascription) is rejected.
     for src in [
         "reserved = 'a'",
-        "%reserved = 'a'",
+        "reserved: reserved = 'a'",
         "preferred = 'a'",
-        "%?preferred = 'a'",
+        "preferred: preferred = 'a'",
     ] {
         let err = parse(src).expect_err("defining a synthesized rule must error");
         assert!(
@@ -2294,9 +2305,9 @@ fn defining_synthesized_rule_is_parse_error() {
 
 #[test]
 fn reserved_preferred_conflict_errors() {
-    // The same literal marked `%` (reserved) in one rule and `%?`
-    // (preferred) in another is a contradiction — compile rejects it.
-    let err = parse("root = 'x'\nwb = !'y'\n%a = 'int'\n%?b = 'int'")
+    // The same literal marked `reserved` in one rule and `preferred`
+    // in another is a contradiction — compile rejects it.
+    let err = parse("root = 'x'\nwb = !'y'\na: reserved = 'int'\nb: preferred = 'int'")
         .expect("parse")
         .compile()
         .expect_err("conflicting reserved/preferred must error");
@@ -2310,18 +2321,18 @@ fn reserved_preferred_conflict_errors() {
 
 #[test]
 fn synthesized_reserved_trie_and_preferred_membership() {
-    // `%kw_word` is reserved with a deliberately wrong source order
-    // (`int` before `int8`); the synthesized `reserved` / keyword trie
-    // still matches `int8` maximally (#13 fixed structurally). `%?pre`
-    // (`len`) is preferred, so it is excluded from `reserved` and stays
-    // usable as an identifier.
+    // `kw_word: reserved` has a deliberately wrong source order (`int`
+    // before `int8`); the synthesized `reserved` / keyword trie still
+    // matches `int8` maximally (#13 fixed structurally). `pre: preferred`
+    // (`len`) is excluded from `reserved` and stays usable as an
+    // identifier.
     let src = "root = (token)*^\n\
                trivia = (\\s)*\n\
                wb = !ident_body\n\
                token = @keyword kw_word / @variable ident\n\
-               %kw_word = 'int' / 'int8'\n\
-               %?pre = 'len'\n\
-               *ident = !reserved [a-z] ident_body*\n\
+               kw_word: reserved = 'int' / 'int8'\n\
+               pre: preferred = 'len'\n\
+               ident: atomic = !reserved [a-z] ident_body*\n\
                ident_body = [a-z0-9]";
     assert_eq!(
         run_grammar(src, "int8 len int"),

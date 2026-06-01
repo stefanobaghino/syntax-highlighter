@@ -34,22 +34,26 @@ name2 =  body2
   between iterations of `*` / `+`. Without a `trivia` rule, no
   auto-insertion happens.
 - An optional **`wb` rule** is the word-boundary target consumed by
-  `%` rules (see below); it is typically `wb = !ident_body`. Defining
-  it is only required when the grammar has at least one `%` rule.
-- Rules may carry **prefix sigils**: `~name =` for the intentional
-  leniency marker, `*name =` for the atomic marker (no `trivia`
-  injected inside this rule's body), `%name =` for the reserved-word
-  marker (atomic *and* appends a trailing `wb` call inside the rule's
-  terminal captures), and `%?name =` for the preferred-word marker (a
-  sibling of `%` for identifier-eligible distinguished tokens). `~`
-  composes with `*` / `%` / `%?` (`~*name`, `%~name`, …); `*` and
-  `%` / `%?` are mutually exclusive — both make a rule atomic. The
-  three special rules `root`, `trivia`, and `wb` carry no qualifiers at
-  all (any sigil on them is a parse error); whitespace auto-insertion is
-  disabled by omitting `trivia`, not by marking it.
+  `reserved` rules (see below); it is typically `wb = !ident_body`.
+  Defining it is only required when the grammar has at least one
+  `reserved` rule.
+- Rules may carry postfix **ascriptions** between the name and `=`,
+  `name: kw [kw ...] =`: `partial` (the intentional-leniency marker),
+  `atomic` (no `trivia` injected inside this rule's body), `reserved`
+  (atomic *and* appends a trailing `wb` call inside the rule's terminal
+  captures), and `preferred` (a sibling of `reserved` for
+  identifier-eligible distinguished tokens). The keywords are
+  *contextual* — special only in this slot, usable as ordinary rule
+  names elsewhere. `atomic` / `reserved` / `preferred` are mutually
+  exclusive (each makes a rule atomic); `partial` composes with any and,
+  when present, must be written first (`name: partial atomic =`). The
+  three special rules `root`, `trivia`, and `wb` carry no ascriptions at
+  all (any ascription on them is a parse error); whitespace
+  auto-insertion is disabled by omitting `trivia`, not by ascribing it.
 - Two special rules, **`reserved`** and **`preferred`**, are
-  *synthesized* by the compiler from the `%` / `%?` rules (see below) —
-  a grammar references them (`!reserved`) but never defines them.
+  *synthesized* by the compiler from the `reserved` / `preferred` rules
+  (see below) — a grammar references them (`!reserved`) but never
+  defines them.
 - **Position constraint:** `root` is always the first rule. The
   optional special rules `trivia` and `wb` occupy the contiguous slots
   immediately after `root` (positions 1..2, in either order). Other
@@ -77,9 +81,9 @@ catch      p1 ^label p2      p1 ^^label B      p1 ^^label
 choice     p1 / p2 / p3
 ```
 
-Rule definitions may carry a top-level `~name =` decorator to mark
+Rule definitions may carry a `name: partial =` ascription to mark
 the whole rule as intentionally lenient — see
-[`~name =`](#name----intentional-leniency-marker) below.
+[`name: partial`](#name-partial--intentional-leniency-ascription) below.
 
 ### Atoms
 
@@ -508,35 +512,34 @@ only `..=`, not `..` — the catch necessarily consumes its boundary,
 and `^^lbl .. B` would diverge from the standalone `..` non-consuming
 meaning. The parser rejects it with a hint pointing at `..=`.
 
-### `~name =` — intentional-leniency marker
+### `name: partial` — intentional-leniency ascription
 
 The static `lint_partial_match` check flags trailing-nullable rules
 called unanchored — but on shipped grammars almost every flag is a
 "partial-match leniency intentionally absorbed by outer `*^`-style
 recovery" that the static analysis can't statically prove safe. The
-`~name =` marker is the author's intent signal: "yes, this rule's
+`partial` ascription is the author's intent signal: "yes, this rule's
 leniency is known, don't flag any call to it." Wraps the rule's body
 in `Pattern::Lenient`, which the lint walker treats as an opaque
 barrier and the compiler treats as transparent (emits the inner's
 bytecode unchanged).
 
 ```peg
-~opt_semi = (@punctuation ';' ws)?
+opt_semi: partial = (@punctuation ';' ws)?
 ```
 
-The marker must touch the name (no whitespace between `~` and the
-identifier). Whether the runtime invariant the marker assumes —
-typically an outer `*^` / `*^[;]` / `^block_close` recovery scope
-absorbing the leniency — actually holds is currently a convention
-recorded in adjacent comments and unenforced by the lint; see
-`#113` for the planned tightening.
+Whether the runtime invariant the ascription assumes — typically an
+outer `*^` / `*^[;]` / `^block_close` recovery scope absorbing the
+leniency — actually holds is currently a convention recorded in
+adjacent comments and unenforced by the lint; see `#113` for the
+planned tightening.
 
 ### Reserved rule names
 
 Three rule names get compile-time treatment. All three are structural
 slots the compiler wraps or injects, not lexable tokens, so none of
-them accepts a prefix sigil — `*` / `~` / `%` / `%?` on `root`,
-`trivia`, or `wb` is a parse error.
+them accepts an ascription — `partial` / `atomic` / `reserved` /
+`preferred` on `root`, `trivia`, or `wb` is a parse error.
 
 - **`root`** — the start rule (mandatory). The compiler wraps its
   body as `trivia? root_body trivia? !.` so end-of-input is always
@@ -593,11 +596,12 @@ them accepts a prefix sigil — `*` / `~` / `%` / `%?` on `root`,
   pair`, and each iteration begins by consuming whatever
   inter-iteration whitespace is sitting in front of it.
 
-- **`wb`** — the optional word-boundary target for `%` / `%?` rules.
-  Its body is a bare boundary predicate (typically `wb = !ident_body`,
-  or `!ident_cont` for a Unicode-aware continuation class). The
-  compiler appends a `wb` call inside the terminal captures of every
-  `%` / `%?` rule (see [`%name =`](#name----reserved-word-marker)); it
+- **`wb`** — the optional word-boundary target for `reserved` /
+  `preferred` rules. Its body is a bare boundary predicate (typically
+  `wb = !ident_body`, or `!ident_cont` for a Unicode-aware continuation
+  class). The compiler appends a `wb` call inside the terminal captures
+  of every `reserved` / `preferred` rule (see
+  [`name: reserved`](#name-reserved--reserved-word-ascription)); it
   is required only when the grammar has at least one such rule. Like
   `trivia`, `wb` is exempt from trivia auto-insertion and must sit in
   the reserved slots immediately after `root`. It is **not** part of
@@ -607,17 +611,16 @@ them accepts a prefix sigil — `*` / `~` / `%` / `%?` on `root`,
   wb            = !ident_body
   ```
 
-### `*name =` — atomic-rule marker
+### `name: atomic` — atomic-rule ascription
 
-A `*` prefix on the rule name opts the rule out of `trivia`
+The `atomic` ascription opts the rule out of `trivia`
 auto-insertion: the rewriter walks the body but does not splice
 `trivia` between `Sequence` items or prepend one to `Repeat`
-iterations. The two prefix sigils compose: `~*name` and `*~name`
-are both valid.
+iterations. `partial` composes with it (`name: partial atomic =`).
 
 ```peg
-*string_lit   = '"' (str_escape / !'"' .)* '"'
-*ident        = [A-Za-z_] [A-Za-z0-9_]*
+string_lit: atomic = '"' (str_escape / !'"' .)* '"'
+ident: atomic      = [A-Za-z_] [A-Za-z0-9_]*
 ```
 
 Used on token-shape rules — string / number / char literals,
@@ -628,21 +631,22 @@ non-atomic rule called from inside an atomic body still gets
 auto-insertion in its own body.
 
 For a keyword rule that also needs a trailing word boundary, prefer
-the [`%name =`](#name----reserved-word-marker) sibling below — it is
-atomic *and* supplies the boundary, so you don't hand-write `!ident_body`.
+the [`reserved`](#name-reserved--reserved-word-ascription) sibling
+below — it is atomic *and* supplies the boundary, so you don't
+hand-write `!ident_body`.
 
-### `%name =` — reserved-word marker
+### `name: reserved` — reserved-word ascription
 
-A `%` prefix marks a rule as a **reserved word**: it is compiled
-atomic (like `*`) *and* the compiler appends a call to the `wb` rule
+The `reserved` ascription marks a rule as a **reserved word**: it is
+compiled atomic *and* the compiler appends a call to the `wb` rule
 inside the rule's terminal captures, so the match must be followed by
 a word boundary. This keeps a keyword from firing on the prefix of a
 longer identifier — `if` must not match the start of `ifx`.
 
 ```peg
-wb            = !ident_body
-%kw_if        = @keyword 'if'
-%storage_spec = @keyword 'typedef' / @keyword 'extern' / @keyword 'static'
+wb                  = !ident_body
+kw_if: reserved     = @keyword 'if'
+storage_spec: reserved = @keyword 'typedef' / @keyword 'extern' / @keyword 'static'
 ```
 
 The `wb` call is pushed inside each leaf capture (and distributed
@@ -652,65 +656,68 @@ the boundary holds, so a rejected keyword leaves no stray capture for
 top-level `*^` recovery to surface. Because the rule is atomic, no
 `trivia` is spliced between the literal and the appended `wb` call.
 
-When a `%` / `%?` rule's body is a **capture-less alternation of plain
-literals**, the compiler prefix-factors it into a longest-match **trie**
-(with `wb` at each accepting leaf) instead of a flat alternation. The
-trie is order-independent, so a shorter keyword can't shadow a longer
-one that extends it — `do` / `double`, `go` / `goto`, `int` / `int8`
-all match maximally regardless of source order. (Case-insensitive
-`i"…"` keyword sets lower to char-class sequences, not plain literals,
-so they keep the flat form — the synthesizer below emits those
-longest-first so maximal munch still holds.)
+When a `reserved` / `preferred` rule's body is a **capture-less
+alternation of plain literals**, the compiler prefix-factors it into a
+longest-match **trie** (with `wb` at each accepting leaf) instead of a
+flat alternation. The trie is order-independent, so a shorter keyword
+can't shadow a longer one that extends it — `do` / `double`, `go` /
+`goto`, `int` / `int8` all match maximally regardless of source order.
+(Case-insensitive `i"…"` keyword sets lower to char-class sequences,
+not plain literals, so they keep the flat form — the synthesizer below
+emits those longest-first so maximal munch still holds.)
 
 - Requires a `wb` rule; with none defined, the synthesized
   `NonTerminal("wb")` surfaces as `CompileError::UndefinedRule("wb")`.
-- Composes with `~` (`%~name` / `~%name`); mutually exclusive with `*`
-  (combining them is a parse error).
+- Composes with `partial` (written first); mutually exclusive with
+  `atomic` / `preferred`.
 - Rejected on the reserved rules `root` / `trivia` / `wb`.
 
-### `%?name =` — preferred-word marker
+### `name: preferred` — preferred-word ascription
 
-A `%?` prefix (the `?` touches the `%`) is the sibling of `%` for
+The `preferred` ascription is the sibling of `reserved` for
 **preferred words**: identifier-eligible distinguished tokens such as
 Go's predeclared `int` / `len` / `true` or JavaScript's contextual
-`async` / `let`. It behaves exactly like `%` — atomic, with the same
-`wb` boundary and the same trie treatment — and differs only in *which
-synthesized set the rule's literals feed*: a `%?` rule's words go into
-`preferred` and are **excluded** from `reserved`, so they stay usable as
-identifiers.
+`async` / `let`. It behaves exactly like `reserved` — atomic, with the
+same `wb` boundary and the same trie treatment — and differs only in
+*which synthesized set the rule's literals feed*: a `preferred` rule's
+words go into `preferred` and are **excluded** from `reserved`, so they
+stay usable as identifiers.
 
 ```peg
-%?predeclared_type = 'int8' / 'int16' / 'int'   # Go: shadowable
-%?kw_async         = @keyword 'async'          # JS: contextual
+predeclared_type: preferred = 'int8' / 'int16' / 'int'  # Go: shadowable
+kw_async: preferred         = @keyword 'async'          # JS: contextual
 ```
 
-- Same requirements / composition / rejections as `%`.
-- A word reachable from both a `%` and a `%?` rule is a contradiction
-  (it can't be both barred from and allowed in identifier position) and
-  raises `CompileError::ReservedPreferredConflict`.
+- Same requirements / composition / rejections as `reserved`.
+- A word reachable from both a `reserved` and a `preferred` rule is a
+  contradiction (it can't be both barred from and allowed in identifier
+  position) and raises `CompileError::ReservedPreferredConflict`.
 
 ### `reserved` / `preferred` — synthesized word sets
 
-The compiler synthesizes two rules from the `%` / `%?` rules above:
+The compiler synthesizes two rules from the `reserved` / `preferred`
+rules above:
 
-- **`reserved`** — every literal of a `%` rule that is **not** `%?`.
+- **`reserved`** — every literal of a `reserved` rule (excluding
+  `preferred`).
   Reference it as `!reserved` in an identifier rule to bar keywords from
   identifier position without hand-maintaining a list:
 
   ```peg
-  *ident = !reserved [A-Za-z_] [A-Za-z0-9_]*
+  ident: atomic = !reserved [A-Za-z_] [A-Za-z0-9_]*
   ```
 
-- **`preferred`** — every literal of a `%?` rule. Materialized for
-  symmetry / inspection (e.g. `pegdb`); a grammar usually doesn't
+- **`preferred`** — every literal of a `preferred` rule. Materialized
+  for symmetry / inspection (e.g. `pegdb`); a grammar usually doesn't
   reference it.
 
-Both are emitted as `%` rules (trie + `wb`), so `!reserved` does correct
-maximal-munch: `int` is reserved, but `integer` — a longer word that
-merely starts with it — is not. A rule whose body isn't a fixed keyword
-shape (it has a quantifier / wildcard / predicate, e.g. a number body
-like `'0x' [\da-fA-F]+`) contributes nothing; keep such boundary-only
-helpers as `*name = … wb` rather than `%`. Authors **reference** these
+Both are emitted as `reserved` rules (trie + `wb`), so `!reserved` does
+correct maximal-munch: `int` is reserved, but `integer` — a longer word
+that merely starts with it — is not. A rule whose body isn't a fixed
+keyword shape (it has a quantifier / wildcard / predicate, e.g. a number
+body like `'0x' [\da-fA-F]+`) contributes nothing; keep such
+boundary-only helpers as `name: atomic = … wb` rather than `reserved`.
+Authors **reference** these
 two names but never **define** them (a definition is a parse error).
 
 ### Reserved syntax
@@ -770,7 +777,7 @@ concrete use case.
   Examples: `NonTerminal("foo")` with no matching rule, a start rule
   that doesn't exist, partial-match leniency on a call site that's
   neither anchored (`^^lbl B`) nor explicitly marked intentional
-  (`~name =`), an `^^lbl` whose call-site FOLLOW set is empty
+  (`name: partial`), an `^^lbl` whose call-site FOLLOW set is empty
   so no boundary can be inferred.
 - **`Error`** — unified wrapper returned by `pegc::compile(source)`.
   `From<ParseError>` and `From<CompileError>` are provided.
