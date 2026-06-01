@@ -359,7 +359,7 @@ fn float_variants() {
 #[test]
 fn number_literal_does_not_span_whitespace() {
     // Numeric forms are atomic: `1 . 5` must not lex as a single number
-    // (no trivia injected inside a numeric literal).
+    // (no ignore injected inside a numeric literal).
     let input = "SELECT 1 . 5";
     let (_, caps, kinds, _) = run(input);
     let nums = spans_for(&caps, &kinds, "number", input);

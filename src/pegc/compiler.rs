@@ -14,12 +14,12 @@ pub enum CompileError {
     MissingRootRule,
     /// Grammar defines `root` but not at the expected source position.
     /// `root` must always be the first rule (parse-time enforcement
-    /// also requires `trivia`, when present, to sit immediately
+    /// also requires `ignore`, when present, to sit immediately
     /// after). Only raised for parsed grammars (hand-built ones have
     /// no recorded source order).
     RootRulePosition {
         expected_pos: usize,
-        has_trivia: bool,
+        has_ignore: bool,
     },
     /// One or more `^^lbl` catches have no following context to infer
     /// their boundary from. Emitted by `resolve_inferred_boundaries`.
@@ -56,7 +56,7 @@ impl std::fmt::Display for CompileError {
             ),
             CompileError::RootRulePosition {
                 expected_pos: _,
-                has_trivia: _,
+                has_ignore: _,
             } => write!(f, "`root` must be the first rule"),
             CompileError::CannotInferBoundary { rule, label, span } => write!(
                 f,
@@ -377,7 +377,7 @@ pub fn compile_pattern(pat: &Pattern) -> Program {
         rule_count: 0,
         rule_names: Vec::new(),
         label_kinds: c.label_names,
-        rule_is_trivia: Vec::new(),
+        rule_is_ignore: Vec::new(),
         char_sets: c.char_sets,
     }
 }
@@ -410,11 +410,11 @@ pub(crate) fn compile_rules(rules: &HashMap<String, Pattern>) -> Result<Program,
     // Identify left-recursive rules (direct and indirect).
     let lr_rules = analyze_left_recursion(rules)?;
 
-    // Compute the per-rule trivia bit by cascading from any `trivia = …`
+    // Compute the per-rule ignore bit by cascading from any `ignore = …`
     // reserved-name root the grammar defines. Catch-bearing rules are
     // pinned out of the cascade so their frames stay visible in
     // `pegdb recoveries explain`.
-    let trivia_bits = super::analysis::compute_trivia_rules(rules);
+    let ignore_bits = super::analysis::compute_ignore_rules(rules);
 
     let mut c = Compiler::new();
     c.emit(Instruction::Call(Label(0))); // patched below
@@ -432,13 +432,13 @@ pub(crate) fn compile_rules(rules: &HashMap<String, Pattern>) -> Result<Program,
 
     let mut rule_addrs: HashMap<String, usize> = HashMap::new();
     let mut rule_names: Vec<String> = Vec::new();
-    let mut rule_is_trivia: Vec<bool> = Vec::new();
+    let mut rule_is_ignore: Vec<bool> = Vec::new();
     let mut rule_count: u32 = 0;
     for name in ordered {
         rule_addrs.insert(name.clone(), c.pos());
         let memo_id = MemoId(rule_count);
         rule_names.push(name.clone());
-        rule_is_trivia.push(trivia_bits.get(name).copied().unwrap_or(false));
+        rule_is_ignore.push(ignore_bits.get(name).copied().unwrap_or(false));
         rule_count += 1;
         let kind = if lr_rules.contains(name.as_str()) {
             RuleKind::Lr
@@ -484,7 +484,7 @@ pub(crate) fn compile_rules(rules: &HashMap<String, Pattern>) -> Result<Program,
         rule_count: rule_count as usize,
         rule_names,
         label_kinds: c.label_names,
-        rule_is_trivia,
+        rule_is_ignore,
         char_sets: c.char_sets,
     })
 }

@@ -31,16 +31,16 @@
 
 root = (stmt)*^
 
-trivia = (comment / \s)*
+ignore = (comment / \s)*
 
 # Word boundary for `%` reserved-word rules: a keyword can't be the
 # prefix of a longer identifier (ECMAScript IdentifierPartChar).
-wb = !ident_body
+boundary = !ident_body
 
 # --- Keyword tokens ---------------------------------------------------
 #
 # One `%` reserved-word rule per keyword, referenced wherever the
-# keyword appears so the `wb` boundary is applied uniformly. This
+# keyword appears so the `boundary` boundary is applied uniformly. This
 # matters most for the contextual keywords (`async`, `as`, `of`,
 # `from`, `get`, `set`, `static`, `yield`) deliberately kept out of
 # `reserved` so they remain usable as identifiers: `{ asyncFoo() {} }`
@@ -366,7 +366,7 @@ literal = template_lit
         / lit_const
         / lit_undefined
 
-# Boolean / null / undefined constants; the `wb` boundary keeps
+# Boolean / null / undefined constants; the `boundary` boundary keeps
 # `trueish` / `nullish` from matching the prefix.
 lit_const: reserved = @constant 'true' / @constant 'false' / @constant 'null'
 lit_undefined: preferred = @constant 'undefined'

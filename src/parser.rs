@@ -185,12 +185,12 @@ impl Parser {
         &self.program.label_kinds
     }
 
-    /// Per-rule trivia flags indexed by `MemoId.0` — see
-    /// [`crate::pegvm::Program::rule_is_trivia`]. `pegdb recoveries explain`
-    /// uses this to drop trailing trivia frames from the rule_stack
+    /// Per-rule ignore flags indexed by `MemoId.0` — see
+    /// [`crate::pegvm::Program::rule_is_ignore`]. `pegdb recoveries explain`
+    /// uses this to drop trailing ignore frames from the rule_stack
     /// when picking the displayed leaf of a recovery cluster.
-    pub fn rule_is_trivia(&self) -> &[bool] {
-        &self.program.rule_is_trivia
+    pub fn rule_is_ignore(&self) -> &[bool] {
+        &self.program.rule_is_ignore
     }
 
     /// Per-recovery diagnostic records from the most recent parse.

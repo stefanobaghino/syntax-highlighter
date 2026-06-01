@@ -1351,15 +1351,15 @@ fn lower_inferred_boundary_catch(
     }
 }
 
-/// The reserved rule name that marks the trivia subgraph's root.
+/// The reserved rule name that marks the ignore subgraph's root.
 /// If a grammar defines a rule with this name, the compiler cascades
-/// the trivia bit through every rule transitively reachable from it
+/// the ignore bit through every rule transitively reachable from it
 /// (subject to the catch-exclusion below).
-pub(crate) const TRIVIA_ROOT_RULE: &str = "trivia";
+pub(crate) const IGNORE_ROOT_RULE: &str = "ignore";
 
-/// Compute the per-rule trivia bit. A rule is trivia iff it's
+/// Compute the per-rule ignore bit. A rule is ignore iff it's
 /// transitively reachable through the call graph from a rule named
-/// [`TRIVIA_ROOT_RULE`], excluding rules whose body contains a recovery
+/// [`IGNORE_ROOT_RULE`], excluding rules whose body contains a recovery
 /// catch (`Pattern::Catch` or `Pattern::InferBoundaryCatch`). The
 /// catch-exclusion preserves diagnostic visibility for catch-bearing
 /// frames in `pegdb recoveries explain`: the catch is the author's
@@ -1367,11 +1367,11 @@ pub(crate) const TRIVIA_ROOT_RULE: &str = "trivia";
 /// it would hide exactly the rule the catch lives in.
 ///
 /// Returns an entry for every rule in `rules`; rules in a grammar with
-/// no `trivia` root all get `false`.
-pub(crate) fn compute_trivia_rules(rules: &HashMap<String, Pattern>) -> HashMap<String, bool> {
-    let mut trivia: HashMap<String, bool> = rules.keys().map(|n| (n.clone(), false)).collect();
-    if !rules.contains_key(TRIVIA_ROOT_RULE) {
-        return trivia;
+/// no `ignore` root all get `false`.
+pub(crate) fn compute_ignore_rules(rules: &HashMap<String, Pattern>) -> HashMap<String, bool> {
+    let mut ignore: HashMap<String, bool> = rules.keys().map(|n| (n.clone(), false)).collect();
+    if !rules.contains_key(IGNORE_ROOT_RULE) {
+        return ignore;
     }
     let pinned: HashSet<String> = rules
         .iter()
@@ -1379,13 +1379,13 @@ pub(crate) fn compute_trivia_rules(rules: &HashMap<String, Pattern>) -> HashMap<
         .map(|(name, _)| name.clone())
         .collect();
     let mut visited: HashSet<String> = HashSet::new();
-    let mut queue: Vec<String> = vec![TRIVIA_ROOT_RULE.to_string()];
+    let mut queue: Vec<String> = vec![IGNORE_ROOT_RULE.to_string()];
     while let Some(rule) = queue.pop() {
         if !visited.insert(rule.clone()) {
             continue;
         }
         if !pinned.contains(&rule) {
-            trivia.insert(rule.clone(), true);
+            ignore.insert(rule.clone(), true);
         }
         if let Some(body) = rules.get(&rule) {
             let mut callees = HashSet::new();
@@ -1397,7 +1397,7 @@ pub(crate) fn compute_trivia_rules(rules: &HashMap<String, Pattern>) -> HashMap<
             }
         }
     }
-    trivia
+    ignore
 }
 
 /// Walk `pat` and bump `out[name]` for every `Pattern::NonTerminal { name }`
@@ -1490,60 +1490,60 @@ fn body_contains_catch(pat: &Pattern) -> bool {
 }
 
 /// True iff the grammar has an active auto-insertion target: a rule
-/// named `trivia`. Both [`inject_auto_trivia`] and [`wrap_root`]
+/// named `ignore`. Both [`inject_auto_ignore`] and [`wrap_root`]
 /// consult this; on `false` they no-op (no inter-Sequence splicing, no
-/// `trivia?` siblings in the root wrap). The `trivia` rule carries no
+/// `ignore?` siblings in the root wrap). The `ignore` rule carries no
 /// qualifiers, so omitting it is the only way to disable auto-insertion.
 fn auto_insertion_active(grammar: &Grammar) -> bool {
-    grammar.rules.contains_key(TRIVIA_ROOT_RULE)
+    grammar.rules.contains_key(IGNORE_ROOT_RULE)
 }
 
 /// AST-level rewrite: in every non-atomic rule's body, splice a
-/// `NonTerminal("trivia")` call between consecutive items of every
+/// `NonTerminal("ignore")` call between consecutive items of every
 /// `Sequence`, and prepend one to every `Repeat` / `RepeatOne`
 /// iteration so inter-iteration whitespace gets consumed. Runs after
 /// `lint_partial_match` and the FOLLOW-driven `^^lbl` resolver so both
 /// still see the author's original body.
 ///
-/// No-op when the grammar has no `trivia` rule (the grammar-wide
-/// opt-out — `trivia` carries no qualifiers). The `trivia` rule itself
-/// is exempt from injection: splicing trivia inside its own body would
+/// No-op when the grammar has no `ignore` rule (the grammar-wide
+/// opt-out — `ignore` carries no qualifiers). The `ignore` rule itself
+/// is exempt from injection: splicing ignore inside its own body would
 /// recurse the runtime indefinitely.
 ///
 /// The walker descends transparently through `Choice`, `Optional`,
 /// `Capture`, `Catch`, `Lenient`, `AndPredicate`, `NotPredicate`, and
 /// stops at `NonTerminal` and the atom leaves (`Literal`, `CharClass`,
-/// `AnyChar`). Crossing a `NonTerminal` would pull trivia into the
+/// `AnyChar`). Crossing a `NonTerminal` would pull ignore into the
 /// callee's body — which the callee handles by its own auto-insertion
 /// if non-atomic, or explicitly if atomic.
-pub fn inject_auto_trivia(grammar: &mut Grammar) {
+pub fn inject_auto_ignore(grammar: &mut Grammar) {
     if !auto_insertion_active(grammar) {
         return;
     }
     let atomic = grammar.atomic_rules.clone();
     let rule_names: Vec<String> = grammar.rules.keys().cloned().collect();
     for name in rule_names {
-        // The trivia rule itself is exempt: every `trivia_call` from
-        // the rewriter calls back into it, so injecting trivia inside
+        // The ignore rule itself is exempt: every `ignore_call` from
+        // the rewriter calls back into it, so injecting ignore inside
         // its body would recurse the runtime indefinitely. Atomic
         // rules opt out explicitly via the `name: atomic` ascription.
-        if atomic.contains(&name) || name == TRIVIA_ROOT_RULE {
+        if atomic.contains(&name) || name == IGNORE_ROOT_RULE {
             continue;
         }
         if let Some(body) = grammar.rules.get_mut(&name) {
-            inject_trivia_in(body);
+            inject_ignore_in(body);
         }
     }
 }
 
-/// Walk one rule body, splicing `NonTerminal("trivia")` between every
+/// Walk one rule body, splicing `NonTerminal("ignore")` between every
 /// pair of consecutive `Sequence` items at every depth and prepending
 /// one to every `Repeat` / `RepeatOne` iteration.
-fn inject_trivia_in(pat: &mut Pattern) {
+fn inject_ignore_in(pat: &mut Pattern) {
     match pat {
         Pattern::Sequence { items, .. } => {
             for it in items.iter_mut() {
-                inject_trivia_in(it);
+                inject_ignore_in(it);
             }
             if items.len() >= 2 {
                 let mut spliced = Vec::with_capacity(items.len() * 2 - 1);
@@ -1552,7 +1552,7 @@ fn inject_trivia_in(pat: &mut Pattern) {
                 for (i, it) in drained.into_iter().enumerate() {
                     spliced.push(it);
                     if i != last {
-                        spliced.push(trivia_call());
+                        spliced.push(ignore_call());
                     }
                 }
                 *items = spliced;
@@ -1560,25 +1560,25 @@ fn inject_trivia_in(pat: &mut Pattern) {
         }
         Pattern::OrderedChoice { alts, .. } => {
             for it in alts {
-                inject_trivia_in(it);
+                inject_ignore_in(it);
             }
         }
         Pattern::Repeat { inner, .. } | Pattern::RepeatOne { inner, .. } => {
-            inject_trivia_in(inner);
-            // Prepend a trivia call so each iteration consumes
+            inject_ignore_in(inner);
+            // Prepend a ignore call so each iteration consumes
             // ambient whitespace before its body runs. Without this,
             // `(',' pair)*` would fail on the second iteration's
             // leading whitespace — the inter-iteration boundary has
-            // no parent `Sequence` to splice trivia into. Flatten
+            // no parent `Sequence` to splice ignore into. Flatten
             // when `inner` is already a `Sequence` so the result
             // stays at one level of nesting.
             let original = std::mem::replace(inner.as_mut(), Pattern::any_char());
             let wrapped = match original {
                 Pattern::Sequence { mut items, span } => {
-                    items.insert(0, trivia_call());
+                    items.insert(0, ignore_call());
                     Pattern::Sequence { items, span }
                 }
-                other => Pattern::seq(vec![trivia_call(), other]),
+                other => Pattern::seq(vec![ignore_call(), other]),
             };
             **inner = wrapped;
         }
@@ -1586,14 +1586,14 @@ fn inject_trivia_in(pat: &mut Pattern) {
         | Pattern::NotPredicate { inner, .. }
         | Pattern::AndPredicate { inner, .. }
         | Pattern::Capture { inner, .. }
-        | Pattern::Lenient { inner, .. } => inject_trivia_in(inner),
+        | Pattern::Lenient { inner, .. } => inject_ignore_in(inner),
         Pattern::Catch {
             inner, recovery, ..
         } => {
-            inject_trivia_in(inner);
-            inject_trivia_in(recovery);
+            inject_ignore_in(inner);
+            inject_ignore_in(recovery);
         }
-        Pattern::InferBoundaryCatch { inner, .. } => inject_trivia_in(inner),
+        Pattern::InferBoundaryCatch { inner, .. } => inject_ignore_in(inner),
         Pattern::Literal { .. }
         | Pattern::CharClass { .. }
         | Pattern::AnyChar { .. }
@@ -1601,13 +1601,13 @@ fn inject_trivia_in(pat: &mut Pattern) {
     }
 }
 
-/// Wrap the start rule's body so it reads `trivia? body trivia? !.` —
-/// implicit leading/trailing trivia and end-of-input assertion. Built
-/// manually as a `Sequence` *after* [`inject_auto_trivia`] has run on
+/// Wrap the start rule's body so it reads `ignore? body ignore? !.` —
+/// implicit leading/trailing ignore and end-of-input assertion. Built
+/// manually as a `Sequence` *after* [`inject_auto_ignore`] has run on
 /// `root`'s body, so the synthesized siblings here don't themselves
-/// pick up trivia injection.
+/// pick up ignore injection.
 ///
-/// `trivia?` is included iff auto-insertion is active. With no `trivia`
+/// `ignore?` is included iff auto-insertion is active. With no `ignore`
 /// rule the wrap collapses to `body !.` — still supplying the EOF
 /// assertion uniformly.
 pub fn wrap_root(grammar: &mut Grammar) {
@@ -1617,11 +1617,11 @@ pub fn wrap_root(grammar: &mut Grammar) {
     };
     let mut items: Vec<Pattern> = Vec::with_capacity(4);
     if active {
-        items.push(Pattern::optional(trivia_call()));
+        items.push(Pattern::optional(ignore_call()));
     }
     items.push(body);
     if active {
-        items.push(Pattern::optional(trivia_call()));
+        items.push(Pattern::optional(ignore_call()));
     }
     items.push(Pattern::not_predicate(Pattern::any_char()));
     grammar
@@ -1629,53 +1629,53 @@ pub fn wrap_root(grammar: &mut Grammar) {
         .insert(super::parser::ROOT_RULE.to_string(), Pattern::seq(items));
 }
 
-fn trivia_call() -> Pattern {
-    Pattern::nt(TRIVIA_ROOT_RULE)
+fn ignore_call() -> Pattern {
+    Pattern::nt(IGNORE_ROOT_RULE)
 }
 
-/// Append a `wb` word-boundary call inside the terminal captures of
+/// Append a `boundary` word-boundary call inside the terminal captures of
 /// every `reserved` rule (see [`Grammar::percent_rules`]).
 ///
 /// The boundary is pushed to the tail of the matched region, *inside*
 /// the capture that ends the match, so the capture commits only when
-/// the boundary holds. Placing `wb` after the capture instead would let
+/// the boundary holds. Placing `boundary` after the capture instead would let
 /// the keyword capture commit before the boundary check fails, leaking a
 /// stray keyword token through top-level `*^` recovery on inputs like
 /// `typedefx`. The rule is already atomic (the `reserved` ascription inserts it into
-/// `atomic_rules`), so no `trivia` is spliced between the literal and
+/// `atomic_rules`), so no `ignore` is spliced between the literal and
 /// the appended call.
 ///
-/// A `wb` call into a rule with no `wb` definition surfaces downstream
-/// as `CompileError::UndefinedRule("wb")` from `compile_rules`.
-pub fn append_wb_check(grammar: &mut Grammar) {
+/// A `boundary` call into a rule with no `boundary` definition surfaces downstream
+/// as `CompileError::UndefinedRule("boundary")` from `compile_rules`.
+pub fn append_boundary_check(grammar: &mut Grammar) {
     let names: Vec<String> = grammar.percent_rules.iter().cloned().collect();
     for name in names {
         if let Some(mut body) = grammar.rules.remove(&name) {
-            append_wb_in(&mut body);
+            append_boundary_in(&mut body);
             grammar.rules.insert(name, body);
         }
     }
 }
 
-/// Recursively append a `wb` call at the tail of `pat`'s match, pushing
+/// Recursively append a `boundary` call at the tail of `pat`'s match, pushing
 /// it inside the final capture and distributing across choice branches
 /// so each alternative ends in its own boundary check.
-fn append_wb_in(pat: &mut Pattern) {
+fn append_boundary_in(pat: &mut Pattern) {
     // A choice whose branches hold no capture can't leak a committed
-    // capture through recovery, so one trailing `wb` after the whole
+    // capture through recovery, so one trailing `boundary` after the whole
     // choice is equivalent to — and leaner than — one per branch. Only
     // distribute when there is a capture to keep the boundary inside of.
     if matches!(pat, Pattern::OrderedChoice { .. }) && !contains_capture(pat) {
         // When every branch is a plain literal, prefix-factor the set
-        // into a longest-match trie (with `wb` at each accept) instead of
-        // a flat alternation under one trailing `wb`. The trie makes
+        // into a longest-match trie (with `boundary` at each accept) instead of
+        // a flat alternation under one trailing `boundary`. The trie makes
         // source ordering irrelevant — a shorter keyword can no longer
         // shadow a longer one that shares its prefix (#13: `do`/`double`,
         // `go`/`goto`, `int`/`int8`) — and turns the hot
         // identifier-exclusion scan into a prefix walk. Non-literal
         // capture-less choices (e.g. the case-insensitive `i"…"` keyword
         // sets, which lower to char-class sequences) keep the flat
-        // single-trailing-`wb` form; `synthesize_reserved_preferred`
+        // single-trailing-`boundary` form; `synthesize_reserved_preferred`
         // emits those longest-first so the flat form is still correct.
         if let Pattern::OrderedChoice { alts, .. } = pat {
             if let Some(literals) = all_plain_literals(alts) {
@@ -1684,32 +1684,32 @@ fn append_wb_in(pat: &mut Pattern) {
             }
         }
         let taken = std::mem::replace(pat, Pattern::any_char());
-        *pat = Pattern::seq(vec![taken, Pattern::nt(super::parser::WB_RULE)]);
+        *pat = Pattern::seq(vec![taken, Pattern::nt(super::parser::BOUNDARY_RULE)]);
         return;
     }
     match pat {
         Pattern::OrderedChoice { alts, .. } => {
             for alt in alts.iter_mut() {
-                append_wb_in(alt);
+                append_boundary_in(alt);
             }
         }
         Pattern::Sequence { items, .. } => {
             if let Some(last) = items.last_mut() {
-                append_wb_in(last);
+                append_boundary_in(last);
             }
         }
-        Pattern::Capture { inner, .. } => append_wb_in(inner),
+        Pattern::Capture { inner, .. } => append_boundary_in(inner),
         other => {
             let taken = std::mem::replace(other, Pattern::any_char());
-            *other = Pattern::seq(vec![taken, Pattern::nt(super::parser::WB_RULE)]);
+            *other = Pattern::seq(vec![taken, Pattern::nt(super::parser::BOUNDARY_RULE)]);
         }
     }
 }
 
 /// Whether `pat` contains a [`Pattern::Capture`] anywhere in its tree.
 /// `NonTerminal`s are opaque (a referenced rule's captures aren't
-/// visible here) — consistent with the rest of `append_wb_in`, which
-/// appends `wb` after a `NonTerminal` call rather than inside it.
+/// visible here) — consistent with the rest of `append_boundary_in`, which
+/// appends `boundary` after a `NonTerminal` call rather than inside it.
 fn contains_capture(pat: &Pattern) -> bool {
     match pat {
         Pattern::Capture { .. } => true,
@@ -1734,7 +1734,7 @@ fn contains_capture(pat: &Pattern) -> bool {
 
 /// If every alternative of a choice is a plain [`Pattern::Literal`],
 /// return their raw byte-strings; otherwise `None`. The all-or-nothing
-/// gate keeps [`append_wb_in`] on the flat single-`wb` path for choices
+/// gate keeps [`append_boundary_in`] on the flat single-`boundary` path for choices
 /// that mix literals with char classes / sub-rules (e.g. the
 /// case-insensitive `i"…"` keyword sets).
 fn all_plain_literals(alts: &[Pattern]) -> Option<Vec<Vec<u8>>> {
@@ -1749,7 +1749,7 @@ fn all_plain_literals(alts: &[Pattern]) -> Option<Vec<Vec<u8>>> {
 }
 
 /// Prefix-factor a set of literal byte-strings into a longest-match trie
-/// with a [`WB_RULE`](super::parser::WB_RULE) call at every accepting
+/// with a [`BOUNDARY_RULE`](super::parser::BOUNDARY_RULE) call at every accepting
 /// node. Replaces a flat capture-less literal alternation: the trie is
 /// order-independent (a shorter keyword can't shadow a longer one that
 /// extends it) and walks the input once instead of re-scanning every
@@ -1761,13 +1761,13 @@ fn factor_literal_trie(mut literals: Vec<Vec<u8>>) -> Pattern {
 }
 
 /// Build one trie node from the suffixes that reach it. An empty suffix
-/// means "a keyword ends here" → emit `wb`. Distinct continuation bytes
+/// means "a keyword ends here" → emit `boundary`. Distinct continuation bytes
 /// become sibling branches; a single-child, no-accept chain is coalesced
-/// into one multi-byte literal. The accept (`wb`) branch is emitted
+/// into one multi-byte literal. The accept (`boundary`) branch is emitted
 /// *last* so maximal munch wins: with `long` and `long long` in the set,
 /// trying ` long` before accepting `long` is what stops `long long` from
 /// matching only its `long` prefix (the space is a valid boundary, so a
-/// `wb`-first order would accept the short form).
+/// `boundary`-first order would accept the short form).
 fn build_trie(entries: Vec<Vec<u8>>) -> Pattern {
     let mut accept = false;
     let mut groups: BTreeMap<u8, Vec<Vec<u8>>> = BTreeMap::new();
@@ -1797,7 +1797,7 @@ fn build_trie(entries: Vec<Vec<u8>>) -> Pattern {
         branches.push(Pattern::seq(vec![Pattern::literal_bytes(prefix), sub]));
     }
     if accept {
-        branches.push(Pattern::nt(super::parser::WB_RULE));
+        branches.push(Pattern::nt(super::parser::BOUNDARY_RULE));
     }
     Pattern::choice(branches)
 }
@@ -1812,8 +1812,8 @@ fn build_trie(entries: Vec<Vec<u8>>) -> Pattern {
 /// quantifier, wildcard, predicate, or an unresolvable reference — e.g.
 /// a number body like `'0x' [\da-fA-F]+`) contributes nothing. Both
 /// rules are emitted as a flat alternation ordered longest-first and
-/// registered as `reserved` rules, so the following [`append_wb_check`]
-/// gives them the same trie + `wb` treatment as any author-written
+/// registered as `reserved` rules, so the following [`append_boundary_check`]
+/// gives them the same trie + `boundary` treatment as any author-written
 /// keyword set.
 ///
 /// A literal reachable from both a `reserved` and a `preferred` rule is
@@ -1936,7 +1936,7 @@ fn keyword_entries(
 
 /// Build a `reserved` / `preferred` rule body from its keyword set: a
 /// flat alternation ordered longest-first. All-singleton-ASCII entries
-/// become byte literals (so [`append_wb_in`] folds them into a trie);
+/// become byte literals (so [`append_boundary_in`] folds them into a trie);
 /// case-folded entries stay sequences of char classes.
 fn build_word_set_rule(set: BTreeSet<Vec<CharSet>>) -> Pattern {
     let mut entries: Vec<Vec<CharSet>> = set.into_iter().collect();
@@ -1988,118 +1988,120 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    // ---- trivia cascade (compute_trivia_rules) -----------------------
+    // ---- ignore cascade (compute_ignore_rules) -----------------------
     //
     // Exercised directly on the parsed (pre-injection) rule map: the
-    // cascade is forward reachability from `trivia`, independent of
-    // auto-insertion, so a plain `trivia` rule is the faithful fixture.
+    // cascade is forward reachability from `ignore`, independent of
+    // auto-insertion, so a plain `ignore` rule is the faithful fixture.
 
-    fn trivia_bits(src: &str) -> HashMap<String, bool> {
-        compute_trivia_rules(&super::super::parser::parse(src).expect("parse").rules)
+    fn ignore_bits(src: &str) -> HashMap<String, bool> {
+        compute_ignore_rules(&super::super::parser::parse(src).expect("parse").rules)
     }
 
     #[test]
-    fn no_trivia_rule_leaves_all_bits_false() {
-        let bits = trivia_bits("root = 'x'");
+    fn no_ignore_rule_leaves_all_bits_false() {
+        let bits = ignore_bits("root = 'x'");
         assert!(bits.values().all(|&b| !b));
     }
 
     #[test]
-    fn trivia_rule_marks_itself_not_root() {
-        let bits = trivia_bits("root = trivia 'x'\ntrivia = ' '*");
-        assert!(bits["trivia"]);
+    fn ignore_rule_marks_itself_not_root() {
+        let bits = ignore_bits("root = ignore 'x'\nignore = ' '*");
+        assert!(bits["ignore"]);
         assert!(!bits["root"]);
     }
 
     #[test]
-    fn trivia_cascade_reaches_transitive_callees() {
-        let bits = trivia_bits(
-            "root = trivia 'x'\n\
-             trivia = ws\n\
+    fn ignore_cascade_reaches_transitive_callees() {
+        let bits = ignore_bits(
+            "root = ignore 'x'\n\
+             ignore = ws\n\
              ws = (comment / ' ')*\n\
              comment = '#' (!'\\n' .)*",
         );
-        assert!(bits["trivia"] && bits["ws"] && bits["comment"]);
+        assert!(bits["ignore"] && bits["ws"] && bits["comment"]);
         assert!(!bits["root"]);
     }
 
     #[test]
-    fn trivia_cascade_skips_catch_bearing_rules() {
-        // `victim` is reachable from trivia but carries a catch, so it
+    fn ignore_cascade_skips_catch_bearing_rules() {
+        // `victim` is reachable from ignore but carries a catch, so it
         // is pinned out of the cascade — keeping its frame visible in
         // `pegdb recoveries explain`.
-        let bits = trivia_bits(
-            "root = trivia 'x'\n\
-             trivia = (victim / ' ')*\n\
+        let bits = ignore_bits(
+            "root = ignore 'x'\n\
+             ignore = (victim / ' ')*\n\
              victim = 'a' ^bad 'b'",
         );
-        assert!(bits["trivia"]);
+        assert!(bits["ignore"]);
         assert!(!bits["victim"], "catch-bearing rule must not cascade");
     }
 
     #[test]
-    fn trivia_cascade_terminates_on_recursion() {
-        let bits = trivia_bits(
-            "root = trivia 'x'\n\
-             trivia = ws\n\
+    fn ignore_cascade_terminates_on_recursion() {
+        let bits = ignore_bits(
+            "root = ignore 'x'\n\
+             ignore = ws\n\
              ws = (ws / ' ')*",
         );
-        assert!(bits["trivia"] && bits["ws"]);
+        assert!(bits["ignore"] && bits["ws"]);
     }
 
-    fn count_wb(pat: &Pattern) -> usize {
+    fn count_boundary(pat: &Pattern) -> usize {
         match pat {
-            Pattern::NonTerminal { name, .. } if name.as_str() == super::super::parser::WB_RULE => {
+            Pattern::NonTerminal { name, .. }
+                if name.as_str() == super::super::parser::BOUNDARY_RULE =>
+            {
                 1
             }
-            Pattern::Sequence { items, .. } => items.iter().map(count_wb).sum(),
-            Pattern::OrderedChoice { alts, .. } => alts.iter().map(count_wb).sum(),
+            Pattern::Sequence { items, .. } => items.iter().map(count_boundary).sum(),
+            Pattern::OrderedChoice { alts, .. } => alts.iter().map(count_boundary).sum(),
             Pattern::Repeat { inner, .. }
             | Pattern::RepeatOne { inner, .. }
             | Pattern::Optional { inner, .. }
             | Pattern::NotPredicate { inner, .. }
             | Pattern::AndPredicate { inner, .. }
             | Pattern::Capture { inner, .. }
-            | Pattern::Lenient { inner, .. } => count_wb(inner),
+            | Pattern::Lenient { inner, .. } => count_boundary(inner),
             Pattern::Catch {
                 inner, recovery, ..
-            } => count_wb(inner) + count_wb(recovery),
-            Pattern::InferBoundaryCatch { inner, .. } => count_wb(inner),
+            } => count_boundary(inner) + count_boundary(recovery),
+            Pattern::InferBoundaryCatch { inner, .. } => count_boundary(inner),
             _ => 0,
         }
     }
 
-    /// Mark a single rule `t` as a `reserved` rule, run `append_wb_check`, and
+    /// Mark a single rule `t` as a `reserved` rule, run `append_boundary_check`, and
     /// return the rewritten body.
     fn append_to(body: Pattern) -> Pattern {
         let mut rules = HashMap::new();
         rules.insert("t".to_string(), body);
         let mut g = Grammar::new(rules);
         g.percent_rules.insert("t".to_string());
-        append_wb_check(&mut g);
+        append_boundary_check(&mut g);
         g.rules.remove("t").unwrap()
     }
 
     #[test]
-    fn capture_less_charclass_choice_gets_one_trailing_wb() {
+    fn capture_less_charclass_choice_gets_one_trailing_boundary() {
         // `t: reserved = [ab] / [cd]` — capture-less but not all-literal, so the
-        // trie path is skipped and a single trailing `wb` follows the
+        // trie path is skipped and a single trailing `boundary` follows the
         // whole choice, not one per branch.
         let body = Pattern::choice(vec![
             Pattern::char_class(CharSet::from_chars(&['a', 'b'])),
             Pattern::char_class(CharSet::from_chars(&['c', 'd'])),
         ]);
-        assert_eq!(count_wb(&append_to(body)), 1);
+        assert_eq!(count_boundary(&append_to(body)), 1);
     }
 
     #[test]
     fn capture_less_literal_choice_factors_into_trie() {
         // `t: reserved = 'do' / 'double'` — all-literal, so it folds into a
         // longest-match trie: `do` shared, then `uble` accept vs the bare
-        // `do` accept. Two accepts → two `wb`s.
+        // `do` accept. Two accepts → two `boundary`s.
         let body = Pattern::choice(vec![Pattern::literal("do"), Pattern::literal("double")]);
         let trie = append_to(body);
-        assert_eq!(count_wb(&trie), 2);
+        assert_eq!(count_boundary(&trie), 2);
         // Source order must not matter: the scrambled set factors to the
         // identical trie (this is the structural #13 fix).
         let scrambled = append_to(Pattern::choice(vec![
@@ -2110,13 +2112,13 @@ mod tests {
     }
 
     #[test]
-    fn capture_choice_distributes_wb_per_branch() {
-        // `t: reserved = @k 'a' / @k 'b'` — each capture must keep `wb` inside
+    fn capture_choice_distributes_boundary_per_branch() {
+        // `t: reserved = @k 'a' / @k 'b'` — each capture must keep `boundary` inside
         // so a committed keyword can't leak through recovery.
         let body = Pattern::choice(vec![
             Pattern::capture("k", Pattern::literal("a")),
             Pattern::capture("k", Pattern::literal("b")),
         ]);
-        assert_eq!(count_wb(&append_to(body)), 2);
+        assert_eq!(count_boundary(&append_to(body)), 2);
     }
 }

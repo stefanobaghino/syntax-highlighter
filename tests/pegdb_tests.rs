@@ -348,16 +348,16 @@ fn recoveries_dump_carries_label_pos_rule_stack_literal() {
 }
 
 #[test]
-fn recoveries_dump_skips_trivia_in_leaf() {
-    // Same `trivia = ws` cascade story as `recoveries explain`: the
+fn recoveries_dump_skips_ignore_in_leaf() {
+    // Same `ignore = ws` cascade story as `recoveries explain`: the
     // displayed leaf (last element of `rule_stack`) must not be a
-    // trivia rule.
+    // ignore rule.
     let (code, stdout, _) = run_stdin(
         &["recoveries", "dump", "-g", "grammars/rust.peg"],
         b"fn ok() {}\n@@@ garbage @@@\nfn ok2() {}\n",
     );
     assert_eq!(code, 0);
-    let trivia_names = [
+    let ignore_names = [
         "\"ws\"",
         "\"spacing\"",
         "\"comment\"",
@@ -380,8 +380,8 @@ fn recoveries_dump_skips_trivia_in_leaf() {
             .map(str::trim)
             .unwrap_or("");
         assert!(
-            !trivia_names.contains(&leaf_token),
-            "displayed leaf must not be a trivia rule, got {leaf_token:?} in: {line}"
+            !ignore_names.contains(&leaf_token),
+            "displayed leaf must not be a ignore rule, got {leaf_token:?} in: {line}"
         );
         row_count += 1;
     }
@@ -510,13 +510,13 @@ fn recoveries_dump_clean_run_emits_no_sanity_rows() {
 // ---------- recoveries explain ----------
 
 #[test]
-fn recoveries_explain_skips_trivia_when_picking_leaf() {
+fn recoveries_explain_skips_ignore_when_picking_leaf() {
     let (code, stdout, _) = run_stdin(
         &["recoveries", "explain", "-g", "grammars/rust.peg"],
         b"fn ok() {}\n@@@ garbage @@@\nfn ok2() {}\n",
     );
     assert_eq!(code, 0);
-    let trivia_names = ["ws", "spacing", "comment", "line_comment", "block_comment"];
+    let ignore_names = ["ws", "spacing", "comment", "line_comment", "block_comment"];
     for line in stdout.lines() {
         if line.starts_with("[sanity]") || line == "no recoveries" {
             continue;
@@ -528,8 +528,8 @@ fn recoveries_explain_skips_trivia_when_picking_leaf() {
             .map(str::trim)
             .unwrap_or_else(|| panic!("could not parse leaf from: {line}"));
         assert!(
-            !trivia_names.contains(&leaf),
-            "displayed leaf must not be a trivia rule, got `{leaf}` in: {line}"
+            !ignore_names.contains(&leaf),
+            "displayed leaf must not be a ignore rule, got `{leaf}` in: {line}"
         );
     }
 }

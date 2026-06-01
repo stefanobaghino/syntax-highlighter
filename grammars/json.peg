@@ -2,7 +2,7 @@
 
 root = value
 
-trivia = \s*
+ignore = \s*
 
 value = @string string
       / @number number

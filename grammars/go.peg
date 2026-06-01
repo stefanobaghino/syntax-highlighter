@@ -26,16 +26,16 @@
 
 root = package_clause import_decl* (top_decl)*^
 
-trivia = (comment / \s)*
+ignore = (comment / \s)*
 
 # Word boundary for `%` reserved-word rules: a keyword can't be the
 # prefix of a longer identifier (Go spec identifier-continue).
-wb = !ident_body
+boundary = !ident_body
 
 # --- Keyword tokens --------------------------------------------------
 #
 # One `%` reserved-word rule per keyword, referenced wherever the
-# keyword appears so the `wb` boundary is applied uniformly: a keyword
+# keyword appears so the `boundary` boundary is applied uniformly: a keyword
 # can't fire on a longer identifier that starts with it (`funcx`).
 kw_package: reserved = @keyword 'package'
 kw_import: reserved = @keyword 'import'
@@ -363,7 +363,7 @@ expr_no_compound_list = expr_no_compound (@punctuation ',' expr_no_compound)*
 
 literal = string_lit / number_lit / rune_lit / lit_const
 
-# Predeclared constants as a `%?` preferred-word alternation so the `wb`
+# Predeclared constants as a `%?` preferred-word alternation so the `boundary`
 # boundary keeps `trueish` / `nilish` from matching the prefix.
 lit_const: preferred = @constant 'true' / @constant 'false'
                      / @constant 'nil' / @constant 'iota'
@@ -420,7 +420,7 @@ predeclared_fn: preferred = 'append' / 'cap' / 'close' / 'complex' / 'copy'
 # --- Whitespace / comments / semicolon handling ----------------------
 
 # Go uses newlines as statement terminators (lexer-inserted `;`); here
-# we accept optional explicit `;` and let `trivia` eat whitespace.
+# we accept optional explicit `;` and let `ignore` eat whitespace.
 # `~`-marked: ASI absorption is intentional everywhere this is called.
 opt_semi: partial = @punctuation ';'?
 

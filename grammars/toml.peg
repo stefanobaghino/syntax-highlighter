@@ -1,6 +1,6 @@
 # TOML v1.0 grammar with highlight annotations.
 #
-# TOML defines no `trivia` rule, so trivia auto-insertion stays off
+# TOML defines no `ignore` rule, so ignore auto-insertion stays off
 # grammar-wide. TOML is line-oriented — entries are newline-separated
 # via `entry_sep`, key-value pairs can't span lines, and arrays /
 # inline tables have their own whitespace disciplines. An
@@ -24,7 +24,7 @@
 #   - inf / nan are @constant (like true/false), not @number.
 
 # `blank`: whitespace (incl. newlines) and comments, threaded by hand
-# — never auto-injected (TOML has no `trivia` rule). Each atom
+# — never auto-injected (TOML has no `ignore` rule). Each atom
 # consumes at least one byte, so the enclosing '*' cannot infinite-loop.
 root = blank (entry (entry_sep entry)*)? blank
 

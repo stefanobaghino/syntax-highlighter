@@ -55,11 +55,11 @@
 
 root = (statement stmt_sep?)*^[;]
 
-trivia = (comment / \s)*
+ignore = (comment / \s)*
 # Word boundary for `%` reserved-word rules: a keyword can't be the
 # prefix of a longer identifier. Matches the full identifier-continue
 # class (`ident_cont`, Unicode included).
-wb = !ident_cont
+boundary = !ident_cont
 stmt_sep = @punctuation ';'
 statement = explain_stmt / statement_body
 statement_body = select_stmt
@@ -523,7 +523,7 @@ blob_body: atomic = [xX] "'" [\da-fA-F]* "'"
 string_lit: atomic = @string string_body
 string_body: atomic = "'" ("''" / !"'" .)* "'"
 
-# Hex is a `%` rule so the compiler appends the `wb` boundary: hex
+# Hex is a `%` rule so the compiler appends the `boundary` boundary: hex
 # digits include a-f, so a hex run can butt against identifier chars
 # (`0x1Fg` must fall back to `0` + `x1Fg`, not lex `0x1F`). float/int
 # use `\d`, which can't, so they carry no boundary.
@@ -563,7 +563,7 @@ backtick_id: atomic = '`' ('``' / !'`' !\R .)* '`'
 bracket_id: atomic = '[' .. (']' / \R) ']'
 
 # --- Keywords (case-insensitive) --------------------------------------
-# Each kw_* is a `%` reserved-word rule: the compiler appends a `wb`
+# Each kw_* is a `%` reserved-word rule: the compiler appends a `boundary`
 # boundary call inside the @keyword capture so `SELECT` doesn't match
 # the prefix of `SELECTED`. The `i"…"` literal sugar gives
 # case-insensitive matching at the parser level — see src/pegc/README.md.

@@ -1773,7 +1773,7 @@ fn definition_lenient_suppresses_lint_at_every_call_site() {
 fn definition_lenient_marker_is_runtime_transparent() {
     // The `name: partial =` wrap compiles to the same bytecode as the
     // bare form. The marker rides a non-special helper rule — `root`
-    // (like `trivia` / `wb`) rejects every ascription.
+    // (like `ignore` / `boundary`) rejects every ascription.
     let plain = parse("root = r\nr = 'x'+")
         .expect("parse plain")
         .compile()
@@ -1885,15 +1885,15 @@ fn compile_errors_on_uninferable_boundary() {
 }
 
 #[test]
-fn auto_trivia_handles_inter_repeat_whitespace() {
-    // The rewriter prepends a trivia call to each Repeat iteration so
+fn auto_ignore_handles_inter_repeat_whitespace() {
+    // The rewriter prepends a ignore call to each Repeat iteration so
     // `(',' x)*` accepts whitespace between iterations, not only on
-    // the first comma (which the outer Sequence's inter-item trivia
+    // the first comma (which the outer Sequence's inter-item ignore
     // already covers). Without the prepend, ` , 2 , 3` would fail on
     // the second iteration's leading space.
     let prog = parse(
         "root   = 'x' (',' 'x')*\n\
-         trivia = ' '*",
+         ignore = ' '*",
     )
     .expect("parse")
     .compile()
@@ -2098,7 +2098,7 @@ fn pattern_nodes_carry_parser_set_spans_for_each_variant_family() {
     assert_eq!(*lit_span, Span { line: 1, col: 12 });
 }
 
-// ---- `reserved` ascription + `wb` special rule --------------------
+// ---- `reserved` ascription + `boundary` special rule --------------------
 
 /// Compile a grammar from source and run it, returning the captures
 /// paired with their resolved kind name and matched text.
@@ -2121,27 +2121,27 @@ fn run_grammar<'a>(src: &str, input: &'a str) -> Vec<(String, &'a str)> {
 
 #[test]
 fn reserved_ascription_populates_percent_and_atomic_sets() {
-    let g =
-        parse("root = r\ntrivia = (\\s)*\nwb = !'x'\nr: reserved = @keyword 'if'").expect("parse");
+    let g = parse("root = r\nignore = (\\s)*\nboundary = !'x'\nr: reserved = @keyword 'if'")
+        .expect("parse");
     assert!(
         g.percent_rules.contains("r"),
         "`r: reserved` should be a percent rule"
     );
     assert!(
         g.atomic_rules.contains("r"),
-        "a `reserved` rule is also atomic (trivia is not auto-inserted inside it)"
+        "a `reserved` rule is also atomic (ignore is not auto-inserted inside it)"
     );
 }
 
 #[test]
 fn ascription_on_special_rule_is_rejected() {
     // The three special rules — the start rule `root` and the two
-    // auto-insertion targets `trivia` (whitespace) and `wb` (word
+    // auto-insertion targets `ignore` (whitespace) and `boundary` (word
     // boundary) — are structural slots, not lexable tokens: every
     // ascription (`partial`, `atomic`, `reserved`, `preferred`) is
     // rejected on all of them. Disabling whitespace auto-insertion is
-    // done by omitting `trivia`, not by ascribing it.
-    for name in ["root", "trivia", "wb"] {
+    // done by omitting `ignore`, not by ascribing it.
+    for name in ["root", "ignore", "boundary"] {
         for asc in ["partial", "atomic", "reserved", "preferred"] {
             let src = format!("{name}: {asc} = 'a'");
             let err = parse(&src).expect_err("an ascription on a special rule must error");
@@ -2150,11 +2150,11 @@ fn ascription_on_special_rule_is_rejected() {
                 "{src:?}: unexpected error {:?}",
                 err.message
             );
-            // Only `trivia` carries the auto-insertion-disable hint.
+            // Only `ignore` carries the auto-insertion-disable hint.
             assert_eq!(
-                err.message.contains("omit `trivia`"),
-                name == "trivia",
-                "{src:?}: hint presence should track the `trivia` name"
+                err.message.contains("omit `ignore`"),
+                name == "ignore",
+                "{src:?}: hint presence should track the `ignore` name"
             );
         }
     }
@@ -2164,7 +2164,7 @@ fn ascription_on_special_rule_is_rejected() {
 fn partial_composes_with_reserved() {
     // `partial reserved` combines the leniency marker with the
     // reserved-word ascription (partial written first).
-    let src = "root = r\ntrivia = (\\s)*\nwb = !'x'\nr: partial reserved = @keyword 'if'";
+    let src = "root = r\nignore = (\\s)*\nboundary = !'x'\nr: partial reserved = @keyword 'if'";
     let g = parse(src).unwrap_or_else(|e| panic!("parse {src:?}: {}", e.message));
     assert!(
         g.percent_rules.contains("r"),
@@ -2177,13 +2177,13 @@ fn partial_composes_with_reserved() {
 }
 
 #[test]
-fn percent_rule_appends_wb_inside_capture() {
+fn percent_rule_appends_boundary_inside_capture() {
     // `kw_if: reserved` must match the keyword `if` but not fire on
     // `ifx`, and (the leak guard) must leave no stray `if` capture
     // behind on `ifx`.
     let src = "root = (token)*^\n\
-               trivia = (\\s)*\n\
-               wb = !ident_body\n\
+               ignore = (\\s)*\n\
+               boundary = !ident_body\n\
                token = kw_if / @variable ident\n\
                kw_if: reserved = @keyword 'if'\n\
                ident: atomic = [a-z] ident_body*\n\
@@ -2199,13 +2199,16 @@ fn percent_rule_appends_wb_inside_capture() {
 }
 
 #[test]
-fn percent_without_wb_errors_undefined_rule() {
-    // A `reserved` rule emits a `NonTerminal("wb")`; with no `wb`
-    // defined the reference surfaces as `UndefinedRule("wb")`.
-    let g = parse("root = r\ntrivia = (\\s)*\nr: reserved = @keyword 'if'").expect("parse");
-    match g.compile().expect_err("compile should fail without wb") {
-        syntax_highlighter::pegc::CompileError::UndefinedRule(name) => assert_eq!(name, "wb"),
-        other => panic!("expected UndefinedRule(\"wb\"), got: {other:?}"),
+fn percent_without_boundary_errors_undefined_rule() {
+    // A `reserved` rule emits a `NonTerminal("boundary")`; with no `boundary`
+    // defined the reference surfaces as `UndefinedRule("boundary")`.
+    let g = parse("root = r\nignore = (\\s)*\nr: reserved = @keyword 'if'").expect("parse");
+    match g
+        .compile()
+        .expect_err("compile should fail without boundary")
+    {
+        syntax_highlighter::pegc::CompileError::UndefinedRule(name) => assert_eq!(name, "boundary"),
+        other => panic!("expected UndefinedRule(\"boundary\"), got: {other:?}"),
     }
 }
 
@@ -2222,9 +2225,10 @@ fn reserved_and_atomic_combined_is_parse_error() {
 }
 
 #[test]
-fn wb_must_sit_in_the_reserved_slots() {
-    // `wb` after a non-reserved rule (not contiguous with `root`) errors.
-    let err = parse("root = r\nr = 'a'\nwb = !'x'").expect_err("misplaced wb must error");
+fn boundary_must_sit_in_the_reserved_slots() {
+    // `boundary` after a non-reserved rule (not contiguous with `root`) errors.
+    let err =
+        parse("root = r\nr = 'a'\nboundary = !'x'").expect_err("misplaced boundary must error");
     assert!(
         err.message.contains("reserved slots"),
         "unexpected error: {}",
@@ -2233,16 +2237,16 @@ fn wb_must_sit_in_the_reserved_slots() {
 }
 
 #[test]
-fn wb_and_trivia_compose_in_either_order() {
+fn boundary_and_ignore_compose_in_either_order() {
     // Both orderings of the two reserved slots after `root` are accepted.
-    parse("root = 'a'\ntrivia = (\\s)*\nwb = !'x'").expect("trivia then wb");
-    parse("root = 'a'\nwb = !'x'\ntrivia = (\\s)*").expect("wb then trivia");
+    parse("root = 'a'\nignore = (\\s)*\nboundary = !'x'").expect("ignore then boundary");
+    parse("root = 'a'\nboundary = !'x'\nignore = (\\s)*").expect("boundary then ignore");
 }
 
 #[test]
-fn wb_without_trivia_is_valid() {
-    // `wb` does not require `trivia`; a grammar may define only `wb`.
-    parse("root = r\nwb = !'x'\nr: reserved = @keyword 'if'")
+fn boundary_without_ignore_is_valid() {
+    // `boundary` does not require `ignore`; a grammar may define only `boundary`.
+    parse("root = r\nboundary = !'x'\nr: reserved = @keyword 'if'")
         .expect("parse")
         .compile()
         .expect("compile");
@@ -2254,9 +2258,9 @@ fn wb_without_trivia_is_valid() {
 fn preferred_ascription_populates_preferred_and_percent_sets() {
     // `r: preferred` is a preferred-word rule: it lands in
     // `preferred_rules`, and also in `percent_rules` + `atomic_rules`
-    // (it still gets the `wb` boundary; it differs from `reserved` only
+    // (it still gets the `boundary` boundary; it differs from `reserved` only
     // in which synthesized set it feeds).
-    let g = parse("root = r\ntrivia = (\\s)*\nwb = !'x'\nr: preferred = @keyword 'async'")
+    let g = parse("root = r\nignore = (\\s)*\nboundary = !'x'\nr: preferred = @keyword 'async'")
         .expect("parse");
     assert!(
         g.preferred_rules.contains("r"),
@@ -2264,7 +2268,7 @@ fn preferred_ascription_populates_preferred_and_percent_sets() {
     );
     assert!(
         g.percent_rules.contains("r"),
-        "`r: preferred` is still a percent rule (gets `wb`)"
+        "`r: preferred` is still a percent rule (gets `boundary`)"
     );
     assert!(
         g.atomic_rules.contains("r"),
@@ -2307,7 +2311,7 @@ fn defining_synthesized_rule_is_parse_error() {
 fn reserved_preferred_conflict_errors() {
     // The same literal marked `reserved` in one rule and `preferred`
     // in another is a contradiction — compile rejects it.
-    let err = parse("root = 'x'\nwb = !'y'\na: reserved = 'int'\nb: preferred = 'int'")
+    let err = parse("root = 'x'\nboundary = !'y'\na: reserved = 'int'\nb: preferred = 'int'")
         .expect("parse")
         .compile()
         .expect_err("conflicting reserved/preferred must error");
@@ -2327,8 +2331,8 @@ fn synthesized_reserved_trie_and_preferred_membership() {
     // (`len`) is excluded from `reserved` and stays usable as an
     // identifier.
     let src = "root = (token)*^\n\
-               trivia = (\\s)*\n\
-               wb = !ident_body\n\
+               ignore = (\\s)*\n\
+               boundary = !ident_body\n\
                token = @keyword kw_word / @variable ident\n\
                kw_word: reserved = 'int' / 'int8'\n\
                pre: preferred = 'len'\n\
