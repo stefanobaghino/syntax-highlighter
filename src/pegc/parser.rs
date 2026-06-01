@@ -40,8 +40,8 @@ pub const ROOT_RULE: &str = "root";
 /// Reserved rule name for the (optional) auto-insertion target. When a
 /// grammar defines a rule named [`TRIVIA_RULE`], the compiler injects a
 /// call to it between consecutive `Sequence` items in every non-atomic
-/// rule's body. Marking the rule atomic (`*trivia <- …`) keeps the
-/// definition but disables auto-insertion grammar-wide.
+/// rule's body. The rule carries no qualifiers; auto-insertion is
+/// disabled grammar-wide by omitting `trivia`, not by marking it.
 pub const TRIVIA_RULE: &str = "trivia";
 
 /// Reserved rule name for the (optional) word-boundary target. A rule
@@ -79,9 +79,9 @@ pub struct Grammar {
     /// Names of rules marked atomic with the `*name <- body` sigil. The
     /// auto-insertion rewriter skips these rules: `Sequence` items inside
     /// an atomic body don't get a synthesized `trivia` call spliced
-    /// between them. `*trivia <- …` (the auto-insertion target itself
-    /// being atomic) is the special case that disables auto-insertion
-    /// grammar-wide.
+    /// between them. The `trivia` rule itself never appears here — it
+    /// carries no qualifiers; auto-insertion is disabled by omitting
+    /// the rule, not by marking it.
     pub atomic_rules: HashSet<String>,
     /// Names of rules marked with the `%name <- body` reserved-word
     /// sigil (and the `%?name <- body` preferred-word sigil, which is a
@@ -167,8 +167,7 @@ impl Grammar {
     ///    `^^lbl B` (or `^^lbl`); mark intentional leniency with `~`
     ///    at the call site or `~name <- body` at the rule definition.
     /// 3. Inject auto-trivia calls into every non-atomic rule's body
-    ///    (no-op when the grammar has no `trivia` rule or when
-    ///    `trivia` itself is atomic).
+    ///    (no-op when the grammar has no `trivia` rule).
     /// 4. Wrap `root`'s body with `trivia? body trivia? !.` (the
     ///    `trivia?` calls are present iff auto-insertion is active).
     /// 5. Emit bytecode via `compile_rules`.
@@ -319,8 +318,8 @@ impl<'a> Parser<'a> {
             // The atomic marker `*name <- body` (sibling of `~`) opts
             // the rule out of trivia auto-insertion: the rewriter walks
             // the body but does not splice `trivia` between `Sequence`
-            // items. `*trivia <- …` is the special case that disables
-            // auto-insertion grammar-wide.
+            // items. The `trivia` rule carries no qualifiers; omitting it
+            // (not marking it) is what disables auto-insertion.
             //
             // The reserved-word marker `%name <- body` implies atomic and
             // additionally appends a `wb` boundary call inside the rule's
@@ -370,6 +369,7 @@ impl<'a> Parser<'a> {
                         .into(),
                 ));
             }
+            let definition_lenient = lenient_span.is_some();
             let name_byte = self.pos;
             let name = self.parse_ident()?;
             self.skip_ws();
@@ -394,8 +394,25 @@ impl<'a> Parser<'a> {
                      and cannot be defined explicitly; reference it (e.g. `!{name}`) instead"
                 )));
             }
+            // The auto-insertion target carries no qualifiers: `*`, `~`,
+            // `%`, and `%?` on `trivia` are all rejected. To disable
+            // auto-insertion, omit the `trivia` rule and thread whitespace
+            // through a plainly-named rule instead.
+            if name == TRIVIA_RULE
+                && (definition_atomic
+                    || definition_percent
+                    || definition_preferred
+                    || definition_lenient)
+            {
+                return Err(self.err(
+                    "the `trivia` rule cannot carry a qualifier (`*`, `~`, `%`, `%?`); to \
+                     disable auto-insertion, omit `trivia` and thread whitespace through a \
+                     plainly-named rule"
+                        .into(),
+                ));
+            }
             if definition_percent {
-                if name == ROOT_RULE || name == TRIVIA_RULE || name == WB_RULE {
+                if name == ROOT_RULE || name == WB_RULE {
                     return Err(self.err(format!(
                         "the `%` / `%?` reserved-word qualifier cannot be applied to the reserved rule `{name}`"
                     )));

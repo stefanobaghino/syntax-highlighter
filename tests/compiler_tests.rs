@@ -1880,94 +1880,6 @@ fn compile_errors_on_uninferable_boundary() {
     );
 }
 
-// ---- Trivia reserved-rule cascade --------------------------------
-
-fn trivia_idx(program: &syntax_highlighter::pegvm::Program, name: &str) -> usize {
-    program
-        .rule_names
-        .iter()
-        .position(|n| n == name)
-        .unwrap_or_else(|| {
-            panic!(
-                "rule `{name}` not indexed; rule_names = {:?}",
-                program.rule_names
-            )
-        })
-}
-
-#[test]
-fn trivia_root_marks_itself_and_no_root_leaves_bits_false() {
-    // Without a `trivia` rule the bits are all false.
-    let no_root = parse("root <- 'x'")
-        .expect("parse")
-        .compile()
-        .expect("compile");
-    assert!(no_root.rule_is_trivia.iter().all(|b| !b));
-
-    // The trivia rule itself gets the bit when present. `*trivia`
-    // disables auto-insertion, so explicit `trivia` calls inside
-    // `root` remain in the body.
-    let with_root = parse("root <- trivia 'x'\n*trivia <- ' '*")
-        .expect("parse")
-        .compile()
-        .expect("compile");
-    assert!(with_root.rule_is_trivia[trivia_idx(&with_root, "trivia")]);
-    assert!(!with_root.rule_is_trivia[trivia_idx(&with_root, "root")]);
-}
-
-#[test]
-fn trivia_cascades_to_transitive_callees() {
-    let program = parse(
-        "root    <- trivia 'x'\n\
-         *trivia <- ws\n\
-         ws      <- (comment / ' ')*\n\
-         comment <- '#' (!'\\n' .)*",
-    )
-    .expect("parse")
-    .compile()
-    .expect("compile");
-    assert!(program.rule_is_trivia[trivia_idx(&program, "trivia")]);
-    assert!(program.rule_is_trivia[trivia_idx(&program, "ws")]);
-    assert!(program.rule_is_trivia[trivia_idx(&program, "comment")]);
-    assert!(!program.rule_is_trivia[trivia_idx(&program, "root")]);
-}
-
-#[test]
-fn trivia_cascade_skips_catch_bearing_rules() {
-    // `victim` is reached from the trivia subgraph but has a catch
-    // in its body. The cascade pins it out so the catch's frame stays
-    // visible in `pegdb recoveries explain`.
-    let program = parse(
-        "root    <- trivia 'x'\n\
-         *trivia <- (victim / ' ')*\n\
-         victim  <- 'a' ^bad 'b'",
-    )
-    .expect("parse")
-    .compile()
-    .expect("compile");
-    assert!(program.rule_is_trivia[trivia_idx(&program, "trivia")]);
-    assert!(
-        !program.rule_is_trivia[trivia_idx(&program, "victim")],
-        "rules containing a catch must not cascade to trivia"
-    );
-}
-
-#[test]
-fn trivia_cascade_handles_recursion() {
-    // Trivia subgraph with a self-cycle; fixpoint should terminate
-    // and mark every reachable rule.
-    let program = parse(
-        "root    <- trivia 'x'\n\
-         *trivia <- ws\n\
-         ws      <- (ws / ' ')*",
-    )
-    .expect("parse")
-    .compile()
-    .expect("compile");
-    assert!(program.rule_is_trivia[trivia_idx(&program, "trivia")]);
-    assert!(program.rule_is_trivia[trivia_idx(&program, "ws")]);
-}
-
 #[test]
 fn auto_trivia_handles_inter_repeat_whitespace() {
     // The rewriter prepends a trivia call to each Repeat iteration so
@@ -2217,6 +2129,29 @@ fn percent_sigil_populates_percent_and_atomic_sets() {
 }
 
 #[test]
+fn qualifier_on_trivia_is_rejected() {
+    // `trivia` is the auto-insertion target and carries no qualifiers;
+    // disabling auto-insertion is done by omitting the rule.
+    for src in [
+        "root <- trivia\n*trivia <- (\\s)*",
+        "root <- trivia\n~trivia <- (\\s)*",
+        "root <- trivia\n%trivia <- (\\s)*",
+        "root <- trivia\n%?trivia <- (\\s)*",
+    ] {
+        let err = match parse(src) {
+            Ok(_) => panic!("{src:?} should be rejected"),
+            Err(e) => e,
+        };
+        assert!(
+            err.message
+                .contains("the `trivia` rule cannot carry a qualifier"),
+            "{src:?}: unexpected error {:?}",
+            err.message
+        );
+    }
+}
+
+#[test]
 fn percent_composes_with_lenient() {
     // `~%name` and `%~name` both parse: `~` (lenient) and `%`
     // (reserved-word) are independent markers.
@@ -2278,7 +2213,9 @@ fn percent_and_atomic_combined_is_parse_error() {
 
 #[test]
 fn percent_on_reserved_rule_is_parse_error() {
-    for name in ["root", "trivia", "wb"] {
+    // `trivia` is covered by `qualifier_on_trivia_is_rejected` (it has
+    // its own all-qualifier rejection with a distinct message).
+    for name in ["root", "wb"] {
         let src = format!("%{name} <- 'a'");
         let err = parse(&src).expect_err("`%` on a reserved rule must error");
         assert!(
@@ -2348,7 +2285,9 @@ fn preferred_and_atomic_combined_is_parse_error() {
 
 #[test]
 fn preferred_on_reserved_rule_is_parse_error() {
-    for name in ["root", "trivia", "wb"] {
+    // `trivia` is covered by `qualifier_on_trivia_is_rejected` (it has
+    // its own all-qualifier rejection with a distinct message).
+    for name in ["root", "wb"] {
         let src = format!("%?{name} <- 'a'");
         let err = parse(&src).expect_err("`%?` on a reserved rule must error");
         assert!(

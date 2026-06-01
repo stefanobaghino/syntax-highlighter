@@ -1490,12 +1490,12 @@ fn body_contains_catch(pat: &Pattern) -> bool {
 }
 
 /// True iff the grammar has an active auto-insertion target: a rule
-/// named `trivia` that isn't marked atomic. Both
-/// [`inject_auto_trivia`] and [`wrap_root`] consult this; on `false`
-/// they no-op (no inter-Sequence splicing, no `trivia?` siblings in the
-/// root wrap).
+/// named `trivia`. Both [`inject_auto_trivia`] and [`wrap_root`]
+/// consult this; on `false` they no-op (no inter-Sequence splicing, no
+/// `trivia?` siblings in the root wrap). The `trivia` rule carries no
+/// qualifiers, so omitting it is the only way to disable auto-insertion.
 fn auto_insertion_active(grammar: &Grammar) -> bool {
-    grammar.rules.contains_key(TRIVIA_ROOT_RULE) && !grammar.atomic_rules.contains(TRIVIA_ROOT_RULE)
+    grammar.rules.contains_key(TRIVIA_ROOT_RULE)
 }
 
 /// AST-level rewrite: in every non-atomic rule's body, splice a
@@ -1505,10 +1505,10 @@ fn auto_insertion_active(grammar: &Grammar) -> bool {
 /// `lint_partial_match` and the FOLLOW-driven `^^lbl` resolver so both
 /// still see the author's original body.
 ///
-/// No-op when the grammar has no `trivia` rule, or when `trivia` itself
-/// is marked atomic (the `*trivia <- …` grammar-wide opt-out). The
-/// `trivia` rule itself is also exempt — injecting trivia inside its
-/// own body would recurse the runtime indefinitely.
+/// No-op when the grammar has no `trivia` rule (the grammar-wide
+/// opt-out — `trivia` carries no qualifiers). The `trivia` rule itself
+/// is exempt from injection: splicing trivia inside its own body would
+/// recurse the runtime indefinitely.
 ///
 /// The walker descends transparently through `Choice`, `Optional`,
 /// `Capture`, `Catch`, `Lenient`, `AndPredicate`, `NotPredicate`, and
@@ -1608,8 +1608,8 @@ fn inject_trivia_in(pat: &mut Pattern) {
 /// pick up trivia injection.
 ///
 /// `trivia?` is included iff auto-insertion is active. With no `trivia`
-/// rule (or with `*trivia`), the wrap collapses to `body !.` — still
-/// supplying the EOF assertion uniformly.
+/// rule the wrap collapses to `body !.` — still supplying the EOF
+/// assertion uniformly.
 pub fn wrap_root(grammar: &mut Grammar) {
     let active = auto_insertion_active(grammar);
     let Some(body) = grammar.rules.remove(super::parser::ROOT_RULE) else {
@@ -1984,6 +1984,65 @@ fn entry_display(entry: &[CharSet]) -> String {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    // ---- trivia cascade (compute_trivia_rules) -----------------------
+    //
+    // Exercised directly on the parsed (pre-injection) rule map: the
+    // cascade is forward reachability from `trivia`, independent of
+    // auto-insertion, so a plain `trivia` rule is the faithful fixture.
+
+    fn trivia_bits(src: &str) -> HashMap<String, bool> {
+        compute_trivia_rules(&super::super::parser::parse(src).expect("parse").rules)
+    }
+
+    #[test]
+    fn no_trivia_rule_leaves_all_bits_false() {
+        let bits = trivia_bits("root <- 'x'");
+        assert!(bits.values().all(|&b| !b));
+    }
+
+    #[test]
+    fn trivia_rule_marks_itself_not_root() {
+        let bits = trivia_bits("root <- trivia 'x'\ntrivia <- ' '*");
+        assert!(bits["trivia"]);
+        assert!(!bits["root"]);
+    }
+
+    #[test]
+    fn trivia_cascade_reaches_transitive_callees() {
+        let bits = trivia_bits(
+            "root <- trivia 'x'\n\
+             trivia <- ws\n\
+             ws <- (comment / ' ')*\n\
+             comment <- '#' (!'\\n' .)*",
+        );
+        assert!(bits["trivia"] && bits["ws"] && bits["comment"]);
+        assert!(!bits["root"]);
+    }
+
+    #[test]
+    fn trivia_cascade_skips_catch_bearing_rules() {
+        // `victim` is reachable from trivia but carries a catch, so it
+        // is pinned out of the cascade — keeping its frame visible in
+        // `pegdb recoveries explain`.
+        let bits = trivia_bits(
+            "root <- trivia 'x'\n\
+             trivia <- (victim / ' ')*\n\
+             victim <- 'a' ^bad 'b'",
+        );
+        assert!(bits["trivia"]);
+        assert!(!bits["victim"], "catch-bearing rule must not cascade");
+    }
+
+    #[test]
+    fn trivia_cascade_terminates_on_recursion() {
+        let bits = trivia_bits(
+            "root <- trivia 'x'\n\
+             trivia <- ws\n\
+             ws <- (ws / ' ')*",
+        );
+        assert!(bits["trivia"] && bits["ws"]);
+    }
 
     fn count_wb(pat: &Pattern) -> usize {
         match pat {

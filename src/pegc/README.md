@@ -43,9 +43,9 @@ name2 <-  body2
   terminal captures), and `%?name <-` for the preferred-word marker (a
   sibling of `%` for identifier-eligible distinguished tokens). `~`
   composes with `*` / `%` / `%?` (`~*name`, `%~name`, …); `*` and
-  `%` / `%?` are mutually exclusive — both make a rule atomic.
-  `*trivia <- …` is the special case that disables auto-insertion
-  grammar-wide.
+  `%` / `%?` are mutually exclusive — both make a rule atomic. The
+  `trivia` rule carries no qualifiers; auto-insertion is disabled by
+  omitting `trivia`, not by marking it.
 - Two special rules, **`reserved`** and **`preferred`**, are
   *synthesized* by the compiler from the `%` / `%?` rules (see below) —
   a grammar references them (`!reserved`) but never defines them.
@@ -530,13 +530,13 @@ Three rule names get compile-time treatment:
 
 - **`root`** — the start rule (mandatory). The compiler wraps its
   body as `trivia? root_body trivia? !.` so end-of-input is always
-  asserted, and a `trivia` rule (when present and non-atomic) pads
-  the leading and trailing whitespace. The wrap means a grammar
+  asserted, and a `trivia` rule (when present) pads the leading and
+  trailing whitespace. The wrap means a grammar
   source like `root <- value` parses whole inputs, not just longest
   prefixes — the implicit `!.` rejects trailing junk.
 
-- **`trivia`** — the optional auto-insertion target. When defined
-  *and* non-atomic, the compiler injects a call to `trivia` between
+- **`trivia`** — the optional auto-insertion target. When defined,
+  the compiler injects a call to `trivia` between
   every pair of consecutive items in every non-atomic rule's
   `Sequence`, plus prepends one to each iteration of `*` / `+`.
   This replaces the explicit `ws` / `spacing` calls that used to
@@ -560,10 +560,12 @@ Three rule names get compile-time treatment:
 
   Grammars without a `trivia` rule (e.g. indent-sensitive shapes)
   get no auto-insertion and no trivia-padding wrap on `root`; the
-  EOF assertion is still applied. `*trivia <- …` disables
-  auto-insertion grammar-wide without removing the rule — useful
-  when the diagnostic cascade is still wanted but the trivia rule's
-  shape (e.g. line-sensitive newline handling) can't be auto-spliced.
+  EOF assertion is still applied. To keep a callable whitespace rule
+  while leaving auto-insertion off, name it anything other than
+  `trivia` and thread it by hand — the `trivia` rule carries no
+  qualifiers, so its mere presence turns auto-insertion on. Such a
+  hand-threaded rule sits outside the diagnostic cascade, which is
+  keyed on the name `trivia`.
 
   *Why the per-iteration prepend matters.* The auto-insertion
   splices `trivia` at every inter-item boundary of a `Sequence`, but
