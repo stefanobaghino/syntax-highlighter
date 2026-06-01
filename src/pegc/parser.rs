@@ -45,24 +45,25 @@ pub const ROOT_RULE: &str = "root";
 pub const TRIVIA_RULE: &str = "trivia";
 
 /// Reserved rule name for the (optional) word-boundary target. A rule
-/// marked with the `%name = …` sigil is compiled atomic and has a
-/// trailing call to [`WB_RULE`] appended inside its terminal captures by
+/// ascribed `reserved` is compiled atomic and has a trailing call to
+/// [`WB_RULE`] appended inside its terminal captures by
 /// [`append_wb_check`](super::analysis::append_wb_check), so a keyword
 /// can't fire on the prefix of a longer identifier. Defining `wb` is
-/// only required when at least one `%` rule exists; like [`TRIVIA_RULE`]
-/// it must sit in the reserved slots immediately after [`ROOT_RULE`].
+/// only required when at least one `reserved` rule exists; like
+/// [`TRIVIA_RULE`] it must sit in the reserved slots immediately after
+/// [`ROOT_RULE`].
 pub const WB_RULE: &str = "wb";
 
 /// Compiler-generated rule name for the reserved-word set. Synthesized
 /// by [`synthesize_reserved_preferred`](super::analysis::synthesize_reserved_preferred)
-/// from the literals of every `%` rule minus every `%?` rule, so a
-/// grammar can write `!reserved` to bar keywords from identifier
-/// position without hand-maintaining the list. Authors may *reference*
-/// it but not *define* it — the parser rejects a definition.
+/// from the literals of every `reserved` rule minus every `preferred`
+/// rule, so a grammar can write `!reserved` to bar keywords from
+/// identifier position without hand-maintaining the list. Authors may
+/// *reference* it but not *define* it — the parser rejects a definition.
 pub const RESERVED_RULE: &str = "reserved";
 
 /// Compiler-generated rule name for the preferred-word set: the union
-/// of every `%?` rule's literals (identifier-eligible distinguished
+/// of every `preferred` rule's literals (identifier-eligible distinguished
 /// tokens, e.g. Go predeclared `int` / `len`). Synthesized alongside
 /// [`RESERVED_RULE`]; like it, authors may reference but not define it.
 pub const PREFERRED_RULE: &str = "preferred";
@@ -76,25 +77,24 @@ const MAX_REPEAT_COUNT: usize = 1024;
 #[derive(Debug, Clone)]
 pub struct Grammar {
     pub rules: HashMap<String, Pattern>,
-    /// Names of rules marked atomic with the `*name = body` sigil. The
-    /// auto-insertion rewriter skips these rules: `Sequence` items inside
-    /// an atomic body don't get a synthesized `trivia` call spliced
-    /// between them. The `trivia` rule itself never appears here — it
-    /// carries no qualifiers; auto-insertion is disabled by omitting
-    /// the rule, not by marking it.
+    /// Names of rules ascribed `atomic`. The auto-insertion rewriter
+    /// skips these rules: `Sequence` items inside an atomic body don't
+    /// get a synthesized `trivia` call spliced between them. The `trivia`
+    /// rule itself never appears here — it carries no ascriptions;
+    /// auto-insertion is disabled by omitting the rule, not by ascribing
+    /// it.
     pub atomic_rules: HashSet<String>,
-    /// Names of rules marked with the `%name = body` reserved-word
-    /// sigil (and the `%?name = body` preferred-word sigil, which is a
-    /// subset — every `%?` rule is also here so it still gets a
+    /// Names of rules ascribed `reserved` (and `preferred`, which is a
+    /// subset — every `preferred` rule is also here so it still gets a
     /// boundary). Each such rule is also in `atomic_rules` (so trivia is
     /// not auto-inserted inside it); membership here additionally drives
     /// [`append_wb_check`](super::analysis::append_wb_check), which
     /// appends a [`WB_RULE`] call inside the rule's terminal captures.
     pub percent_rules: HashSet<String>,
-    /// Names of rules marked with the `%?name = body` preferred-word
-    /// sigil — identifier-eligible distinguished tokens (Go predeclared
-    /// `int` / `len`, JS contextual `async` / `let`). A strict subset of
-    /// `percent_rules`: a `%?` rule still gets the [`WB_RULE`] boundary,
+    /// Names of rules ascribed `preferred` — identifier-eligible
+    /// distinguished tokens (Go predeclared `int` / `len`, JS contextual
+    /// `async` / `let`). A strict subset of `percent_rules`: a
+    /// `preferred` rule still gets the [`WB_RULE`] boundary,
     /// but its literals are *excluded* from the synthesized
     /// [`RESERVED_RULE`] and instead collected into [`PREFERRED_RULE`] by
     /// [`synthesize_reserved_preferred`](super::analysis::synthesize_reserved_preferred).
@@ -141,7 +141,7 @@ impl Grammar {
     }
 
     /// Construct a grammar with a pre-built atomic-rule set. Test-only
-    /// shortcut for exercising the `*name` sigil's behavior without
+    /// shortcut for exercising the `atomic` ascription's behavior without
     /// routing through grammar source.
     pub fn with_atomic(rules: HashMap<String, Pattern>, atomic_rules: HashSet<String>) -> Self {
         Grammar {
@@ -164,8 +164,8 @@ impl Grammar {
     ///    boundary from FOLLOW.
     /// 2. Run [`lint_partial_match`]; any finding is a fatal
     ///    `CompileError::PartialMatchLeniency`. Anchor real bugs with
-    ///    `^^lbl B` (or `^^lbl`); mark intentional leniency with `~`
-    ///    at the call site or `~name = body` at the rule definition.
+    ///    `^^lbl B` (or `^^lbl`); mark intentional leniency with the
+    ///    `name: partial` ascription at the rule definition.
     /// 3. Inject auto-trivia calls into every non-atomic rule's body
     ///    (no-op when the grammar has no `trivia` rule).
     /// 4. Wrap `root`'s body with `trivia? body trivia? !.` (the
@@ -211,15 +211,15 @@ impl Grammar {
         }
         inject_auto_trivia(&mut resolved);
         // Synthesize the `reserved` / `preferred` rules from the literals
-        // of the `%` / `%?` rules. Runs after trivia injection (so the
+        // of the `reserved` / `preferred` rules. Runs after trivia injection (so the
         // synthesized atomic rules aren't walked) and before
         // `append_wb_check` (so the synthesized rules pick up the trie +
-        // `wb` like any other `%` rule, and exist before `compile_rules`'
-        // reference check).
+        // `wb` like any other `reserved` rule, and exist before
+        // `compile_rules`' reference check).
         synthesize_reserved_preferred(&mut resolved)?;
-        // After trivia injection (which skips the atomic `%` rules) and
-        // before the root wrap: append the `wb` boundary call inside each
-        // `%` rule's terminal captures. An undefined `wb` surfaces as
+        // After trivia injection (which skips the atomic `reserved` rules)
+        // and before the root wrap: append the `wb` boundary call inside
+        // each `reserved` rule's terminal captures. An undefined `wb` surfaces as
         // `CompileError::UndefinedRule("wb")` from `compile_rules`.
         append_wb_check(&mut resolved);
         wrap_root(&mut resolved);
@@ -308,70 +308,88 @@ impl<'a> Parser<'a> {
         let mut preferred_rules: HashSet<String> = HashSet::new();
         let mut rule_headers: Vec<RuleHeader> = Vec::new();
         while self.pos < self.src.len() {
-            // Definition-level lenient marker: `~name = body` declares
-            // that every call to `name` is intentionally lenient and
-            // suppresses `lint_partial_match` findings at every call site
-            // of `name`. The marker touches the name (no whitespace);
-            // the rule's body is wrapped with `Pattern::Lenient` so the
-            // lint walker sees the same shape as a per-call-site `~p`.
+            // Rule definitions may carry postfix **ascriptions** between
+            // the name and `=`: `name: kw [kw ...] = body`. The keywords
+            // are contextual — recognized only in this slot, and usable as
+            // ordinary rule names / references everywhere else.
             //
-            // The atomic marker `*name = body` (sibling of `~`) opts
-            // the rule out of trivia auto-insertion: the rewriter walks
-            // the body but does not splice `trivia` between `Sequence`
-            // items. The `trivia` rule carries no qualifiers; omitting it
-            // (not marking it) is what disables auto-insertion.
+            // - `partial` declares every call to the rule intentionally
+            //   lenient, suppressing `lint_partial_match` findings at its
+            //   call sites; the body is wrapped in `Pattern::Lenient` so
+            //   the lint walker sees the same shape as a per-call-site
+            //   leniency.
+            // - `atomic` opts the rule out of `trivia` auto-insertion (no
+            //   `trivia` spliced between `Sequence` items).
+            // - `reserved` implies `atomic` and additionally appends a
+            //   `wb` boundary call inside the rule's terminal captures
+            //   (see `append_wb_check`); its literals seed the synthesized
+            //   `reserved` set.
+            // - `preferred` is the sibling of `reserved` (same atomic +
+            //   `wb` behavior) whose literals feed `preferred` instead and
+            //   stay identifier-eligible.
             //
-            // The reserved-word marker `%name = body` implies atomic and
-            // additionally appends a `wb` boundary call inside the rule's
-            // terminal captures (see `append_wb_check`). `%` composes with
-            // `~` but is mutually exclusive with `*` — both make a rule
-            // atomic, so combining them is always a mistake.
-            //
-            // The preferred-word marker `%?name = body` (the `?` touches
-            // the `%`) is a sibling of `%`: same atomic + `wb` behavior,
-            // but the rule's literals are *excluded* from the synthesized
-            // `reserved` set and collected into `preferred` instead, so a
-            // predeclared / contextual name (`int`, `async`) stays usable
-            // as an identifier. `%?` is also mutually exclusive with `*`.
+            // `atomic` / `reserved` / `preferred` are mutually exclusive
+            // (each makes the rule atomic); `partial` composes with any
+            // and, when present, must be written first.
+            let name_byte = self.pos;
+            let name = self.parse_ident()?;
+            self.skip_ws();
             let mut lenient_span: Option<Span> = None;
             let mut definition_atomic = false;
             let mut definition_percent = false;
             let mut definition_preferred = false;
-            loop {
-                match self.peek() {
-                    Some(b'~') if lenient_span.is_none() => {
-                        lenient_span = Some(self.span());
-                        self.pos += 1;
+            if self.peek() == Some(b':') {
+                self.pos += 1;
+                let mut count = 0usize;
+                loop {
+                    self.skip_ws();
+                    if !matches!(self.peek(), Some(c) if is_ident_start(c)) {
+                        break;
                     }
-                    Some(b'*') if !definition_atomic && !definition_percent => {
-                        self.pos += 1;
-                        definition_atomic = true;
-                    }
-                    Some(b'%') if !definition_percent && !definition_atomic => {
-                        self.pos += 1;
-                        definition_percent = true;
-                        // `%?` — the optional preferred-word discriminator.
-                        // The `?` must touch the `%` (no whitespace).
-                        if self.peek() == Some(b'?') {
-                            self.pos += 1;
-                            definition_preferred = true;
+                    let kw_span = self.span();
+                    let kw = self.parse_ident()?;
+                    match kw.as_str() {
+                        "partial" => {
+                            if lenient_span.is_some() {
+                                return Err(self.err("duplicate `partial` ascription".into()));
+                            }
+                            if definition_atomic || definition_percent {
+                                return Err(self.err(
+                                    "`partial` must come before `atomic` / `reserved` / `preferred`"
+                                        .into(),
+                                ));
+                            }
+                            lenient_span = Some(kw_span);
+                        }
+                        "atomic" | "reserved" | "preferred" => {
+                            if definition_atomic || definition_percent {
+                                return Err(self.err(
+                                    "`atomic`, `reserved`, and `preferred` are mutually exclusive"
+                                        .into(),
+                                ));
+                            }
+                            definition_atomic = kw == "atomic";
+                            definition_percent = kw != "atomic";
+                            definition_preferred = kw == "preferred";
+                        }
+                        other => {
+                            return Err(self.err(format!(
+                                "unknown ascription `{other}`; expected `partial`, `atomic`, \
+                                 `reserved`, or `preferred`"
+                            )));
                         }
                     }
-                    _ => break,
+                    count += 1;
+                }
+                if count == 0 {
+                    return Err(self.err(
+                        "`:` must be followed by at least one ascription (`partial`, \
+                         `atomic`, `reserved`, `preferred`)"
+                            .into(),
+                    ));
                 }
             }
-            // A leftover `*`/`%` here means the two were combined
-            // (`*%name`, `%*name`) or doubled — reject with a clear error
-            // instead of a confusing "expected rule name".
-            if matches!(self.peek(), Some(b'*') | Some(b'%')) {
-                return Err(self.err(
-                    "the `*` (atomic) and `%` (reserved-word) rule qualifiers cannot be combined"
-                        .into(),
-                ));
-            }
             let definition_lenient = lenient_span.is_some();
-            let name_byte = self.pos;
-            let name = self.parse_ident()?;
             self.skip_ws();
             self.expect_str("=")?;
             self.skip_ws();
@@ -390,17 +408,18 @@ impl<'a> Parser<'a> {
             // still *reference* them (`!reserved`).
             if name == RESERVED_RULE || name == PREFERRED_RULE {
                 return Err(self.err(format!(
-                    "`{name}` is a compiler-generated rule (synthesized from the `%` / `%?` rules) \
-                     and cannot be defined explicitly; reference it (e.g. `!{name}`) instead"
+                    "`{name}` is a compiler-generated rule (synthesized from the `reserved` / \
+                     `preferred` ascriptions) and cannot be defined explicitly; reference it \
+                     (e.g. `!{name}`) instead"
                 )));
             }
             // The three special rules — the start rule `root` and the two
             // auto-insertion targets `trivia` (whitespace) and `wb` (word
             // boundary) — are structural slots wrapped or injected by the
-            // compiler, not lexable tokens, so every qualifier (`*`, `~`,
-            // `%`, `%?`) is meaningless on them and rejected. Disabling
-            // whitespace auto-insertion is done by omitting `trivia`, not
-            // by qualifying it.
+            // compiler, not lexable tokens, so every ascription
+            // (`partial`, `atomic`, `reserved`, `preferred`) is meaningless
+            // on them and rejected. Disabling whitespace auto-insertion is
+            // done by omitting `trivia`, not by ascribing it.
             if (definition_atomic
                 || definition_percent
                 || definition_preferred
@@ -414,7 +433,8 @@ impl<'a> Parser<'a> {
                     ""
                 };
                 return Err(self.err(format!(
-                    "the `{name}` rule cannot carry a qualifier (`*`, `~`, `%`, `%?`){disable_hint}"
+                    "the `{name}` rule cannot carry an ascription (`partial`, `atomic`, \
+                     `reserved`, `preferred`){disable_hint}"
                 )));
             }
             if definition_percent {
@@ -626,26 +646,22 @@ impl<'a> Parser<'a> {
         match self.peek() {
             None => false,
             Some(b'/') | Some(b')') | Some(b'}') => false,
-            Some(b'=') => false, // start of next rule's "="
+            // Start of the next rule's `=` or its `: ascription` slot.
+            Some(b'=') | Some(b':') => false,
             // `^` is the catch operator at infix position — leave it
             // for `parse_catch`. Future overlays (e.g. `^!lbl` throw
             // atom, `^_` anonymous catch) live in the reserved
             // `^<non-ident-byte>` slot; when added, this function
             // grows a one-byte lookahead.
             Some(b'^') => false,
-            // `~` is a definition-level marker on the NEXT rule. There
-            // is no call-site form, so `~` is never a valid in-body
-            // atom-start: fall through and let the sequence terminate
-            // here, letting `parse_grammar` consume `~name = ...`.
-            Some(b'~') => false,
             Some(c) if is_ident_start(c) => !self.looks_like_rule_def(),
             Some(c) => is_atom_start(c),
         }
     }
 
     /// Look ahead from the current position to determine whether what follows is
-    /// `ident = ...` (a new rule definition) rather than a non-terminal reference
-    /// in an expression. Does not consume input.
+    /// `ident = ...` or `ident: ascription ... = ...` (a new rule definition)
+    /// rather than a non-terminal reference in an expression. Does not consume input.
     fn looks_like_rule_def(&self) -> bool {
         let mut p = self.pos;
         // Skip identifier
@@ -669,7 +685,7 @@ impl<'a> Parser<'a> {
             }
             break;
         }
-        p < self.src.len() && self.src[p] == b'='
+        p < self.src.len() && (self.src[p] == b'=' || self.src[p] == b':')
     }
 
     fn parse_prefix(&mut self) -> Result<Pattern, ParseError> {

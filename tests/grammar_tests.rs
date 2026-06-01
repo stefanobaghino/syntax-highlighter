@@ -815,13 +815,13 @@ fn inferred_vs_explicit_no_ambiguity() {
     );
 }
 
-// ---- Lenient marker (definition-level only) -------------------
+// ---- Partial ascription (definition-level only) ---------------
 //
-// Definition-level `~name = body` parsing is verified end-to-end by
-// the `definition_lenient_marker_*` tests in `tests/compiler_tests.rs`.
-// The call-site `~p` form was considered during design and dropped
-// before landing: empirically zero shipped grammars used it after the
-// pivot to definition-level marking.
+// Definition-level `name: partial = body` parsing is verified
+// end-to-end by the `partial_ascription_*` tests in
+// `tests/compiler_tests.rs`. A call-site leniency form was considered
+// during design and dropped before landing: empirically zero shipped
+// grammars used it after the pivot to definition-level marking.
 
 #[test]
 fn catch_accepts_underscore_prefixed_labels() {
@@ -1179,10 +1179,10 @@ fn end_to_end_inferred_catch_clean_input_no_recovery() {
 fn end_to_end_lenient_marker_is_runtime_transparent() {
     use syntax_highlighter::pegvm::VM;
     // The marker rides a non-special helper rule — `root` (like
-    // `trivia` / `wb`) rejects every qualifier.
+    // `trivia` / `wb`) rejects every ascription.
     let plain = parse("root = r\nr = 'x'+").compile().unwrap();
-    let lenient = parse("root = r\n~r = 'x'+").compile().unwrap();
-    assert_eq!(plain.code, lenient.code, "`~` is runtime-transparent");
+    let lenient = parse("root = r\nr: partial = 'x'+").compile().unwrap();
+    assert_eq!(plain.code, lenient.code, "`partial` is runtime-transparent");
     let r = VM::new(&lenient.code, b"xxx").run();
     assert!(r.complete);
     assert_eq!(r.matched, 3);

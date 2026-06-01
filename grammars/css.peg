@@ -33,7 +33,7 @@ statement = at_rule
 # --- At-rules --------------------------------------------------------
 
 at_rule = at_name prelude (block / @punctuation ';')
-*at_name = @keyword ('@' ident_body+)
+at_name: atomic = @keyword ('@' ident_body+)
 
 # Prelude: tokens up to `{` or `;` — sequences of value-like tokens.
 prelude = prelude_token*
@@ -64,16 +64,16 @@ combinator_and_next = @operator '>' compound_selector
                     / compound_selector
 
 compound_selector = selector_atom+
-*selector_atom = @property ('.' ident)
-               / @constant ('#' ident)
-               / @function ('::' ident pseudo_args?)
-               / @function (':' ident pseudo_args?)
-               / @punctuation '[' (.. ']') @punctuation ']'
-               / @punctuation '&'
-               / @punctuation '*'
-               / @type ident
+selector_atom: atomic = @property ('.' ident)
+                      / @constant ('#' ident)
+                      / @function ('::' ident pseudo_args?)
+                      / @function (':' ident pseudo_args?)
+                      / @punctuation '[' (.. ']') @punctuation ']'
+                      / @punctuation '&'
+                      / @punctuation '*'
+                      / @type ident
 
-*pseudo_args = '(' ..= ')'
+pseudo_args: atomic = '(' ..= ')'
 
 # --- Blocks & declarations ------------------------------------------
 
@@ -84,11 +84,11 @@ block_item = at_rule
             / @punctuation ';'
 
 # Trailing `important? (';' / &'}')` leniency is absorbed by `block`'s `^block_close`.
-~declaration = @property prop_ident @punctuation ':' value_list
-               @keyword '!important'? (@punctuation ';' / &'}')
+declaration: partial = @property prop_ident @punctuation ':' value_list
+                       @keyword '!important'? (@punctuation ';' / &'}')
 
-*prop_ident = '--' ident_body+
-             / '-'? ident
+prop_ident: atomic = '--' ident_body+
+                    / '-'? ident
 
 # --- Values ---------------------------------------------------------
 
@@ -113,21 +113,21 @@ url_unquoted = @function 'url' @punctuation '(' @string (.. ')') @punctuation ')
 
 # --- Literals -------------------------------------------------------
 
-*hex_color = @constant ('#' [\da-fA-F]+)
+hex_color: atomic = @constant ('#' [\da-fA-F]+)
 
 number_with_unit = @number num_body
 
 # Trailing `num_unit?` leniency: unitless numbers stop at the next non-unit byte; outer recovery handles malformed values.
-*~num_body = [+\-]? (num_float / \d+) num_unit?
-*num_float = \d* '.' \d+
-            / \d+ '.' \d*
+num_body: partial atomic = [+\-]? (num_float / \d+) num_unit?
+num_float: atomic = \d* '.' \d+
+                   / \d+ '.' \d*
 num_unit = '%'
           / ident
 
 string_lit = @string (dq_string / sq_string)
-*dq_string = '"' (str_escape / !'"' !'\n' .)* '"'
-*sq_string = "'" (str_escape / !"'" !'\n' .)* "'"
-*str_escape = '\\' .
+dq_string: atomic = '"' (str_escape / !'"' !'\n' .)* '"'
+sq_string: atomic = "'" (str_escape / !"'" !'\n' .)* "'"
+str_escape: atomic = '\\' .
 
 # --- Identifiers ----------------------------------------------------
 
@@ -135,7 +135,7 @@ string_lit = @string (dq_string / sq_string)
 # code point (≥ U+0080) | css_escape; ident code point = ident-start |
 # digit | -. The escape is `\` followed by 1-6 hex digits and an
 # optional trailing whitespace (consumed by the escape, not the ident).
-*ident = (ident_start_char / css_escape) (ident_body_char / css_escape)*
+ident: atomic = (ident_start_char / css_escape) (ident_body_char / css_escape)*
 ident_start_char = [A-Za-z_\-\u{80}-\u{10FFFF}]
 ident_body_char = [A-Za-z\d_\-\u{80}-\u{10FFFF}]
 ident_body = ident_body_char / css_escape
@@ -145,10 +145,10 @@ ident_body = ident_body_char / css_escape
 # cases for highlighter purposes; encoding the hex-digit-count
 # refinement separately would force a partial-match call site that
 # trips the lint.
-*css_escape = '\\' !\R .
+css_escape: atomic = '\\' !\R .
 
 # --- Whitespace / comments -----------------------------------------
 #
 # CSS has only block comments.
 
-*comment = @comment ('/*' ..= '*/')
+comment: atomic = @comment ('/*' ..= '*/')

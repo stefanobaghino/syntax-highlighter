@@ -636,7 +636,7 @@ fn trailing_first(pat: &Pattern, nullable: &HashSet<String>) -> FollowSet {
         Pattern::Catch { inner, .. } => {
             out.extend(trailing_first(inner, nullable));
         }
-        // Definition-level `~name =` opts the rule out of being a flag
+        // Definition-level `name: partial` opts the rule out of being a flag
         // target: its `trailing_first` is empty regardless of body shape.
         Pattern::Lenient { .. } => {}
         _ => {}
@@ -1526,7 +1526,7 @@ pub fn inject_auto_trivia(grammar: &mut Grammar) {
         // The trivia rule itself is exempt: every `trivia_call` from
         // the rewriter calls back into it, so injecting trivia inside
         // its body would recurse the runtime indefinitely. Atomic
-        // rules opt out explicitly via the `*name =` sigil.
+        // rules opt out explicitly via the `name: atomic` ascription.
         if atomic.contains(&name) || name == TRIVIA_ROOT_RULE {
             continue;
         }
@@ -1634,14 +1634,14 @@ fn trivia_call() -> Pattern {
 }
 
 /// Append a `wb` word-boundary call inside the terminal captures of
-/// every `%`-marked rule (see [`Grammar::percent_rules`]).
+/// every `reserved` rule (see [`Grammar::percent_rules`]).
 ///
 /// The boundary is pushed to the tail of the matched region, *inside*
 /// the capture that ends the match, so the capture commits only when
 /// the boundary holds. Placing `wb` after the capture instead would let
 /// the keyword capture commit before the boundary check fails, leaking a
 /// stray keyword token through top-level `*^` recovery on inputs like
-/// `typedefx`. The rule is already atomic (the `%` sigil inserts it into
+/// `typedefx`. The rule is already atomic (the `reserved` ascription inserts it into
 /// `atomic_rules`), so no `trivia` is spliced between the literal and
 /// the appended call.
 ///
@@ -1803,20 +1803,23 @@ fn build_trie(entries: Vec<Vec<u8>>) -> Pattern {
 }
 
 /// Synthesize the compiler-generated `reserved` and `preferred` rules
-/// from the literals reachable through the grammar's `%` / `%?` rules.
+/// from the literals reachable through the grammar's `reserved` /
+/// `preferred` rules.
 ///
-/// `reserved` collects every literal of a `%` rule that is *not* `%?`;
-/// `preferred` collects every literal of a `%?` rule. A rule whose body
-/// isn't a fixed keyword shape (it has a quantifier, wildcard, predicate,
-/// or an unresolvable reference — e.g. a number body like
-/// `'0x' [\da-fA-F]+`) contributes nothing. Both rules are emitted as a
-/// flat alternation ordered longest-first and registered as `%` rules, so
-/// the following [`append_wb_check`] gives them the same trie + `wb`
-/// treatment as any author-written keyword set.
+/// `reserved` collects every literal of a `reserved` rule (excluding
+/// `preferred`); `preferred` collects every literal of a `preferred`
+/// rule. A rule whose body isn't a fixed keyword shape (it has a
+/// quantifier, wildcard, predicate, or an unresolvable reference — e.g.
+/// a number body like `'0x' [\da-fA-F]+`) contributes nothing. Both
+/// rules are emitted as a flat alternation ordered longest-first and
+/// registered as `reserved` rules, so the following [`append_wb_check`]
+/// gives them the same trie + `wb` treatment as any author-written
+/// keyword set.
 ///
-/// A literal reachable from both a `%` and a `%?` rule is a contradiction
-/// (it can't be both barred from and allowed in identifier position) and
-/// raises [`CompileError::ReservedPreferredConflict`].
+/// A literal reachable from both a `reserved` and a `preferred` rule is
+/// a contradiction (it can't be both barred from and allowed in
+/// identifier position) and raises
+/// [`CompileError::ReservedPreferredConflict`].
 pub fn synthesize_reserved_preferred(grammar: &mut Grammar) -> Result<(), CompileError> {
     let mut reserved: BTreeSet<Vec<CharSet>> = BTreeSet::new();
     let mut preferred: BTreeSet<Vec<CharSet>> = BTreeSet::new();
@@ -1880,7 +1883,7 @@ pub fn synthesize_reserved_preferred(grammar: &mut Grammar) -> Result<(), Compil
 /// shape: a quantifier, wildcard, predicate, catch, or a reference that
 /// cycles or escapes the keyword shape. `NonTerminal`s are resolved
 /// through `rules` (with a `visiting` cycle guard) so wrappers like
-/// `%bool_lit = @constant bool_body` reach their literals.
+/// `bool_lit: reserved = @constant bool_body` reach their literals.
 fn keyword_entries(
     pat: &Pattern,
     rules: &HashMap<String, Pattern>,
@@ -2066,7 +2069,7 @@ mod tests {
         }
     }
 
-    /// Mark a single rule `t` as a `%` rule, run `append_wb_check`, and
+    /// Mark a single rule `t` as a `reserved` rule, run `append_wb_check`, and
     /// return the rewritten body.
     fn append_to(body: Pattern) -> Pattern {
         let mut rules = HashMap::new();
@@ -2079,7 +2082,7 @@ mod tests {
 
     #[test]
     fn capture_less_charclass_choice_gets_one_trailing_wb() {
-        // `%t = [ab] / [cd]` — capture-less but not all-literal, so the
+        // `t: reserved = [ab] / [cd]` — capture-less but not all-literal, so the
         // trie path is skipped and a single trailing `wb` follows the
         // whole choice, not one per branch.
         let body = Pattern::choice(vec![
@@ -2091,7 +2094,7 @@ mod tests {
 
     #[test]
     fn capture_less_literal_choice_factors_into_trie() {
-        // `%t = 'do' / 'double'` — all-literal, so it folds into a
+        // `t: reserved = 'do' / 'double'` — all-literal, so it folds into a
         // longest-match trie: `do` shared, then `uble` accept vs the bare
         // `do` accept. Two accepts → two `wb`s.
         let body = Pattern::choice(vec![Pattern::literal("do"), Pattern::literal("double")]);
@@ -2108,7 +2111,7 @@ mod tests {
 
     #[test]
     fn capture_choice_distributes_wb_per_branch() {
-        // `%t = @k 'a' / @k 'b'` — each capture must keep `wb` inside
+        // `t: reserved = @k 'a' / @k 'b'` — each capture must keep `wb` inside
         // so a committed keyword can't leak through recovery.
         let body = Pattern::choice(vec![
             Pattern::capture("k", Pattern::literal("a")),
