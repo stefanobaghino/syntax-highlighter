@@ -30,8 +30,9 @@ fn left_associative_addition() {
     // Standard left-associative arithmetic. Each '+' operand under the
     // 'op' tag, each leaf number under 'num'.
     let src = r#"
-        root = expr
+        root = expr {
         expr = expr @op '+' @num ([0-9]+) / @num ([0-9]+)
+        }
     "#;
     let prog = pegc::compile(src).expect("compile");
     let r = VM::new_from_program(&prog, b"1+2+3").run();
@@ -58,8 +59,9 @@ fn left_associative_with_distinct_operators() {
     // semantics are wrong. The capture forest itself doesn't encode
     // associativity, but the seed-and-grow loop produces this ordering.
     let src = r#"
-        root = expr
+        root = expr {
         expr = expr @minus '-' @num ([0-9]+) / @num ([0-9]+)
+        }
     "#;
     let r = run(src, b"9-1-2");
     assert!(r.complete);
@@ -74,10 +76,11 @@ fn precedence_via_two_lr_layers() {
     // Both expr and term are directly LR. The compiler must accept
     // both; the parse must reflect '*' binding tighter than '+'.
     let src = r#"
-        root   = expr
+        root   = expr {
         expr   = expr @plus '+' term / term
         term   = term @star '*' factor / factor
         factor = @num ([0-9]+) / '(' expr ')'
+        }
     "#;
     let r = run(src, b"1+2*3");
     assert!(r.complete);
@@ -102,10 +105,11 @@ fn precedence_via_two_lr_layers() {
 #[test]
 fn lr_with_parenthesised_subexpression() {
     let src = r#"
-        root   = expr
+        root   = expr {
         expr   = expr @plus '+' term / term
         term   = term @star '*' factor / factor
         factor = @num ([0-9]+) / '(' expr ')'
+        }
     "#;
     let r = run(src, b"(1+2)*3");
     assert!(r.complete);
@@ -116,8 +120,9 @@ fn lr_with_parenthesised_subexpression() {
 fn lr_failure_returns_partial() {
     // Input doesn't even start with a valid leaf.
     let src = r#"
-        root = expr
+        root = expr {
         expr = expr @op '+' @num ([0-9]+) / @num ([0-9]+)
+        }
     "#;
     let r = run(src, b"x");
     assert!(!r.complete);
@@ -133,9 +138,10 @@ fn lr_partial_chain_returns_longest_prefix() {
     // surrounding parse must report the deepest sp reached, which is
     // past the LR seed's growth.
     let src = r#"
-        root    = wrapper
+        root    = wrapper {
         wrapper = expr '!'
         expr    = expr @op '+' @num ([0-9]+) / @num ([0-9]+)
+        }
     "#;
     let r = run(src, b"1+2");
     assert!(!r.complete);
@@ -155,8 +161,9 @@ fn nullable_lr_terminates() {
     // growth past seed); LRTail commits at sp=1. Just assert it
     // terminates and matched is 1.
     let src = r#"
-        root = a
+        root = a {
         a = a / 'x'
+        }
     "#;
     let r = run(src, b"x");
     assert!(r.complete);
@@ -170,8 +177,9 @@ fn nullable_lr_on_empty_input_terminates() {
     // body fails on first iteration with seed None, so the LR rule
     // fails — partial parse at sp=0.
     let src = r#"
-        root = a
+        root = a {
         a = a / 'x'
+        }
     "#;
     let r = run(src, b"");
     assert!(!r.complete);
@@ -185,8 +193,9 @@ fn right_recursive_grammar_is_not_marked_lr() {
     // assertion is in compiler_tests; here we just confirm runtime
     // behavior is unchanged.
     let src = r#"
-        root = list
+        root = list {
         list = @num ([0-9]+) (',' list)?
+        }
     "#;
     let r = run(src, b"1,2,3");
     assert!(r.complete);
@@ -198,9 +207,10 @@ fn indirect_lr_cycle_of_2_runs() {
     // SCC {a, b}; both rules are wrapped as LR. Input "y" matches via
     // a's base alternative on the first iteration; no growth occurs.
     let src = r#"
-        root = a
+        root = a {
         a = b 'x' / 'y'
         b = a 'z' / 'w'
+        }
     "#;
     let r = run(src, b"y");
     assert!(r.complete);
@@ -213,9 +223,10 @@ fn indirect_lr_cycle_of_2_grows_through_chain() {
     // through the indirect cycle: a's seed grows from {y at sp=1} to
     // {b'x' at sp=3} where b in turn used a's seed to match "yz".
     let src = r#"
-        root = a
+        root = a {
         a = b 'x' / 'y'
         b = a 'z' / 'w'
+        }
     "#;
     let r = run(src, b"yzx");
     assert!(r.complete);
@@ -228,10 +239,11 @@ fn indirect_lr_cycle_of_3_runs() {
     // wrapped as LR. Input "p" matches via a's base alt; the test
     // confirms that cycles longer than 2 compile and run.
     let src = r#"
-        root = a
+        root = a {
         a = b 'x' / 'p'
         b = c 'y' / 'q'
         c = a 'z' / 'r'
+        }
     "#;
     let r = run(src, b"p");
     assert!(r.complete);
@@ -249,9 +261,10 @@ fn lr_inside_recover_repeat_resyncs_cleanly() {
     // seed (or its first-iteration failure must propagate cleanly so
     // *^'s outer Choice/Commit catches it).
     let src = r#"
-        root = top
+        root = top {
         top  = (expr ';')*^ !.
         expr = expr @op '+' @num ([0-9]+) / @num ([0-9]+)
+        }
     "#;
     let r = run(src, b"1+2;BAD;3+4;");
     assert!(
@@ -287,8 +300,9 @@ fn cached_lr_seed_matches_uncached_run() {
     // additive: enabling it (threshold=0) must produce the same
     // MatchResult as disabling it (threshold=usize::MAX).
     let src = r#"
-        root = expr
+        root = expr {
         expr = expr @op '+' @num ([0-9]+) / @num ([0-9]+)
+        }
     "#;
     let prog = pegc::compile(src).expect("compile");
     let cached = VM::new_from_program(&prog, b"1+2+3")
@@ -312,8 +326,9 @@ fn lr_seed_caches_below_memo_threshold() {
     // a generous threshold (1024), a `Memo`-kind rule of the same
     // shape would not cache, but the LR rule must.
     let src = r#"
-        root = expr
+        root = expr {
         expr = expr @op '+' @num ([0-9]+) / @num ([0-9]+)
+        }
     "#;
     let prog = pegc::compile(src).expect("compile");
     let (_, stats) = VM::new_from_program(&prog, b"1")
@@ -331,9 +346,10 @@ fn lr_inside_outer_repetition_matches_uncached_run() {
     // distinct sps; the new cache write at LRTail must not perturb the
     // surrounding pattern.
     let src = r#"
-        root = top
+        root = top {
         top  = (expr ',')* expr
         expr = expr @op '+' @num ([0-9]+) / @num ([0-9]+)
+        }
     "#;
     let prog = pegc::compile(src).expect("compile");
     let cached = VM::new_from_program(&prog, b"1+2,3+4,5")

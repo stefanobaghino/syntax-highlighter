@@ -28,403 +28,436 @@
 # the whole file; `block` uses a `^block_close` catch so malformed
 # function/control-flow bodies resync at the closing `}` instead of
 # failing the enclosing statement.
-
-root = (stmt)*^
-
-ignore = (comment / \s)*
-
-# Word boundary for `%` reserved-word rules: a keyword can't be the
-# prefix of a longer identifier (ECMAScript IdentifierPartChar).
-boundary = !ident_body
-
-# --- Keyword tokens ---------------------------------------------------
 #
-# One `%` reserved-word rule per keyword, referenced wherever the
-# keyword appears so the `boundary` boundary is applied uniformly. This
-# matters most for the contextual keywords (`async`, `as`, `of`,
-# `from`, `get`, `set`, `static`, `yield`) deliberately kept out of
-# `reserved` so they remain usable as identifiers: `{ asyncFoo() {} }`
-# must stay one method name.
-kw_import: reserved = @keyword 'import'
-kw_from: preferred = @keyword 'from'
-kw_as: preferred = @keyword 'as'
-kw_export: reserved = @keyword 'export'
-kw_default: reserved = @keyword 'default'
-kw_async: preferred = @keyword 'async'
-kw_function: reserved = @keyword 'function'
-kw_class: reserved = @keyword 'class'
-kw_extends: reserved = @keyword 'extends'
-kw_static: preferred = @keyword 'static'
-kw_get: preferred = @keyword 'get'
-kw_set: preferred = @keyword 'set'
-kw_var: reserved = @keyword 'var'
-kw_let: preferred = @keyword 'let'
-kw_const: reserved = @keyword 'const'
-kw_if: reserved = @keyword 'if'
-kw_else: reserved = @keyword 'else'
-kw_for: reserved = @keyword 'for'
-kw_await: preferred = @keyword 'await'
-kw_in: reserved = @keyword 'in'
-kw_of: preferred = @keyword 'of'
-kw_while: reserved = @keyword 'while'
-kw_do: reserved = @keyword 'do'
-kw_switch: reserved = @keyword 'switch'
-kw_case: reserved = @keyword 'case'
-kw_try: reserved = @keyword 'try'
-kw_catch: reserved = @keyword 'catch'
-kw_finally: reserved = @keyword 'finally'
-kw_throw: reserved = @keyword 'throw'
-kw_return: reserved = @keyword 'return'
-kw_break: reserved = @keyword 'break'
-kw_continue: reserved = @keyword 'continue'
-kw_debugger: reserved = @keyword 'debugger'
-kw_yield: reserved = @keyword 'yield'
-kw_instanceof: reserved = @keyword 'instanceof'
-kw_typeof: reserved = @keyword 'typeof'
-kw_void: reserved = @keyword 'void'
-kw_delete: reserved = @keyword 'delete'
-kw_new: reserved = @keyword 'new'
-kw_this: reserved = @keyword 'this'
-kw_super: reserved = @keyword 'super'
+# Lexical scoping: the mutually-recursive statement/expression/pattern
+# core stays at root scope, alongside the cross-referenced literal,
+# identifier, and keyword rules. Only clear single-owner leaf helpers
+# (string forms, number digit groups, template-literal parts) nest
+# under the rule that owns them.
 
-# --- Statements -------------------------------------------------------
-#
-# Order matters (PEG first-match). Declaration-shaped items precede
-# expression-statements so their leading keywords aren't misparsed as
-# identifiers.
+root = (stmt)*^ {
 
-stmt = import_decl
-     / export_decl
-     / fn_decl
-     / class_decl
-     / var_decl opt_semi
-     / if_stmt
-     / for_stmt
-     / while_stmt
-     / do_while_stmt
-     / switch_stmt
-     / try_stmt
-     / throw_stmt
-     / return_stmt
-     / break_stmt
-     / continue_stmt
-     / debugger_stmt
-     / labeled_stmt
-     / block
-     / empty_stmt
-     / expr opt_semi
+    ignore = (comment / \s)*
 
-# Definition-level `~` on `~opt_semi` covers every ASI call site; the
-# missing-else / missing-catch / missing-finally leniency on the other
-# `~`-marked stmts below is absorbed by stmt-level `*^` and
-# `block`'s `^block_close` recovery.
-opt_semi: partial = @punctuation ';'?
-empty_stmt = @punctuation ';'
+    # Word boundary for `%` reserved-word rules: a keyword can't be the
+    # prefix of a longer identifier (ECMAScript IdentifierPartChar).
+    boundary = !ident_body
 
-# --- Imports / exports ------------------------------------------------
+    # --- Keyword tokens ---------------------------------------------------
+    #
+    # One `%` reserved-word rule per keyword, referenced wherever the
+    # keyword appears so the `boundary` boundary is applied uniformly. This
+    # matters most for the contextual keywords (`async`, `as`, `of`,
+    # `from`, `get`, `set`, `static`, `yield`) deliberately kept out of
+    # `reserved` so they remain usable as identifiers: `{ asyncFoo() {} }`
+    # must stay one method name.
+    kw_import: reserved = @keyword 'import'
+    kw_from: preferred = @keyword 'from'
+    kw_as: preferred = @keyword 'as'
+    kw_export: reserved = @keyword 'export'
+    kw_default: reserved = @keyword 'default'
+    kw_async: preferred = @keyword 'async'
+    kw_function: reserved = @keyword 'function'
+    kw_class: reserved = @keyword 'class'
+    kw_extends: reserved = @keyword 'extends'
+    kw_static: preferred = @keyword 'static'
+    kw_get: preferred = @keyword 'get'
+    kw_set: preferred = @keyword 'set'
+    kw_var: reserved = @keyword 'var'
+    kw_let: preferred = @keyword 'let'
+    kw_const: reserved = @keyword 'const'
+    kw_if: reserved = @keyword 'if'
+    kw_else: reserved = @keyword 'else'
+    kw_for: reserved = @keyword 'for'
+    kw_await: preferred = @keyword 'await'
+    kw_in: reserved = @keyword 'in'
+    kw_of: preferred = @keyword 'of'
+    kw_while: reserved = @keyword 'while'
+    kw_do: reserved = @keyword 'do'
+    kw_switch: reserved = @keyword 'switch'
+    kw_case: reserved = @keyword 'case'
+    kw_try: reserved = @keyword 'try'
+    kw_catch: reserved = @keyword 'catch'
+    kw_finally: reserved = @keyword 'finally'
+    kw_throw: reserved = @keyword 'throw'
+    kw_return: reserved = @keyword 'return'
+    kw_break: reserved = @keyword 'break'
+    kw_continue: reserved = @keyword 'continue'
+    kw_debugger: reserved = @keyword 'debugger'
+    kw_yield: reserved = @keyword 'yield'
+    kw_instanceof: reserved = @keyword 'instanceof'
+    kw_typeof: reserved = @keyword 'typeof'
+    kw_void: reserved = @keyword 'void'
+    kw_delete: reserved = @keyword 'delete'
+    kw_new: reserved = @keyword 'new'
+    kw_this: reserved = @keyword 'this'
+    kw_super: reserved = @keyword 'super'
 
-import_decl = kw_import import_body opt_semi
-import_body = import_clause kw_from string_lit
-            / string_lit
-import_clause = import_default @punctuation ',' import_ns_or_named
-              / import_default
-              / import_ns_or_named
-import_default = @variable ident
-import_ns_or_named = import_namespace / import_named
-import_namespace = @operator '*' kw_as @variable ident
-import_named = @punctuation '{' import_specifier_list? @punctuation '}'
-import_specifier_list = import_specifier (@punctuation ',' import_specifier)* (@punctuation ',')?
-import_specifier = @variable ident_name kw_as @variable ident
-                 / @variable ident
+    # --- Statements -------------------------------------------------------
+    #
+    # Order matters (PEG first-match). Declaration-shaped items precede
+    # expression-statements so their leading keywords aren't misparsed as
+    # identifiers.
 
-export_decl = kw_export kw_default export_default_body
-            / kw_export @operator '*' (kw_as @variable ident_name)? kw_from string_lit opt_semi
-            / kw_export export_named
-            / kw_export fn_decl
-            / kw_export class_decl
-            / kw_export var_decl opt_semi
-export_default_body = fn_decl
-                    / class_decl
-                    / expr opt_semi
-# Trailing `opt_semi` on `~export_named` is absorbed by stmt-level recovery.
-export_named: partial = @punctuation '{' export_specifier_list? @punctuation '}' (kw_from string_lit)? opt_semi
-export_specifier_list = export_specifier (@punctuation ',' export_specifier)* (@punctuation ',')?
-export_specifier = @variable ident_name kw_as @variable ident_name
-                 / @variable ident
+    stmt = import_decl
+         / export_decl
+         / fn_decl
+         / class_decl
+         / var_decl opt_semi
+         / if_stmt
+         / for_stmt
+         / while_stmt
+         / do_while_stmt
+         / switch_stmt
+         / try_stmt
+         / throw_stmt
+         / return_stmt
+         / break_stmt
+         / continue_stmt
+         / debugger_stmt
+         / labeled_stmt
+         / block
+         / empty_stmt
+         / expr opt_semi
 
-# --- Function / class declarations ------------------------------------
+    # Definition-level `~` on `~opt_semi` covers every ASI call site; the
+    # missing-else / missing-catch / missing-finally leniency on the other
+    # `~`-marked stmts below is absorbed by stmt-level `*^` and
+    # `block`'s `^block_close` recovery.
+    opt_semi: partial = @punctuation ';'?
+    empty_stmt = @punctuation ';'
 
-fn_decl = kw_async fn_decl_core
-        / fn_decl_core
-fn_decl_core = kw_function @operator '*'? @function ident fn_params block
+    # --- Imports / exports ------------------------------------------------
 
-class_decl = kw_class @type ident class_heritage? class_body
-class_heritage = kw_extends expr_lhs
-class_body = @punctuation '{' class_member* @punctuation '}'
-class_member = @punctuation ';'
-             / class_method_or_field
-class_method_or_field = kw_static? (class_method / class_field)
-class_method = kw_async? @operator '*'? method_head fn_params block
-             / (kw_get / kw_set) method_head fn_params block
-method_head = computed_prop
-            / @function ident_name
+    import_decl = kw_import import_body opt_semi {
+        import_body = import_clause kw_from string_lit
+                    / string_lit
+        import_clause = import_default @punctuation ',' import_ns_or_named
+                      / import_default
+                      / import_ns_or_named
+        import_default = @variable ident
+        import_ns_or_named = import_namespace / import_named
+        import_namespace = @operator '*' kw_as @variable ident
+        import_named = @punctuation '{' import_specifier_list? @punctuation '}' {
+            import_specifier_list = import_specifier (@punctuation ',' import_specifier)* (@punctuation ',')?
+            import_specifier = @variable ident_name kw_as @variable ident
+                             / @variable ident
+        }
+    }
+
+    export_decl = kw_export kw_default export_default_body
+                / kw_export @operator '*' (kw_as @variable ident_name)? kw_from string_lit opt_semi
+                / kw_export export_named
+                / kw_export fn_decl
+                / kw_export class_decl
+                / kw_export var_decl opt_semi {
+        export_default_body = fn_decl
+                            / class_decl
+                            / expr opt_semi
+        # Trailing `opt_semi` on `~export_named` is absorbed by stmt-level recovery.
+        export_named: partial = @punctuation '{' export_specifier_list? @punctuation '}' (kw_from string_lit)? opt_semi {
+            export_specifier_list = export_specifier (@punctuation ',' export_specifier)* (@punctuation ',')?
+            export_specifier = @variable ident_name kw_as @variable ident_name
+                             / @variable ident
+        }
+    }
+
+    # --- Function / class declarations ------------------------------------
+
+    fn_decl = kw_async fn_decl_core
+            / fn_decl_core {
+        fn_decl_core = kw_function @operator '*'? @function ident fn_params block
+    }
+
+    class_decl = kw_class @type ident class_heritage? class_body
+    class_heritage = kw_extends expr_lhs
+    class_body = @punctuation '{' class_member* @punctuation '}' {
+        class_member = @punctuation ';'
+                     / class_method_or_field
+        class_method_or_field = kw_static? (class_method / class_field) {
+            class_method = kw_async? @operator '*'? method_head fn_params block
+                         / (kw_get / kw_set) method_head fn_params block
+            class_field = (computed_prop / @property ident_name) (@operator '=' expr_no_comma)? opt_semi
+        }
+    }
+    method_head = computed_prop
+                / @function ident_name
+                / string_lit
+                / number_lit
+
+    # --- Variable declarations -------------------------------------------
+
+    var_decl = (kw_var / kw_let / kw_const) var_declarator_list {
+        var_declarator_list = var_declarator (@punctuation ',' var_declarator)*
+        # Trailing `(= expr)?` absorbed by enclosing stmt recovery.
+        var_declarator: partial = pattern (@operator '=' expr_no_comma)?
+    }
+
+    # --- Control flow -----------------------------------------------------
+
+    # Trailing `(else stmt)?` leniency absorbed by stmt-level recovery.
+    if_stmt: partial = kw_if @punctuation '(' expr @punctuation ')' stmt
+                       (kw_else stmt)?
+    for_stmt = kw_for kw_await? @punctuation '(' for_head @punctuation ')' stmt {
+        for_head = for_c_style
+                 / for_in_of
+        for_c_style = for_init? @punctuation ';' expr? @punctuation ';' expr?
+        for_in_of = for_binding (kw_in / kw_of) expr
+        for_init = var_decl
+                 / expr
+        for_binding = (kw_var / kw_let / kw_const) pattern
+                    / pattern
+    }
+
+    while_stmt = kw_while @punctuation '(' expr @punctuation ')' stmt
+    do_while_stmt = kw_do stmt kw_while @punctuation '(' expr @punctuation ')' opt_semi
+    switch_stmt = kw_switch @punctuation '(' expr @punctuation ')'
+                  @punctuation '{' switch_case* @punctuation '}' {
+        switch_case = kw_case expr @punctuation ':' (!switch_case_term stmt)*
+                    / kw_default @punctuation ':' (!switch_case_term stmt)*
+        switch_case_term = kw_case / kw_default / @punctuation '}'
+    }
+    # Trailing `(catch)? (finally)?` absorbed by stmt-level recovery.
+    try_stmt: partial = kw_try block catch_clause? finally_clause? {
+        catch_clause = kw_catch (@punctuation '(' pattern @punctuation ')')? block
+        finally_clause = kw_finally block
+    }
+    throw_stmt = kw_throw expr opt_semi
+    # Trailing `expr?` leniency on `~return_stmt` absorbed by stmt recovery.
+    return_stmt: partial = kw_return expr? opt_semi
+    break_stmt: partial = kw_break (@variable ident)? opt_semi
+    continue_stmt: partial = kw_continue (@variable ident)? opt_semi
+    debugger_stmt = kw_debugger opt_semi
+    labeled_stmt = @variable ident @punctuation ':' stmt
+    block = @punctuation '{' (stmt* @punctuation '}' ^^block_close ..= @punctuation '}')
+
+    # --- Function params and patterns -------------------------------------
+
+    fn_params = @punctuation '(' fn_param_list? @punctuation ')'
+    fn_param_list = fn_param (@punctuation ',' fn_param)* (@punctuation ',')? {
+        fn_param = @operator '...' pattern
+                 / pattern (@operator '=' expr_no_comma)?
+    }
+
+    # --- Destructuring patterns ------------------------------------------
+
+    pattern = array_pattern / object_pattern / @variable ident {
+        array_pattern = @punctuation '[' array_pattern_list? @punctuation ']' {
+            array_pattern_list = array_pattern_el (@punctuation ',' array_pattern_el)* (@punctuation ',')?
+            array_pattern_el = @operator '...' pattern
+                             / pattern (@operator '=' expr_no_comma)?
+                             / ''
+        }
+        object_pattern = @punctuation '{' object_pattern_list? @punctuation '}' {
+            object_pattern_list = object_pattern_prop (@punctuation ',' object_pattern_prop)* (@punctuation ',')?
+            object_pattern_prop = @operator '...' pattern
+                                / (computed_prop / @property ident_name) @punctuation ':' pattern (@operator '=' expr_no_comma)?
+                                / @property ident (@operator '=' expr_no_comma)?
+        }
+    }
+
+    computed_prop = @punctuation '[' expr @punctuation ']'
+
+    # --- Expressions ------------------------------------------------------
+
+    expr = expr_no_comma (@punctuation ',' expr_no_comma)*
+    expr_no_comma = expr_assign
+    expr_assign = expr_arrow
+                / expr_yield
+                / expr_conditional (assign_op expr_assign)? {
+        assign_op = @operator '**='
+                  / @operator '<<=' / @operator '>>>=' / @operator '>>='
+                  / @operator '||=' / @operator '&&=' / @operator '??='
+                  / @operator '+=' / @operator '-=' / @operator '*=' / @operator '/='
+                  / @operator '%=' / @operator '&=' / @operator '|=' / @operator '^='
+                  / @operator '=' !'='
+
+        # Arrow functions tried first. `async x => ...`, `x => ...`,
+        # `(a, b) => ...`, `() => ...`.
+        expr_arrow = arrow_head @operator '=>' arrow_body {
+            arrow_head = kw_async arrow_params
+                       / arrow_params
+            arrow_params = @variable ident
+                         / arrow_paren_params
+            arrow_paren_params = @punctuation '(' fn_param_list? @punctuation ')'
+            arrow_body = block
+                       / expr_no_comma
+        }
+
+        # Trailing `(*)? (expr_assign)?` absorbed by stmt-level recovery.
+        expr_yield: partial = kw_yield @operator '*'? expr_assign?
+    }
+
+    # Ternary. Below the ternary, precedence is encoded by direct left
+    # recursion — `level_n =  level_n OP level_{n+1} / level_{n+1}` per
+    # level — except `expr_pow` (`**`) which stays right-recursive to
+    # preserve right-associativity. Each level inlines its operator
+    # alternation; cross-level ambiguities (`<` vs `<<`, `&` vs `&&`,
+    # operator vs compound-assign, …) need explicit `!`-lookaheads.
+    # Trailing ternary leniency absorbed by stmt-level recovery.
+    expr_conditional: partial = expr_nullish (@operator '?' expr_no_comma @punctuation ':' expr_no_comma)?
+
+    expr_nullish = expr_nullish @operator '??' !'=' expr_lor / expr_lor
+    expr_lor = expr_lor @operator '||' !'=' expr_land / expr_land
+    expr_land = expr_land @operator '&&' !'=' expr_bor / expr_bor
+    expr_bor = expr_bor @operator '|' !'|' !'=' expr_bxor / expr_bxor
+    expr_bxor = expr_bxor @operator '^' !'=' expr_band / expr_band
+    expr_band = expr_band @operator '&' !'&' !'=' expr_eq / expr_eq
+    expr_eq = expr_eq (@operator '===' / @operator '!==' / @operator '==' / @operator '!=') expr_rel / expr_rel
+    expr_rel = expr_rel (@operator '<=' / @operator '>=' / @operator '<' !'<' / @operator '>' !'>' / kw_instanceof / kw_in) expr_shift / expr_shift
+    expr_shift = expr_shift (@operator '>>>' !'=' / @operator '<<' !'=' / @operator '>>' !'=') expr_add / expr_add
+    expr_add = expr_add (@operator '+' !'=' / @operator '-' !'=') expr_mul / expr_mul
+    expr_mul = expr_mul (@operator '*' !'=' !'*' / @operator '/' !'=' / @operator '%' !'=') expr_pow / expr_pow
+
+    # Right-associative: stays right-recursive, not LR.
+    expr_pow = expr_unary @operator '**' !'=' expr_pow / expr_unary
+
+    expr_unary = unary_op* expr_postfix
+    unary_op = kw_typeof
+             / kw_void
+             / kw_delete
+             / kw_await
+             / @operator '++' / @operator '--'
+             / @operator '+' / @operator '-'
+             / @operator '!' / @operator '~'
+
+    # Postfix: calls, member, optional chain, index, `++`/`--`.
+    expr_postfix = expr_lhs postfix_op*
+    postfix_op = @operator '++'
+               / @operator '--'
+               / @operator '?.' postfix_after_optional
+               / @punctuation '.' member_target
+               / @punctuation '[' expr @punctuation ']'
+               / call_args
+               / template_lit {
+        postfix_after_optional = call_args
+                               / @punctuation '[' expr @punctuation ']'
+                               / member_target
+        member_target = @function ident_name &(@punctuation '(')
+                      / @property ident_name
+        call_args = @punctuation '(' arg_list? @punctuation ')' {
+            arg_list = arg (@punctuation ',' arg)* (@punctuation ',')?
+            arg = @operator '...' expr_no_comma
+                / expr_no_comma
+        }
+    }
+
+    expr_lhs = expr_new / expr_primary
+    expr_new = kw_new expr_new_target {
+        expr_new_target = @type upper_ident new_tail?
+                        / @variable lower_ident new_tail?
+                        / expr_primary new_tail?
+        new_tail = postfix_op+
+    }
+
+    expr_primary = literal
+                 / expr_this
+                 / expr_super
+                 / expr_fn
+                 / expr_class
+                 / expr_array
+                 / expr_object
+                 / expr_paren
+                 / call_ident
+                 / @type upper_ident
+                 / @variable lower_ident {
+        call_ident = @function ident &(@punctuation '(')
+
+        expr_this = kw_this
+        expr_super = kw_super
+        expr_fn = kw_async? kw_function @operator '*'? @function ident? fn_params block
+        expr_class = kw_class @type ident? class_heritage? class_body
+        expr_array = @punctuation '[' array_elem_list? @punctuation ']' {
+            array_elem_list = array_elem (@punctuation ',' array_elem)* (@punctuation ',')?
+            array_elem = @operator '...' expr_no_comma
+                       / expr_no_comma
+                       / ''
+        }
+        expr_object = @punctuation '{' object_props? @punctuation '}' {
+            object_props = object_prop (@punctuation ',' object_prop)* (@punctuation ',')?
+            object_prop = @operator '...' expr_no_comma
+                        / object_method
+                        / (computed_prop / string_lit / number_lit / @property ident_name) @punctuation ':' expr_no_comma
+                        / @property ident
+            object_method = kw_async? @operator '*'? method_head fn_params block
+                          / (kw_get / kw_set) method_head fn_params block
+        }
+        expr_paren = @punctuation '(' expr @punctuation ')'
+    }
+
+    # --- Literals ---------------------------------------------------------
+
+    literal = template_lit
             / string_lit
             / number_lit
-class_field = (computed_prop / @property ident_name) (@operator '=' expr_no_comma)? opt_semi
+            / lit_const
+            / lit_undefined {
+        # Boolean / null / undefined constants; the `boundary` boundary keeps
+        # `trueish` / `nullish` from matching the prefix.
+        lit_const: reserved = @constant 'true' / @constant 'false' / @constant 'null'
+        lit_undefined: preferred = @constant 'undefined'
+    }
 
-# --- Variable declarations -------------------------------------------
+    string_lit = @string (sq_string / dq_string) {
+        sq_string: atomic = "'" ('\\' . / !"'" !'\n' .)* "'"
+        dq_string: atomic = '"' ('\\' . / !'"' !'\n' .)* '"'
+    }
 
-var_decl = (kw_var / kw_let / kw_const) var_declarator_list
-var_declarator_list = var_declarator (@punctuation ',' var_declarator)*
-# Trailing `(= expr)?` absorbed by enclosing stmt recovery.
-var_declarator: partial = pattern (@operator '=' expr_no_comma)?
+    # Template literals with ${...} interpolation. Chunks outside the
+    # interpolations get @string; the interpolation braces stay
+    # @punctuation and the inner expression is parsed as normal.
+    template_lit: atomic = @string '`' template_body @string '`' {
+        template_body: atomic = (template_chunk / template_interp)* {
+            template_chunk: atomic = @string (('\\' . / !'`' !'${' .)+)
+            template_interp = @punctuation '${' expr @punctuation '}'
+        }
+    }
 
-# --- Control flow -----------------------------------------------------
+    number_lit = @number num_body {
+        num_body: atomic = '0x' hex_digits 'n'?
+                         / '0o' oct_digits 'n'?
+                         / '0b' bin_digits 'n'?
+                         / decimal_num 'n'?
+        decimal_num: atomic = digit_seq '.' digit_seq? exp_part?
+                            / '.' digit_seq exp_part?
+                            / digit_seq exp_part? {
+            digit_seq: atomic = \d ([\d_])*
+            exp_part: atomic = [eE] [+\-]? \d+
+        }
+        hex_digits: atomic = [\da-fA-F] [\da-fA-F_]*
+        oct_digits: atomic = [0-7] [0-7_]*
+        bin_digits: atomic = [01] [01_]*
+    }
 
-# Trailing `(else stmt)?` leniency absorbed by stmt-level recovery.
-if_stmt: partial = kw_if @punctuation '(' expr @punctuation ')' stmt
-                   (kw_else stmt)?
-for_stmt = kw_for kw_await? @punctuation '(' for_head @punctuation ')' stmt
-for_head = for_c_style
-         / for_in_of
-for_c_style = for_init? @punctuation ';' expr? @punctuation ';' expr?
-for_in_of = for_binding (kw_in / kw_of) expr
-for_init = var_decl
-         / expr
-for_binding = (kw_var / kw_let / kw_const) pattern
-            / pattern
+    # --- Identifiers / reserved words ------------------------------------
 
-while_stmt = kw_while @punctuation '(' expr @punctuation ')' stmt
-do_while_stmt = kw_do stmt kw_while @punctuation '(' expr @punctuation ')' opt_semi
-switch_stmt = kw_switch @punctuation '(' expr @punctuation ')'
-              @punctuation '{' switch_case* @punctuation '}'
-switch_case = kw_case expr @punctuation ':' (!switch_case_term stmt)*
-            / kw_default @punctuation ':' (!switch_case_term stmt)*
-switch_case_term = kw_case / kw_default / @punctuation '}'
-# Trailing `(catch)? (finally)?` absorbed by stmt-level recovery.
-try_stmt: partial = kw_try block catch_clause? finally_clause?
-catch_clause = kw_catch (@punctuation '(' pattern @punctuation ')')? block
-finally_clause = kw_finally block
-throw_stmt = kw_throw expr opt_semi
-# Trailing `expr?` leniency on `~return_stmt` absorbed by stmt recovery.
-return_stmt: partial = kw_return expr? opt_semi
-break_stmt: partial = kw_break (@variable ident)? opt_semi
-continue_stmt: partial = kw_continue (@variable ident)? opt_semi
-debugger_stmt = kw_debugger opt_semi
-labeled_stmt = @variable ident @punctuation ':' stmt
-block = @punctuation '{' (stmt* @punctuation '}' ^^block_close ..= @punctuation '}')
+    # Per ECMAScript 2024 §12.7.1: IdentifierStartChar = ID_Start | $ | _;
+    # IdentifierPartChar = ID_Continue | $ | ZWNJ (U+200C) | ZWJ (U+200D).
+    # `_` is in ID_Start, but `$` is not (it's ASCII punctuation outside
+    # Unicode's identifier properties); same for the ZWNJ/ZWJ continuation
+    # extras. Escape forms `\uHHHH` and `\u{H..}` are admitted in both
+    # positions.
+    ident: atomic = !reserved ([\p{ID_Start}_$] / js_uesc) ident_body_part*
+    # `ident_name` mirrors ECMA's `IdentifierName`: like `ident`, but the
+    # `!reserved` guard is dropped so reserved words are accepted. Use at
+    # positions where ES allows IdentifierName but not BindingIdentifier
+    # (member access after `.` / `?.`, property keys, imported/exported
+    # names that aren't local bindings).
+    ident_name: atomic = ([\p{ID_Start}_$] / js_uesc) ident_body_part*
+    # Per §12.7.1 UnicodeEscapeSequence: 4 fixed hex digits or `{H..}` for
+    # 1-6 hex digits inside braces. Atomic so the prefix-then-fail shape
+    # stays internal.
+    js_uesc: atomic = '\\u{' [0-9A-Fa-f]+ '}' / '\\u' [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]
+    # `upper_ident` / `lower_ident` keep their ASCII-only start so the
+    # case-based shape gate (PascalCase → @type, etc.) doesn't dissolve
+    # into "any ID_Start letter". Future refinement via `\p{Lu}` /
+    # `\p{Ll}` if a non-ASCII-aware variant is needed.
+    upper_ident: atomic = !reserved [A-Z] ident_body_part*
+    lower_ident: atomic = !reserved [a-z_$] ident_body_part*
+    ident_body_part = ident_body / js_uesc
+    ident_body = [\p{ID_Continue}$\u{200C}\u{200D}]
 
-# --- Function params and patterns -------------------------------------
+    # --- Whitespace / comments --------------------------------------------
 
-fn_params = @punctuation '(' fn_param_list? @punctuation ')'
-fn_param_list = fn_param (@punctuation ',' fn_param)* (@punctuation ',')?
-fn_param = @operator '...' pattern
-         / pattern (@operator '=' expr_no_comma)?
-
-# --- Destructuring patterns ------------------------------------------
-
-pattern = array_pattern / object_pattern / @variable ident
-array_pattern = @punctuation '[' array_pattern_list? @punctuation ']'
-array_pattern_list = array_pattern_el (@punctuation ',' array_pattern_el)* (@punctuation ',')?
-array_pattern_el = @operator '...' pattern
-                 / pattern (@operator '=' expr_no_comma)?
-                 / ''
-object_pattern = @punctuation '{' object_pattern_list? @punctuation '}'
-object_pattern_list = object_pattern_prop (@punctuation ',' object_pattern_prop)* (@punctuation ',')?
-object_pattern_prop = @operator '...' pattern
-                    / (computed_prop / @property ident_name) @punctuation ':' pattern (@operator '=' expr_no_comma)?
-                    / @property ident (@operator '=' expr_no_comma)?
-
-computed_prop = @punctuation '[' expr @punctuation ']'
-
-# --- Expressions ------------------------------------------------------
-
-expr = expr_no_comma (@punctuation ',' expr_no_comma)*
-expr_no_comma = expr_assign
-expr_assign = expr_arrow
-            / expr_yield
-            / expr_conditional (assign_op expr_assign)?
-
-assign_op = @operator '**='
-          / @operator '<<=' / @operator '>>>=' / @operator '>>='
-          / @operator '||=' / @operator '&&=' / @operator '??='
-          / @operator '+=' / @operator '-=' / @operator '*=' / @operator '/='
-          / @operator '%=' / @operator '&=' / @operator '|=' / @operator '^='
-          / @operator '=' !'='
-
-# Arrow functions tried first. `async x => ...`, `x => ...`,
-# `(a, b) => ...`, `() => ...`.
-expr_arrow = arrow_head @operator '=>' arrow_body
-arrow_head = kw_async arrow_params
-           / arrow_params
-arrow_params = @variable ident
-             / arrow_paren_params
-arrow_paren_params = @punctuation '(' fn_param_list? @punctuation ')'
-arrow_body = block
-           / expr_no_comma
-
-# Trailing `(*)? (expr_assign)?` absorbed by stmt-level recovery.
-expr_yield: partial = kw_yield @operator '*'? expr_assign?
-
-# Ternary. Below the ternary, precedence is encoded by direct left
-# recursion — `level_n =  level_n OP level_{n+1} / level_{n+1}` per
-# level — except `expr_pow` (`**`) which stays right-recursive to
-# preserve right-associativity. Each level inlines its operator
-# alternation; cross-level ambiguities (`<` vs `<<`, `&` vs `&&`,
-# operator vs compound-assign, …) need explicit `!`-lookaheads.
-# Trailing ternary leniency absorbed by stmt-level recovery.
-expr_conditional: partial = expr_nullish (@operator '?' expr_no_comma @punctuation ':' expr_no_comma)?
-
-expr_nullish = expr_nullish @operator '??' !'=' expr_lor / expr_lor
-expr_lor = expr_lor @operator '||' !'=' expr_land / expr_land
-expr_land = expr_land @operator '&&' !'=' expr_bor / expr_bor
-expr_bor = expr_bor @operator '|' !'|' !'=' expr_bxor / expr_bxor
-expr_bxor = expr_bxor @operator '^' !'=' expr_band / expr_band
-expr_band = expr_band @operator '&' !'&' !'=' expr_eq / expr_eq
-expr_eq = expr_eq (@operator '===' / @operator '!==' / @operator '==' / @operator '!=') expr_rel / expr_rel
-expr_rel = expr_rel (@operator '<=' / @operator '>=' / @operator '<' !'<' / @operator '>' !'>' / kw_instanceof / kw_in) expr_shift / expr_shift
-expr_shift = expr_shift (@operator '>>>' !'=' / @operator '<<' !'=' / @operator '>>' !'=') expr_add / expr_add
-expr_add = expr_add (@operator '+' !'=' / @operator '-' !'=') expr_mul / expr_mul
-expr_mul = expr_mul (@operator '*' !'=' !'*' / @operator '/' !'=' / @operator '%' !'=') expr_pow / expr_pow
-
-# Right-associative: stays right-recursive, not LR.
-expr_pow = expr_unary @operator '**' !'=' expr_pow / expr_unary
-
-expr_unary = unary_op* expr_postfix
-unary_op = kw_typeof
-         / kw_void
-         / kw_delete
-         / kw_await
-         / @operator '++' / @operator '--'
-         / @operator '+' / @operator '-'
-         / @operator '!' / @operator '~'
-
-# Postfix: calls, member, optional chain, index, `++`/`--`.
-expr_postfix = expr_lhs postfix_op*
-postfix_op = @operator '++'
-           / @operator '--'
-           / @operator '?.' postfix_after_optional
-           / @punctuation '.' member_target
-           / @punctuation '[' expr @punctuation ']'
-           / call_args
-           / template_lit
-postfix_after_optional = call_args
-                       / @punctuation '[' expr @punctuation ']'
-                       / member_target
-member_target = @function ident_name &(@punctuation '(')
-              / @property ident_name
-call_args = @punctuation '(' arg_list? @punctuation ')'
-arg_list = arg (@punctuation ',' arg)* (@punctuation ',')?
-arg = @operator '...' expr_no_comma
-    / expr_no_comma
-
-expr_lhs = expr_new / expr_primary
-expr_new = kw_new expr_new_target
-expr_new_target = @type upper_ident new_tail?
-                / @variable lower_ident new_tail?
-                / expr_primary new_tail?
-new_tail = postfix_op+
-
-expr_primary = literal
-             / expr_this
-             / expr_super
-             / expr_fn
-             / expr_class
-             / expr_array
-             / expr_object
-             / expr_paren
-             / call_ident
-             / @type upper_ident
-             / @variable lower_ident
-
-call_ident = @function ident &(@punctuation '(')
-
-expr_this = kw_this
-expr_super = kw_super
-expr_fn = kw_async? kw_function @operator '*'? @function ident? fn_params block
-expr_class = kw_class @type ident? class_heritage? class_body
-expr_array = @punctuation '[' array_elem_list? @punctuation ']'
-array_elem_list = array_elem (@punctuation ',' array_elem)* (@punctuation ',')?
-array_elem = @operator '...' expr_no_comma
-           / expr_no_comma
-           / ''
-expr_object = @punctuation '{' object_props? @punctuation '}'
-object_props = object_prop (@punctuation ',' object_prop)* (@punctuation ',')?
-object_prop = @operator '...' expr_no_comma
-            / object_method
-            / (computed_prop / string_lit / number_lit / @property ident_name) @punctuation ':' expr_no_comma
-            / @property ident
-object_method = kw_async? @operator '*'? method_head fn_params block
-              / (kw_get / kw_set) method_head fn_params block
-expr_paren = @punctuation '(' expr @punctuation ')'
-
-# --- Literals ---------------------------------------------------------
-
-literal = template_lit
-        / string_lit
-        / number_lit
-        / lit_const
-        / lit_undefined
-
-# Boolean / null / undefined constants; the `boundary` boundary keeps
-# `trueish` / `nullish` from matching the prefix.
-lit_const: reserved = @constant 'true' / @constant 'false' / @constant 'null'
-lit_undefined: preferred = @constant 'undefined'
-
-string_lit = @string (sq_string / dq_string)
-sq_string: atomic = "'" ('\\' . / !"'" !'\n' .)* "'"
-dq_string: atomic = '"' ('\\' . / !'"' !'\n' .)* '"'
-
-# Template literals with ${...} interpolation. Chunks outside the
-# interpolations get @string; the interpolation braces stay
-# @punctuation and the inner expression is parsed as normal.
-template_lit: atomic = @string '`' template_body @string '`'
-template_body: atomic = (template_chunk / template_interp)*
-template_chunk: atomic = @string (('\\' . / !'`' !'${' .)+)
-template_interp = @punctuation '${' expr @punctuation '}'
-
-number_lit = @number num_body
-num_body: atomic = '0x' hex_digits 'n'?
-                 / '0o' oct_digits 'n'?
-                 / '0b' bin_digits 'n'?
-                 / decimal_num 'n'?
-decimal_num: atomic = digit_seq '.' digit_seq? exp_part?
-                    / '.' digit_seq exp_part?
-                    / digit_seq exp_part?
-digit_seq: atomic = \d ([\d_])*
-hex_digits: atomic = [\da-fA-F] [\da-fA-F_]*
-oct_digits: atomic = [0-7] [0-7_]*
-bin_digits: atomic = [01] [01_]*
-exp_part: atomic = [eE] [+\-]? \d+
-
-# --- Identifiers / reserved words ------------------------------------
-
-# Per ECMAScript 2024 §12.7.1: IdentifierStartChar = ID_Start | $ | _;
-# IdentifierPartChar = ID_Continue | $ | ZWNJ (U+200C) | ZWJ (U+200D).
-# `_` is in ID_Start, but `$` is not (it's ASCII punctuation outside
-# Unicode's identifier properties); same for the ZWNJ/ZWJ continuation
-# extras. Escape forms `\uHHHH` and `\u{H..}` are admitted in both
-# positions.
-ident: atomic = !reserved ([\p{ID_Start}_$] / js_uesc) ident_body_part*
-# `ident_name` mirrors ECMA's `IdentifierName`: like `ident`, but the
-# `!reserved` guard is dropped so reserved words are accepted. Use at
-# positions where ES allows IdentifierName but not BindingIdentifier
-# (member access after `.` / `?.`, property keys, imported/exported
-# names that aren't local bindings).
-ident_name: atomic = ([\p{ID_Start}_$] / js_uesc) ident_body_part*
-# Per §12.7.1 UnicodeEscapeSequence: 4 fixed hex digits or `{H..}` for
-# 1-6 hex digits inside braces. Atomic so the prefix-then-fail shape
-# stays internal.
-js_uesc: atomic = '\\u{' [0-9A-Fa-f]+ '}' / '\\u' [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]
-# `upper_ident` / `lower_ident` keep their ASCII-only start so the
-# case-based shape gate (PascalCase → @type, etc.) doesn't dissolve
-# into "any ID_Start letter". Future refinement via `\p{Lu}` /
-# `\p{Ll}` if a non-ASCII-aware variant is needed.
-upper_ident: atomic = !reserved [A-Z] ident_body_part*
-lower_ident: atomic = !reserved [a-z_$] ident_body_part*
-ident_body_part = ident_body / js_uesc
-ident_body = [\p{ID_Continue}$\u{200C}\u{200D}]
-
-# --- Whitespace / comments --------------------------------------------
-
-comment: atomic = @comment ('//' .. '\n' / '/*' ..= '*/')
+    comment: atomic = @comment ('//' .. '\n' / '/*' ..= '*/')
+}

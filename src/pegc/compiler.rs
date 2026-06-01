@@ -7,20 +7,12 @@ use crate::pegvm::{CaptureKind, Instruction, Label, LabelId, MemoId, Program, Ru
 #[derive(Debug)]
 pub enum CompileError {
     UndefinedRule(String),
-    /// Grammar (whether parsed from source or hand-built via
-    /// `Grammar::new`) doesn't define the reserved `root` rule. The
-    /// parser also raises this — surfaced here too because hand-built
-    /// grammars in tests bypass the parser.
+    /// Grammar's entry rule is absent from the rule map. For parsed
+    /// grammars the parser guarantees the single top-level declaration
+    /// is present; this mainly guards hand-built grammars (built via
+    /// `Grammar::new`, which bypass the parser) whose map lacks a
+    /// `"root"` entry.
     MissingRootRule,
-    /// Grammar defines `root` but not at the expected source position.
-    /// `root` must always be the first rule (parse-time enforcement
-    /// also requires `ignore`, when present, to sit immediately
-    /// after). Only raised for parsed grammars (hand-built ones have
-    /// no recorded source order).
-    RootRulePosition {
-        expected_pos: usize,
-        has_ignore: bool,
-    },
     /// One or more `^^lbl` catches have no following context to infer
     /// their boundary from. Emitted by `resolve_inferred_boundaries`.
     /// `span` is the source position of the `^^lbl` placeholder in the
@@ -52,12 +44,8 @@ impl std::fmt::Display for CompileError {
             CompileError::UndefinedRule(name) => write!(f, "undefined rule: {}", name),
             CompileError::MissingRootRule => write!(
                 f,
-                "grammar must define a `root` rule (the entry point)"
+                "grammar must define an entry rule (the single top-level declaration)"
             ),
-            CompileError::RootRulePosition {
-                expected_pos: _,
-                has_ignore: _,
-            } => write!(f, "`root` must be the first rule"),
             CompileError::CannotInferBoundary { rule, label, span } => write!(
                 f,
                 "{span}: cannot infer boundary for `^^{label}` in rule `{rule}`: no following context. \
@@ -386,19 +374,24 @@ pub fn compile_pattern(pat: &Pattern) -> Program {
 /// reach this via [`Grammar::compile`](super::Grammar::compile) or
 /// the one-step [`super::compile`].
 ///
-/// The start rule is always [`ROOT_RULE`](super::parser::ROOT_RULE);
-/// `Grammar::compile` checks for its presence up front and wraps its
-/// body via [`super::analysis::wrap_root`] before this is called.
+/// `root` is the grammar's entry rule (the single top-level
+/// declaration's name, or [`ROOT_RULE`](super::parser::ROOT_RULE) for
+/// hand-built grammars); `Grammar::compile` checks for its presence up
+/// front and wraps its body via [`super::analysis::wrap_root`] before
+/// this is called.
 ///
 /// Code layout:
 ///   0: Call(<root address>)
 ///   1: End
 ///   2..: rule bodies, each ending with Return
-pub(crate) fn compile_rules(rules: &HashMap<String, Pattern>) -> Result<Program, CompileError> {
-    let start = super::parser::ROOT_RULE;
+pub(crate) fn compile_rules(
+    rules: &HashMap<String, Pattern>,
+    root: &str,
+) -> Result<Program, CompileError> {
+    let start = root;
     debug_assert!(
         rules.contains_key(start),
-        "compile_rules: `root` rule must be present (Grammar::compile enforces this)"
+        "compile_rules: entry rule must be present (Grammar::compile enforces this)"
     );
 
     // Detect undefined NonTerminal references up front so the LR analysis

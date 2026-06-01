@@ -272,8 +272,9 @@ fn lr_converged_seed_persists_across_parses() {
     use syntax_highlighter::pegc;
     use syntax_highlighter::pegvm::MemoCache;
     let src = r#"
-        root = expr
+        root = expr {
         expr = expr '+' [0-9]+ / [0-9]+
+        }
     "#;
     let prog = pegc::compile(src).expect("compile");
     let input = b"1+2+3";

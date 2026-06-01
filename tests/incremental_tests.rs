@@ -115,7 +115,8 @@ fn lr_cache_entry_invalidated_by_edit_inside_examined_range() {
     // seed-and-grow loop looked at.
     use syntax_highlighter::pegc;
     use syntax_highlighter::pegvm::Edit;
-    let prog = pegc::compile("root = expr\n        expr = expr '+' [0-9]+ / [0-9]+").unwrap();
+    let prog =
+        pegc::compile("root = expr {\n        expr = expr '+' [0-9]+ / [0-9]+\n        }").unwrap();
 
     let (_, _, mut cache) = VM::new_from_program(&prog, b"1+2+3")
         .with_memo_threshold(0)
@@ -148,7 +149,8 @@ fn lr_cache_round_trip_after_edit_matches_fresh_parse() {
     // gives an equivalent fresh-parse result on every edit).
     use syntax_highlighter::pegc;
     use syntax_highlighter::pegvm::Edit;
-    let prog = pegc::compile("root = expr\n        expr = expr '+' [0-9]+ / [0-9]+").unwrap();
+    let prog =
+        pegc::compile("root = expr {\n        expr = expr '+' [0-9]+ / [0-9]+\n        }").unwrap();
 
     let (_, _, mut cache) = VM::new_from_program(&prog, b"1+2+3")
         .with_memo_threshold(0)

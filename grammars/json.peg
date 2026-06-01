@@ -1,33 +1,37 @@
 # JSON grammar with highlight annotations.
 
-root = value
+root = value {
 
-ignore = \s*
+    ignore = \s*
 
-value = @string string
-      / @number number
-      / object
-      / array
-      / @constant 'true'
-      / @constant 'false'
-      / @constant 'null'
+    value = @string string
+          / @number number
+          / object
+          / array
+          / @constant 'true'
+          / @constant 'false'
+          / @constant 'null'
+    {
+        string: atomic = '"' string_char* '"' {
+            string_char: atomic = '\\' ["\\/bfnrt]
+                                / '\\' 'u' [\da-fA-F]{4}
+                                / [^"\\]
+        }
 
-object = @punctuation '{'
-         (pair (@punctuation ',' pair)*)?
-         @punctuation '}'
+        number: atomic = '-'? int frac? exp? {
+            int: atomic = '0' / [1-9] \d*
+            frac: atomic = '.' \d+
+            exp: atomic = [eE] [+\-]? \d+
+        }
 
-pair = @property string @punctuation ':' value
+        object = @punctuation '{'
+                 (pair (@punctuation ',' pair)*)?
+                 @punctuation '}'
 
-array = @punctuation '['
-        (value (@punctuation ',' value)*)?
-        @punctuation ']'
+        array = @punctuation '['
+                (value (@punctuation ',' value)*)?
+                @punctuation ']'
 
-string: atomic = '"' string_char* '"'
-string_char: atomic = '\\' ["\\/bfnrt]
-                    / '\\' 'u' [\da-fA-F]{4}
-                    / [^"\\]
-
-number: atomic = '-'? int frac? exp?
-int: atomic = '0' / [1-9] \d*
-frac: atomic = '.' \d+
-exp: atomic = [eE] [+\-]? \d+
+        pair = @property string @punctuation ':' value
+    }
+}

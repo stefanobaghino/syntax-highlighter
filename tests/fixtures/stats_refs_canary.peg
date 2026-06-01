@@ -1,3 +1,4 @@
-root = a a b
-a = 'x'
-b = a / 'y'
+root = a a b {
+    a = 'x'
+    b = a / 'y'
+}

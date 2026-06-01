@@ -27,7 +27,7 @@ fn simple_rule() {
 
 #[test]
 fn rule_order_preserved() {
-    let g = parse("first = 'a'\nsecond = 'b'");
+    let g = parse("first = 'a' {\nsecond = 'b'\n}");
     let order: Vec<&str> = g.rule_headers.iter().map(|h| h.name.as_str()).collect();
     assert_eq!(order, vec!["first", "second"]);
     assert_eq!(g.rules.len(), 2);
@@ -61,7 +61,7 @@ fn sequence_in_grammar() {
 
 #[test]
 fn postfix_operators() {
-    let g = parse("a = 'x'*\nb = 'x'+\nc = 'x'?");
+    let g = parse("a = 'x'* {\nb = 'x'+\nc = 'x'?\n}");
     assert_eq!(g.rules["a"], Pattern::repeat(Pattern::literal("x")));
     assert_eq!(g.rules["b"], Pattern::repeat_one(Pattern::literal("x")));
     assert_eq!(g.rules["c"], Pattern::optional(Pattern::literal("x")));
@@ -143,13 +143,13 @@ fn postfix_repeat_count_zero_rejected() {
 }
 
 #[test]
-fn postfix_repeat_count_empty_rejected() {
-    let err = parse_src("r = 'x'{}").unwrap_err();
-    assert!(
-        err.message.contains("expected positive integer"),
-        "expected integer-required message, got: {}",
-        err.message
-    );
+fn postfix_repeat_count_empty_is_scope_block() {
+    // Post-scoping: a `{` after an atom only starts a repeat-count when
+    // it is immediately followed by a digit. `'x'{}` is now an empty
+    // scope block on the rule `r`, not a malformed `{n}`. The grammar
+    // is well-formed and parses to the bare atom with no nested rules.
+    let g = parse("r = 'x'{}");
+    assert_eq!(g.rules["r"], Pattern::literal("x"));
 }
 
 #[test]
@@ -163,13 +163,13 @@ fn postfix_repeat_count_unterminated_rejected() {
 }
 
 #[test]
-fn postfix_repeat_count_non_decimal_rejected() {
-    // The digit scan stops at `a`, leaving zero digits read — same error
-    // path as `{}`.
+fn postfix_repeat_count_non_decimal_is_scope_block() {
+    // Post-scoping: `{` not followed by a digit opens a scope block, so
+    // `'x'{a}` reads `a` as a nested rule name and then expects its `=`.
     let err = parse_src("r = 'x'{a}").unwrap_err();
     assert!(
-        err.message.contains("expected positive integer"),
-        "expected integer-required message, got: {}",
+        err.message.contains("expected '='"),
+        "expected a scope-block rule-def error, got: {}",
         err.message
     );
 }
@@ -185,13 +185,14 @@ fn postfix_repeat_count_exceeds_maximum_rejected() {
 }
 
 #[test]
-fn postfix_repeat_count_whitespace_inside_braces_rejected() {
-    // `{n}` is tight, matching the rest of the postfix tier — interior
-    // whitespace makes the digit scan see zero digits.
+fn postfix_repeat_count_whitespace_inside_braces_is_scope_block() {
+    // `{n}` is tight: only a `{` immediately followed by a digit is a
+    // repeat-count. `'x'{ 4 }` has a space after `{`, so it opens a
+    // scope block whose first rule name fails to parse at `4`.
     let err = parse_src("r = 'x'{ 4 }").unwrap_err();
     assert!(
-        err.message.contains("expected positive integer"),
-        "expected integer-required message, got: {}",
+        err.message.contains("expected identifier"),
+        "expected a scope-block identifier error, got: {}",
         err.message
     );
 }
@@ -401,13 +402,12 @@ fn recovery_label_default_is_recovery() {
 fn recovery_label_rejects_whitespace_before_colon() {
     // `*^ :lbl` (whitespace between `^` and `:`) breaks the postfix
     // glue: the `*^` lowers without a label, the loose `:lbl` isn't a
-    // valid sequence atom, and the parser falls through to the next
-    // rule-start where `:` fails `parse_ident` with "expected
-    // identifier".
+    // valid sequence atom, and the parser treats it as a stray second
+    // top-level declaration — rejected by the single-root rule.
     let err = parse_src("r = 'x'*^ :lbl").unwrap_err();
     assert!(
-        err.message.contains("expected identifier"),
-        "expected an identifier-required error at top level, got: {}",
+        err.message.contains("exactly one top-level declaration"),
+        "expected a single-root error at top level, got: {}",
         err.message
     );
 }
@@ -439,13 +439,12 @@ fn recovery_label_rejects_underscore() {
 fn recovery_label_after_sync_set_requires_no_space_before_colon() {
     // `*^[;] :lbl` (whitespace between `]` and `:`) breaks the postfix
     // glue: `*^[;]` lowers without a label, the loose `:lbl` isn't a
-    // valid sequence atom, and the parser falls through to the next
-    // rule-start where `:` fails `parse_ident` with "expected
-    // identifier".
+    // valid sequence atom, and the parser treats it as a stray second
+    // top-level declaration — rejected by the single-root rule.
     let err = parse_src("r = 'x'*^[;] :lbl").unwrap_err();
     assert!(
-        err.message.contains("expected identifier"),
-        "expected an identifier-required error at top level, got: {}",
+        err.message.contains("exactly one top-level declaration"),
+        "expected a single-root error at top level, got: {}",
         err.message
     );
 }
@@ -540,7 +539,7 @@ fn catch_does_not_collide_with_star_caret() {
     // whitespace between `*` and `^`). `'x'* ^lbl 'y'` is a Catch of
     // Repeat over a separate recovery branch — whitespace before `^`
     // breaks the postfix glue.
-    let g = parse("a = 'x'*^\nb = 'x'* ^lbl 'y'");
+    let g = parse("a = 'x'*^ {\nb = 'x'* ^lbl 'y'\n}");
     assert_eq!(
         g.rules["a"],
         desugared_recover_repeat(Pattern::literal("x"), Pattern::any_char())
@@ -648,7 +647,7 @@ fn boundary_catch_lowers_to_anchored_catch_with_recovery_loop() {
 
 #[test]
 fn boundary_catch_with_rule_boundary() {
-    let g = parse("r = 'a' ^^lbl b\nb = 'x'");
+    let g = parse("r = 'a' ^^lbl b {\nb = 'x'\n}");
     assert_eq!(
         g.rules["r"],
         lowered_boundary_catch(Pattern::literal("a"), "lbl", Pattern::nt("b")),
@@ -667,7 +666,7 @@ fn boundary_catch_with_charset_boundary() {
 
 #[test]
 fn boundary_catch_with_grouped_boundary() {
-    let g = parse("r = 'a' ^^lbl (b c)\nb = 'x'\nc = 'y'");
+    let g = parse("r = 'a' ^^lbl (b c) {\nb = 'x'\nc = 'y'\n}");
     let boundary = Pattern::seq(vec![Pattern::nt("b"), Pattern::nt("c")]);
     assert_eq!(
         g.rules["r"],
@@ -840,7 +839,7 @@ fn catch_accepts_underscore_prefixed_labels() {
 
 #[test]
 fn predicate_operators() {
-    let g = parse("a = !'x' .\nb = &'y' 'y'");
+    let g = parse("a = !'x' . {\nb = &'y' 'y'\n}");
     assert_eq!(
         g.rules["a"],
         Pattern::seq(vec![
@@ -893,9 +892,10 @@ fn capture_annotation() {
 fn comments_and_blank_lines() {
     let src = "
         # this is a top-level comment
-        first = 'a'   # trailing comment
+        first = 'a' {  # trailing comment
         # another comment
         second = 'b'
+        }
     ";
     let g = parse(src);
     assert_eq!(g.rules.len(), 2);
@@ -919,7 +919,7 @@ fn parens_and_precedence() {
 
 #[test]
 fn nonterminal_reference() {
-    let g = parse("a = b\nb = 'x'");
+    let g = parse("a = b {\nb = 'x'\n}");
     assert_eq!(g.rules["a"], Pattern::nt("b"));
 }
 
@@ -1084,7 +1084,7 @@ fn unknown_backslash_atom_errors() {
 #[test]
 fn end_to_end_grammar_compile_run() {
     use syntax_highlighter::pegvm::VM;
-    let g = parse("root = number\nnumber = [0-9]+");
+    let g = parse("root = number {\nnumber = [0-9]+\n}");
     let prog = g.compile().unwrap();
     let r = VM::new_from_program(&prog, b"42abc").run();
     // `root`'s implicit `!.` rejects the trailing 'a'; the parse no
@@ -1098,7 +1098,7 @@ fn end_to_end_recover_repeat_compile_run() {
     use syntax_highlighter::pegvm::VM;
     // Top-level `*^` resyncs past garbage one byte at a time; the parse
     // completes at EOF, with one "recovery"-tagged capture per skipped byte.
-    let g = parse("root = doc\ndoc = @kw \"foo\"*^");
+    let g = parse("root = doc {\ndoc = @kw \"foo\"*^\n}");
     let prog = g.compile().unwrap();
     let r = VM::new_from_program(&prog, b"fooXXfoo").run();
     assert!(r.complete);
@@ -1123,11 +1123,11 @@ fn end_to_end_inferred_catch_matches_explicit_behavior() {
     // bytecode isn't expected (label numbering shifts), but the
     // MatchResult on the same input must agree.
     use syntax_highlighter::pegvm::VM;
-    let inferred = parse("root = list\nlist = aliased (',' aliased)*\naliased = 'x' ^^bad")
+    let inferred = parse("root = list {\nlist = aliased (',' aliased)*\naliased = 'x' ^^bad\n}")
         .compile()
         .unwrap();
     let explicit =
-        parse("root = list\nlist = aliased (',' aliased)*\naliased = 'x' ^^bad (',' / !.)")
+        parse("root = list {\nlist = aliased (',' aliased)*\naliased = 'x' ^^bad (',' / !.)\n}")
             .compile()
             .unwrap();
     for input in [&b"x,x"[..], b"xy,x", b"x"].iter() {
@@ -1152,7 +1152,7 @@ fn end_to_end_inferred_catch_fires_on_partial_match() {
     // `list`. Input `xy,x` — the first `x` succeeds but the next
     // byte `y` is not in FOLLOW; the catch fires, recovery skips
     // `y` until it sees `,`, and parsing resumes with the second `x`.
-    let prog = parse("root = list\nlist = aliased (',' aliased)*\naliased = 'x' ^^bad")
+    let prog = parse("root = list {\nlist = aliased (',' aliased)*\naliased = 'x' ^^bad\n}")
         .compile()
         .unwrap();
     let r = VM::new_from_program(&prog, b"xy,x").run();
@@ -1162,7 +1162,7 @@ fn end_to_end_inferred_catch_fires_on_partial_match() {
 #[test]
 fn end_to_end_inferred_catch_clean_input_no_recovery() {
     use syntax_highlighter::pegvm::VM;
-    let prog = parse("root = list\nlist = aliased (',' aliased)*\naliased = 'x' ^^bad")
+    let prog = parse("root = list {\nlist = aliased (',' aliased)*\naliased = 'x' ^^bad\n}")
         .compile()
         .unwrap();
     let r = VM::new_from_program(&prog, b"x,x").run();
@@ -1180,8 +1180,8 @@ fn end_to_end_lenient_marker_is_runtime_transparent() {
     use syntax_highlighter::pegvm::VM;
     // The marker rides a non-special helper rule — `root` (like
     // `ignore` / `boundary`) rejects every ascription.
-    let plain = parse("root = r\nr = 'x'+").compile().unwrap();
-    let lenient = parse("root = r\nr: partial = 'x'+").compile().unwrap();
+    let plain = parse("root = r {\nr = 'x'+\n}").compile().unwrap();
+    let lenient = parse("root = r {\nr: partial = 'x'+\n}").compile().unwrap();
     assert_eq!(plain.code, lenient.code, "`partial` is runtime-transparent");
     let r = VM::new(&lenient.code, b"xxx").run();
     assert!(r.complete);
@@ -1196,7 +1196,7 @@ fn end_to_end_recover_repeat_with_label_intern() {
     // identical to the unlabeled form (one recovery capture per
     // skipped byte, clean exit at EOF). pegdb recoveries explain
     // clusters by this label.
-    let g = parse("root = doc\ndoc = @kw \"foo\"*^:bad_doc");
+    let g = parse("root = doc {\ndoc = @kw \"foo\"*^:bad_doc\n}");
     let prog = g.compile().unwrap();
     assert_eq!(prog.label_kinds, vec!["bad_doc"]);
     let r = VM::new_from_program(&prog, b"fooXXfoo").run();
@@ -1213,7 +1213,7 @@ fn end_to_end_catch_compile_run() {
     // semicolon. Input is malformed (no FROM), so the inner fails and
     // the recovery branch fires.
     let g = parse(
-        "root = stmt\nstmt = (@kw 'SELECT' ' ' @kw 'FROM' ' ' 'x' ';') ^bad_select @err ((!';' .)*) ';'",
+        "root = stmt {\nstmt = (@kw 'SELECT' ' ' @kw 'FROM' ' ' 'x' ';') ^bad_select @err ((!';' .)*) ';'\n}",
     );
     let prog = g.compile().unwrap();
     let r = VM::new_from_program(&prog, b"SELECT bogus;").run();
@@ -1235,7 +1235,7 @@ fn end_to_end_catch_compile_run() {
 
 #[test]
 fn duplicate_rule_errors() {
-    let err = parse_src("a = 'x'\na = 'y'").unwrap_err();
+    let err = parse_src("root = a {\na = 'x'\na = 'y'\n}").unwrap_err();
     assert!(err.message.contains("twice"), "got: {}", err.message);
 }
 
@@ -1606,7 +1606,7 @@ fn case_insensitive_literal_inside_capture() {
 
 #[test]
 fn case_insensitive_literal_composes_with_postfix_and_lookahead() {
-    let g = parse("r = i\"a\"*\ns = !i\"a\"");
+    let g = parse("r = i\"a\"* {\ns = !i\"a\"\n}");
     let body = ci_class('a', 'A');
     assert_eq!(g.rules["r"], Pattern::repeat(body.clone()));
     assert_eq!(g.rules["s"], Pattern::not_predicate(body));
