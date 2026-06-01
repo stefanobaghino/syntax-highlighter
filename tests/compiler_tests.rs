@@ -2315,3 +2315,106 @@ fn wb_without_trivia_is_valid() {
         .compile()
         .expect("compile");
 }
+
+// ---- `%?` preferred-word sigil + synthesized reserved / preferred ---
+
+#[test]
+fn preferred_sigil_populates_preferred_and_percent_sets() {
+    // `%?r` is a preferred-word rule: it lands in `preferred_rules`, and
+    // also in `percent_rules` + `atomic_rules` (it still gets the `wb`
+    // boundary; it differs from `%` only in which synthesized set it
+    // feeds).
+    let g =
+        parse("root <- r\ntrivia <- (\\s)*\nwb <- !'x'\n%?r <- @keyword{'async'}").expect("parse");
+    assert!(g.preferred_rules.contains("r"), "`%?r` should be preferred");
+    assert!(
+        g.percent_rules.contains("r"),
+        "`%?r` is still a percent rule (gets `wb`)"
+    );
+    assert!(g.atomic_rules.contains("r"), "`%?r` is also atomic");
+}
+
+#[test]
+fn preferred_and_atomic_combined_is_parse_error() {
+    for src in ["%?*r <- 'a'", "*%?r <- 'a'"] {
+        let err = parse(src).expect_err("combining `%?` and `*` must error");
+        assert!(
+            err.message.contains("cannot be combined"),
+            "{src:?} unexpected error: {}",
+            err.message
+        );
+    }
+}
+
+#[test]
+fn preferred_on_reserved_rule_is_parse_error() {
+    for name in ["root", "trivia", "wb"] {
+        let src = format!("%?{name} <- 'a'");
+        let err = parse(&src).expect_err("`%?` on a reserved rule must error");
+        assert!(
+            err.message.contains("reserved rule"),
+            "{src:?} unexpected error: {}",
+            err.message
+        );
+    }
+}
+
+#[test]
+fn defining_synthesized_rule_is_parse_error() {
+    // `reserved` / `preferred` are compiler-generated; an explicit
+    // definition (with or without a sigil) is rejected.
+    for src in [
+        "reserved <- 'a'",
+        "%reserved <- 'a'",
+        "preferred <- 'a'",
+        "%?preferred <- 'a'",
+    ] {
+        let err = parse(src).expect_err("defining a synthesized rule must error");
+        assert!(
+            err.message.contains("compiler-generated"),
+            "{src:?} unexpected error: {}",
+            err.message
+        );
+    }
+}
+
+#[test]
+fn reserved_preferred_conflict_errors() {
+    // The same literal marked `%` (reserved) in one rule and `%?`
+    // (preferred) in another is a contradiction — compile rejects it.
+    let err = parse("root <- 'x'\nwb <- !'y'\n%a <- 'int'\n%?b <- 'int'")
+        .expect("parse")
+        .compile()
+        .expect_err("conflicting reserved/preferred must error");
+    match err {
+        syntax_highlighter::pegc::CompileError::ReservedPreferredConflict(words) => {
+            assert!(words.iter().any(|w| w == "int"), "got: {words:?}");
+        }
+        other => panic!("expected ReservedPreferredConflict, got: {other:?}"),
+    }
+}
+
+#[test]
+fn synthesized_reserved_trie_and_preferred_membership() {
+    // `%kw_word` is reserved with a deliberately wrong source order
+    // (`int` before `int8`); the synthesized `reserved` / keyword trie
+    // still matches `int8` maximally (#13 fixed structurally). `%?pre`
+    // (`len`) is preferred, so it is excluded from `reserved` and stays
+    // usable as an identifier.
+    let src = "root <- (token)*^\n\
+               trivia <- (\\s)*\n\
+               wb <- !ident_body\n\
+               token <- @keyword{kw_word} / @variable{ident}\n\
+               %kw_word <- 'int' / 'int8'\n\
+               %?pre <- 'len'\n\
+               *ident <- !reserved [a-z] ident_body*\n\
+               ident_body <- [a-z0-9]";
+    assert_eq!(
+        run_grammar(src, "int8 len int"),
+        vec![
+            ("keyword".to_string(), "int8"),
+            ("variable".to_string(), "len"),
+            ("keyword".to_string(), "int"),
+        ]
+    );
+}

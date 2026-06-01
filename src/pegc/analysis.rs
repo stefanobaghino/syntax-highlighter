@@ -5,7 +5,7 @@
 //! the rest (FIRST/FOLLOW) for grammar inspection — see the
 //! `pegc follow-set` subcommand.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use super::compiler::CompileError;
 use super::parser::Grammar;
@@ -1666,6 +1666,23 @@ fn append_wb_in(pat: &mut Pattern) {
     // choice is equivalent to — and leaner than — one per branch. Only
     // distribute when there is a capture to keep the boundary inside of.
     if matches!(pat, Pattern::OrderedChoice { .. }) && !contains_capture(pat) {
+        // When every branch is a plain literal, prefix-factor the set
+        // into a longest-match trie (with `wb` at each accept) instead of
+        // a flat alternation under one trailing `wb`. The trie makes
+        // source ordering irrelevant — a shorter keyword can no longer
+        // shadow a longer one that shares its prefix (#13: `do`/`double`,
+        // `go`/`goto`, `int`/`int8`) — and turns the hot
+        // identifier-exclusion scan into a prefix walk. Non-literal
+        // capture-less choices (e.g. the case-insensitive `i"…"` keyword
+        // sets, which lower to char-class sequences) keep the flat
+        // single-trailing-`wb` form; `synthesize_reserved_preferred`
+        // emits those longest-first so the flat form is still correct.
+        if let Pattern::OrderedChoice { alts, .. } = pat {
+            if let Some(literals) = all_plain_literals(alts) {
+                *pat = factor_literal_trie(literals);
+                return;
+            }
+        }
         let taken = std::mem::replace(pat, Pattern::any_char());
         *pat = Pattern::seq(vec![taken, Pattern::nt(super::parser::WB_RULE)]);
         return;
@@ -1715,6 +1732,254 @@ fn contains_capture(pat: &Pattern) -> bool {
     }
 }
 
+/// If every alternative of a choice is a plain [`Pattern::Literal`],
+/// return their raw byte-strings; otherwise `None`. The all-or-nothing
+/// gate keeps [`append_wb_in`] on the flat single-`wb` path for choices
+/// that mix literals with char classes / sub-rules (e.g. the
+/// case-insensitive `i"…"` keyword sets).
+fn all_plain_literals(alts: &[Pattern]) -> Option<Vec<Vec<u8>>> {
+    let mut out = Vec::with_capacity(alts.len());
+    for a in alts {
+        match a {
+            Pattern::Literal { bytes, .. } => out.push(bytes.clone()),
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
+/// Prefix-factor a set of literal byte-strings into a longest-match trie
+/// with a [`WB_RULE`](super::parser::WB_RULE) call at every accepting
+/// node. Replaces a flat capture-less literal alternation: the trie is
+/// order-independent (a shorter keyword can't shadow a longer one that
+/// extends it) and walks the input once instead of re-scanning every
+/// alternative.
+fn factor_literal_trie(mut literals: Vec<Vec<u8>>) -> Pattern {
+    literals.sort();
+    literals.dedup();
+    build_trie(literals)
+}
+
+/// Build one trie node from the suffixes that reach it. An empty suffix
+/// means "a keyword ends here" → emit `wb`. Distinct continuation bytes
+/// become sibling branches; a single-child, no-accept chain is coalesced
+/// into one multi-byte literal. The accept (`wb`) branch is emitted
+/// *last* so maximal munch wins: with `long` and `long long` in the set,
+/// trying ` long` before accepting `long` is what stops `long long` from
+/// matching only its `long` prefix (the space is a valid boundary, so a
+/// `wb`-first order would accept the short form).
+fn build_trie(entries: Vec<Vec<u8>>) -> Pattern {
+    let mut accept = false;
+    let mut groups: BTreeMap<u8, Vec<Vec<u8>>> = BTreeMap::new();
+    for e in entries {
+        match e.split_first() {
+            None => accept = true,
+            Some((&b, rest)) => groups.entry(b).or_default().push(rest.to_vec()),
+        }
+    }
+    let mut branches: Vec<Pattern> = Vec::with_capacity(groups.len() + 1);
+    for (b, subs) in groups {
+        let mut prefix = vec![b];
+        let mut cur = subs;
+        loop {
+            if cur.iter().any(|e| e.is_empty()) {
+                break;
+            }
+            let firsts: BTreeSet<u8> = cur.iter().filter_map(|e| e.first().copied()).collect();
+            if firsts.len() != 1 {
+                break;
+            }
+            let only = *firsts.iter().next().unwrap();
+            prefix.push(only);
+            cur = cur.into_iter().map(|e| e[1..].to_vec()).collect();
+        }
+        let sub = build_trie(cur);
+        branches.push(Pattern::seq(vec![Pattern::literal_bytes(prefix), sub]));
+    }
+    if accept {
+        branches.push(Pattern::nt(super::parser::WB_RULE));
+    }
+    Pattern::choice(branches)
+}
+
+/// Synthesize the compiler-generated `reserved` and `preferred` rules
+/// from the literals reachable through the grammar's `%` / `%?` rules.
+///
+/// `reserved` collects every literal of a `%` rule that is *not* `%?`;
+/// `preferred` collects every literal of a `%?` rule. A rule whose body
+/// isn't a fixed keyword shape (it has a quantifier, wildcard, predicate,
+/// or an unresolvable reference — e.g. a number body like
+/// `'0x' [\da-fA-F]+`) contributes nothing. Both rules are emitted as a
+/// flat alternation ordered longest-first and registered as `%` rules, so
+/// the following [`append_wb_check`] gives them the same trie + `wb`
+/// treatment as any author-written keyword set.
+///
+/// A literal reachable from both a `%` and a `%?` rule is a contradiction
+/// (it can't be both barred from and allowed in identifier position) and
+/// raises [`CompileError::ReservedPreferredConflict`].
+pub fn synthesize_reserved_preferred(grammar: &mut Grammar) -> Result<(), CompileError> {
+    let mut reserved: BTreeSet<Vec<CharSet>> = BTreeSet::new();
+    let mut preferred: BTreeSet<Vec<CharSet>> = BTreeSet::new();
+
+    let mut percent: Vec<String> = grammar.percent_rules.iter().cloned().collect();
+    percent.sort();
+    for name in &percent {
+        let Some(body) = grammar.rules.get(name) else {
+            continue;
+        };
+        let mut visiting = vec![name.clone()];
+        let Some(entries) = keyword_entries(body, &grammar.rules, &mut visiting) else {
+            continue;
+        };
+        let target = if grammar.preferred_rules.contains(name) {
+            &mut preferred
+        } else {
+            &mut reserved
+        };
+        target.extend(entries);
+    }
+
+    let overlap: Vec<&Vec<CharSet>> = reserved.intersection(&preferred).collect();
+    if !overlap.is_empty() {
+        let mut words: Vec<String> = overlap.iter().map(|e| entry_display(e)).collect();
+        words.sort();
+        return Err(CompileError::ReservedPreferredConflict(words));
+    }
+
+    if !reserved.is_empty() {
+        let rule = build_word_set_rule(reserved);
+        grammar
+            .rules
+            .insert(super::parser::RESERVED_RULE.to_string(), rule);
+        grammar
+            .percent_rules
+            .insert(super::parser::RESERVED_RULE.to_string());
+        grammar
+            .atomic_rules
+            .insert(super::parser::RESERVED_RULE.to_string());
+    }
+    if !preferred.is_empty() {
+        let rule = build_word_set_rule(preferred);
+        grammar
+            .rules
+            .insert(super::parser::PREFERRED_RULE.to_string(), rule);
+        grammar
+            .percent_rules
+            .insert(super::parser::PREFERRED_RULE.to_string());
+        grammar
+            .atomic_rules
+            .insert(super::parser::PREFERRED_RULE.to_string());
+    }
+    Ok(())
+}
+
+/// Extract the fixed keyword strings a pattern can match, as one
+/// `Vec<CharSet>` per string (each `CharSet` matching one code point — a
+/// singleton for a case-sensitive byte, a two-element set for an `i"…"`
+/// case-folded letter). Returns `None` for anything that isn't a fixed
+/// shape: a quantifier, wildcard, predicate, catch, or a reference that
+/// cycles or escapes the keyword shape. `NonTerminal`s are resolved
+/// through `rules` (with a `visiting` cycle guard) so wrappers like
+/// `%bool_lit <- @constant{bool_body}` reach their literals.
+fn keyword_entries(
+    pat: &Pattern,
+    rules: &HashMap<String, Pattern>,
+    visiting: &mut Vec<String>,
+) -> Option<Vec<Vec<CharSet>>> {
+    match pat {
+        Pattern::Literal { bytes, .. } => {
+            let s = std::str::from_utf8(bytes).ok()?;
+            Some(vec![s.chars().map(CharSet::singleton).collect()])
+        }
+        Pattern::CharClass { set, .. } => Some(vec![vec![set.clone()]]),
+        Pattern::Capture { inner, .. } | Pattern::Lenient { inner, .. } => {
+            keyword_entries(inner, rules, visiting)
+        }
+        Pattern::OrderedChoice { alts, .. } => {
+            let mut out = Vec::new();
+            for a in alts {
+                out.extend(keyword_entries(a, rules, visiting)?);
+            }
+            Some(out)
+        }
+        Pattern::Sequence { items, .. } => {
+            // A sequence is one keyword: concatenate the pieces. Each
+            // piece must contribute exactly one fixed string; a choice
+            // inside the sequence would be a product we don't expand, so
+            // reject the whole rule.
+            let mut acc: Vec<CharSet> = Vec::new();
+            for it in items {
+                let sub = keyword_entries(it, rules, visiting)?;
+                let [one] = &sub[..] else {
+                    return None;
+                };
+                acc.extend(one.iter().cloned());
+            }
+            Some(vec![acc])
+        }
+        Pattern::NonTerminal { name, .. } => {
+            if visiting.iter().any(|n| n == name) {
+                return None;
+            }
+            let body = rules.get(name)?;
+            visiting.push(name.clone());
+            let r = keyword_entries(body, rules, visiting);
+            visiting.pop();
+            r
+        }
+        _ => None,
+    }
+}
+
+/// Build a `reserved` / `preferred` rule body from its keyword set: a
+/// flat alternation ordered longest-first. All-singleton-ASCII entries
+/// become byte literals (so [`append_wb_in`] folds them into a trie);
+/// case-folded entries stay sequences of char classes.
+fn build_word_set_rule(set: BTreeSet<Vec<CharSet>>) -> Pattern {
+    let mut entries: Vec<Vec<CharSet>> = set.into_iter().collect();
+    entries.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+    let alts: Vec<Pattern> = entries.iter().map(|e| entry_to_pattern(e)).collect();
+    Pattern::choice(alts)
+}
+
+/// Lower one keyword entry to a pattern: a byte literal when every code
+/// point is a singleton ASCII set, otherwise a sequence of char classes.
+fn entry_to_pattern(entry: &[CharSet]) -> Pattern {
+    if let Some(bytes) = entry
+        .iter()
+        .map(charset_singleton_ascii)
+        .collect::<Option<Vec<u8>>>()
+    {
+        return Pattern::literal_bytes(bytes);
+    }
+    let items: Vec<Pattern> = entry
+        .iter()
+        .map(|s| Pattern::char_class(s.clone()))
+        .collect();
+    Pattern::seq(items)
+}
+
+/// The single ASCII byte a char set matches, or `None` if it isn't a
+/// singleton ASCII set.
+fn charset_singleton_ascii(set: &CharSet) -> Option<u8> {
+    let ranges = set.ranges();
+    if ranges.len() == 1 && ranges[0].0 == ranges[0].1 && ranges[0].0.is_ascii() {
+        Some(ranges[0].0 as u8)
+    } else {
+        None
+    }
+}
+
+/// Best-effort rendering of a keyword entry for diagnostics: one
+/// representative code point per position (the highest, so a case-folded
+/// `{a, A}` shows as `a`).
+fn entry_display(entry: &[CharSet]) -> String {
+    entry
+        .iter()
+        .map(|s| s.ranges().last().map(|r| r.0).unwrap_or('\u{FFFD}'))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1754,15 +2019,32 @@ mod tests {
     }
 
     #[test]
-    fn capture_less_choice_gets_one_trailing_wb() {
-        // `%t <- 'a' / 'b' / 'c'` — no capture to leak, so a single
-        // trailing `wb` after the choice, not one per branch.
+    fn capture_less_charclass_choice_gets_one_trailing_wb() {
+        // `%t <- [ab] / [cd]` — capture-less but not all-literal, so the
+        // trie path is skipped and a single trailing `wb` follows the
+        // whole choice, not one per branch.
         let body = Pattern::choice(vec![
-            Pattern::literal("a"),
-            Pattern::literal("b"),
-            Pattern::literal("c"),
+            Pattern::char_class(CharSet::from_chars(&['a', 'b'])),
+            Pattern::char_class(CharSet::from_chars(&['c', 'd'])),
         ]);
         assert_eq!(count_wb(&append_to(body)), 1);
+    }
+
+    #[test]
+    fn capture_less_literal_choice_factors_into_trie() {
+        // `%t <- 'do' / 'double'` — all-literal, so it folds into a
+        // longest-match trie: `do` shared, then `uble` accept vs the bare
+        // `do` accept. Two accepts → two `wb`s.
+        let body = Pattern::choice(vec![Pattern::literal("do"), Pattern::literal("double")]);
+        let trie = append_to(body);
+        assert_eq!(count_wb(&trie), 2);
+        // Source order must not matter: the scrambled set factors to the
+        // identical trie (this is the structural #13 fix).
+        let scrambled = append_to(Pattern::choice(vec![
+            Pattern::literal("double"),
+            Pattern::literal("do"),
+        ]));
+        assert_eq!(trie.strip_spans(), scrambled.strip_spans());
     }
 
     #[test]

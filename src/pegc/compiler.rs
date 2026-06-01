@@ -38,6 +38,12 @@ pub enum CompileError {
     /// [`LintFinding`] carries the call-site's span so the rendered
     /// message points directly at the unanchored call.
     PartialMatchLeniency(Vec<LintFinding>),
+    /// One or more literals are reachable from both a `%` rule and a
+    /// `%?` rule, so the synthesized `reserved` and `preferred` sets
+    /// would overlap — a word can't be both barred from and allowed in
+    /// identifier position. Emitted by `synthesize_reserved_preferred`.
+    /// The payload is the offending literals (UTF-8 lossy), sorted.
+    ReservedPreferredConflict(Vec<String>),
 }
 
 impl std::fmt::Display for CompileError {
@@ -69,6 +75,12 @@ impl std::fmt::Display for CompileError {
                 }
                 Ok(())
             }
+            CompileError::ReservedPreferredConflict(words) => write!(
+                f,
+                "the following word(s) are marked both `%` (reserved) and `%?` (preferred), \
+                 so the synthesized `reserved` / `preferred` sets would overlap: {}",
+                words.join(", ")
+            ),
         }
     }
 }

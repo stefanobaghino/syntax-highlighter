@@ -549,9 +549,10 @@ fn quoted_identifiers() {
 
 #[test]
 fn non_reserved_words_parse_as_identifiers() {
-    // Guards the longest-first invariant in `keyword_word`: words that
-    // look like dialect vocabulary but are not reserved in SQLite must
-    // still parse as bare identifiers in column/table position.
+    // Guards the synthesized `reserved` set: words that look like
+    // dialect vocabulary but are `%?` (window vocab, KEY, DO) — not
+    // reserved in SQLite — must still parse as bare identifiers in
+    // column/table position.
     assert_complete_full("SELECT integer FROM t");
     assert_complete_full("SELECT recursive FROM t");
     assert_complete_full("SELECT partition FROM t WHERE following = 1");
