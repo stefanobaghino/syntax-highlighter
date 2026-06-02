@@ -27,7 +27,7 @@ contract in [`TOOLS.md`](TOOLS.md).
 
 For a quick sanity check on a grammar's bytecode size after
 non-trivial edits, run `cargo run --bin pegc -- stats grammars/<lang>.peg`.
-Walker correctness is asserted by unit tests in `src/walk.rs` and
+Walker correctness is asserted by unit tests in `crates/runtime/src/walk.rs` and
 runs as part of `cargo test`.
 
 ## Project-level rules

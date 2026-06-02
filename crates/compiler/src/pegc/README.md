@@ -1,9 +1,10 @@
 # pegc — compiling grammar source to pegvm bytecode
 
-This module is the source-language half of the crate's parsing
+This module is the source-language half of the workspace's parsing
 pipeline: it reads a PEG grammar written in `.peg` source and produces
-a runnable [`Program`](../pegvm/program.rs) of bytecode that
-[`pegvm`](../pegvm/README.md) executes.
+a runnable [`Program`](../../../runtime/src/pegvm/program.rs) of
+bytecode that [`pegvm`](../../../runtime/src/pegvm/README.md)
+(in the sibling `syntax-highlighter` runtime crate) executes.
 
 ```
 &str  ──pegc::parse──▶  Grammar  ──Grammar::compile──▶  Program  ──VM::run──▶  MatchResult
@@ -14,7 +15,7 @@ a runnable [`Program`](../pegvm/program.rs) of bytecode that
 This document is the syntactic spec of the `.peg` source language —
 what a grammar author writes. For the compiled-bytecode side
 (instruction set, VM execution, capture protocol, invariants), see
-[`src/pegvm/README.md`](../pegvm/README.md).
+[`crates/runtime/src/pegvm/README.md`](../../../runtime/src/pegvm/README.md).
 
 ## Source structure
 
@@ -97,7 +98,7 @@ behavior are unaffected by where a rule is nested.
 `{` disambiguation: the exact-count quantifier `p{n}` is digit-led, so
 a `{` *not* followed by a digit opens a scope block.
 
-Full shipped example: [`grammars/json.peg`](../../grammars/json.peg).
+Full shipped example: [`grammars/json.peg`](../../../../grammars/json.peg).
 
 ## Patterns
 
@@ -292,11 +293,11 @@ a `Repeat`. The parser produces an AST equivalent to:
 ```
 
 There is no dedicated `RecoverRepeat` AST node — `build_recover_repeat`
-in `src/pegc/parser.rs` emits the desugared `Repeat(Catch(...))` tree
+in `parser.rs` emits the desugared `Repeat(Catch(...))` tree
 directly. The runtime behavior (one `recovery` capture per skipped
 byte, clean exit at EOF) is unchanged; what was once a bespoke opcode
 sequence is now the composition of the existing `Repeat` and `Catch`
-compiler arms in `src/pegc/compiler.rs`.
+compiler arms in `compiler.rs`.
 
 **Empty-match caveat.** If `p` matches the empty string, `p*^` spins
 forever — same hazard as plain `p*`. The compiler does not detect
@@ -493,8 +494,8 @@ boundary-anchored family; the single caret `^lbl recovery` remains
 the bare catch with author-written recovery. Disambiguation is
 positional — a single byte peek after the first `^`.
 
-Implementation lives in `Pattern::Catch` (`src/pegc/pattern.rs`) and
-the emission in `src/pegc/compiler.rs`. The FOLLOW-inferred form
+Implementation lives in `Pattern::Catch` (`pattern.rs`) and
+the emission in `compiler.rs`. The FOLLOW-inferred form
 uses a placeholder `Pattern::InferBoundaryCatch { inner, label }`
 resolved by `analysis::resolve_inferred_boundaries` before bytecode
 emission. No new VM machinery.
@@ -784,7 +785,7 @@ operators consume the indentation they measure, so `%align stmt` lands
 `stmt` at the first non-space byte.
 
 **The machinery is hidden.** `%root` / `%align` / `%indent` are the whole
-surface. A compiler pass (`src/pegc/desugar_indent.rs`, run first in
+surface. A compiler pass (`desugar_indent.rs`, run first in
 `Grammar::compile`) rewrites them into the lower-level IR the VM runs:
 rules implicitly parameterized by their anchor column, the
 `deeper` / `same` / `at_least` combinators that assert `>` / `==` / `>=`
@@ -800,7 +801,7 @@ establish the column is a compile error
 **Incremental soundness.** Indentation is measured *forward* (the operator
 consumes the whitespace run), so the enclosing rule's `examined_max` covers
 it and a warm reparse correctly invalidates any entry whose measured
-indentation an edit changed — see `tests/incremental_indent_tests.rs`.
+indentation an edit changed — see `crates/compiler/tests/incremental_indent_tests.rs`.
 
 **Integer-only, by design.** The desugared anchor is an `i32` column; the
 memo key's argument component (`pegvm::vm::ArgKey`) is `None` / `One(i32)` /
@@ -849,7 +850,7 @@ concrete use case.
 - **Left recursion is supported.** Both direct (`A = A α / β`) and
   indirect (`A = B …; B = A …`) shapes parse left-associatively via
   bounded LR (Medeiros et al. 2014 §5; see
-  [`src/pegvm/README.md`](../pegvm/README.md#left-recursion)). The
+  [`crates/runtime/src/pegvm/README.md`](../../../runtime/src/pegvm/README.md#left-recursion)). The
   compiler wraps every member of any non-trivial first-call SCC with
   the LR prologue/epilogue, and the VM's stack-based L-table handles
   cross-rule cycles transparently.
@@ -857,7 +858,7 @@ concrete use case.
   never decoded. Direction for Unicode support is under evaluation
   in #45.
 - **Backtracking and memoization** are the VM's job — see
-  [`src/pegvm/README.md`](../pegvm/README.md).
+  [`crates/runtime/src/pegvm/README.md`](../../../runtime/src/pegvm/README.md).
 
 ## Entry points
 

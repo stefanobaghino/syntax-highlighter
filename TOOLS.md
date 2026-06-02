@@ -12,7 +12,7 @@ inspection** of a grammar source and **runtime debugging** of a parse:
   `recoveries explain`. Each operates on a parse — it needs a grammar
   source (`-g <grammar.peg>`) and a fixture input.
 
-Both are distinct from the `demo` CLI at `src/bin/demo/`, which is a
+Both are distinct from the `demo` CLI at `crates/bin/src/bin/demo/`, which is a
 quickstart showcase of ANSI highlighting; reach for `pegc`/`pegdb`
 when you're authoring or diagnosing a grammar.
 
@@ -33,7 +33,7 @@ also accepting `--grammar=<path>`). There is no language-name
 shortcut and no extension inference — specify the path explicitly.
 The bundled `grammars/*.peg` files are convenient targets for local
 debugging but enjoy no special privilege; the `demo` CLI in
-`src/bin/demo/` is the showcase for those.
+`crates/bin/src/bin/demo/` is the showcase for those.
 
 ---
 
@@ -65,7 +65,7 @@ debugging but enjoy no special privilege; the `demo` CLI in
 
 Walker correctness — that the renderer's segment stream tiles input
 bytes exactly, with no gaps or overlaps — is a structural property of
-the `walk` abstraction in `src/walk.rs` and is asserted by unit
+the `walk` abstraction in `crates/runtime/src/walk.rs` and is asserted by unit
 tests inside that module. It is grammar-independent and does not
 need a CLI surface.
 
@@ -101,7 +101,7 @@ every rule appears, including unreferenced ones):
 | `references` | Total occurrences of `<rule>` as a `NonTerminal` across every rule's body.   |
 | `body_chars` | Source character count of the rule's body (after `=`), trimmed.             |
 
-`references` counts **author-written** `NonTerminal` calls in rule bodies. The auto-injected `ignore` calls produced by `src/pegc/analysis.rs::inject_auto_ignore` are not counted, so the reserved `ignore` rule typically reports `references: 0` even though it is the most-invoked rule at runtime. Use the count to find dead or single-use rules in *authored* grammar source; do not read it as runtime call frequency.
+`references` counts **author-written** `NonTerminal` calls in rule bodies. The auto-injected `ignore` calls produced by `crates/compiler/src/pegc/analysis.rs::inject_auto_ignore` are not counted, so the reserved `ignore` rule typically reports `references: 0` even though it is the most-invoked rule at runtime. Use the count to find dead or single-use rules in *authored* grammar source; do not read it as runtime call frequency.
 
 **Stdin:** not accepted — `stats` always takes a `<grammar.peg>` path.
 
@@ -212,21 +212,21 @@ grammar-compile error.
 **Examples:**
 
 ```
-$ pegdb captures dump -g grammars/json.peg benches/fixtures/small.json | head -3
+$ pegdb captures dump -g grammars/json.peg crates/compiler/benches/fixtures/small.json | head -3
 {"start":0,"end":1,"kind":"punctuation","depth":0,"literal":"{"}
 {"start":1,"end":5,"kind":"property","depth":0,"literal":"\"id\""}
 {"start":5,"end":6,"kind":"punctuation","depth":0,"literal":":"}
 
 # Find the capture covering byte 1234 in a Rust fixture:
-$ pegdb captures dump -g grammars/rust.peg benches/fixtures/medium.rs \
+$ pegdb captures dump -g grammars/rust.peg crates/compiler/benches/fixtures/medium.rs \
     | jq 'select(.start <= 1234 and .end > 1234)'
 
 # Pipeline-friendly: cap literals to 40 bytes for tabular previews:
-$ pegdb captures dump -g grammars/rust.peg --max-literal=40 benches/fixtures/medium.rs \
+$ pegdb captures dump -g grammars/rust.peg --max-literal=40 crates/compiler/benches/fixtures/medium.rs \
     | jq -r '[.start, .end, .kind, .literal] | @tsv' | column -t
 
 # Summarise distinct capture kinds emitted on a fixture:
-$ pegdb captures dump -g grammars/rust.peg benches/fixtures/medium.rs \
+$ pegdb captures dump -g grammars/rust.peg crates/compiler/benches/fixtures/medium.rs \
     | jq -r '.kind' | sort | uniq -c
 ```
 
@@ -336,7 +336,7 @@ $ pegdb recoveries explain -g grammars/rust.peg /tmp/broken.rs
 2 recoveries — farthest reach ends at block (label: block_close)
 
 # Pipe to `head` to see the top bug class only:
-$ pegdb recoveries explain -g grammars/go.peg benches/fixtures/xlarge.go | head -1
+$ pegdb recoveries explain -g grammars/go.peg crates/compiler/benches/fixtures/xlarge.go | head -1
 ```
 
 The cluster key is the full ignore-trimmed rule stack plus the catch

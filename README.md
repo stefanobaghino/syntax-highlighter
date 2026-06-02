@@ -45,20 +45,20 @@ Run the `demo` binary against any of the shipped bench fixtures —
 the grammar is picked by file extension. Complete grammars:
 
 ```bash
-cargo run --bin demo -- benches/fixtures/medium.json
-cargo run --bin demo -- benches/fixtures/medium.toml
-cargo run --bin demo -- benches/fixtures/medium.sql
+cargo run --bin demo -- crates/compiler/benches/fixtures/medium.json
+cargo run --bin demo -- crates/compiler/benches/fixtures/medium.toml
+cargo run --bin demo -- crates/compiler/benches/fixtures/medium.sql
 ```
 
 Partial grammars cover most real-world code but have documented gaps —
 expect the occasional miscoloring at the edges:
 
 ```bash
-cargo run --bin demo -- benches/fixtures/medium.css
-cargo run --bin demo -- benches/fixtures/medium.c
-cargo run --bin demo -- benches/fixtures/medium.js
-cargo run --bin demo -- benches/fixtures/medium.go
-cargo run --bin demo -- benches/fixtures/medium.rs
+cargo run --bin demo -- crates/compiler/benches/fixtures/medium.css
+cargo run --bin demo -- crates/compiler/benches/fixtures/medium.c
+cargo run --bin demo -- crates/compiler/benches/fixtures/medium.js
+cargo run --bin demo -- crates/compiler/benches/fixtures/medium.go
+cargo run --bin demo -- crates/compiler/benches/fixtures/medium.rs
 ```
 
 Stdin is also accepted (defaults to JSON; pass `-l <lang>` to
@@ -69,7 +69,7 @@ override).
 Early MVP; expect breaking changes. Ten grammars ship today — eight
 free-form, plus deliberately-pruned Starlark and YAML subsets that
 validate the implicit indentation operators (issue #43; see
-[`src/pegc/README.md`](src/pegc/README.md)) — plus an ANSI-coloring CLI.
+[`crates/compiler/src/pegc/README.md`](crates/compiler/src/pegc/README.md)) — plus an ANSI-coloring CLI.
 The "kilobyte range per grammar" design goal holds across the shipped
 set: as a representative data point, the largest grammar (SQLite)
 compiles to roughly 5,600 instructions across 426 rules — comfortably
@@ -84,7 +84,7 @@ The CLI picks a grammar by file extension (`.json`, `.toml`, `.sql`,
 flag defaults to JSON.
 
 Malformed or incomplete inputs render the longest valid prefix styled and
-the rest plain (see `src/pegvm/vm.rs` for the farthest-failure tracking).
+the rest plain (see `crates/runtime/src/pegvm/vm.rs` for the farthest-failure tracking).
 Grammars that opt into the `*^` recovery operator on a top-level
 repetition resync past broken regions instead — see the SQL grammar
 (`grammars/sqlite.peg`) for the shipped example.
@@ -92,7 +92,7 @@ repetition resync past broken regions instead — see the SQL grammar
 `Parser` owns its input and reuses the memo table across edits:
 append-only streaming and arbitrary-position edits reparse only the
 regions whose memo entries cross the edit point, not the whole buffer
-(see `src/pegvm/incremental.rs` for the invalidation protocol).
+(see `crates/runtime/src/pegvm/incremental.rs` for the invalidation protocol).
 
 ## More documentation
 
