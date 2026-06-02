@@ -1,0 +1,19 @@
+[package]
+name = "syntax-highlighter"
+description = "PEG bytecode runtime: VM, memo cache, bytecode wire format, walker."
+keywords = ["syntax-highlighting", "peg", "parser"]
+categories = ["parser-implementations", "text-processing"]
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]

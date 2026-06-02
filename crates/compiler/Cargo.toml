@@ -1,0 +1,46 @@
+[package]
+name = "syntax-highlighter-compiler"
+description = "PEG grammar-source compiler producing runnable bytecode for `syntax-highlighter`."
+keywords = ["peg", "parser", "compiler"]
+categories = ["parser-implementations", "text-processing"]
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+syntax-highlighter = { path = "../runtime" }
+
+[build-dependencies]
+# Build-script-only dep: feeds `build.rs` the UAX #31 predicates used to
+# bake property interval tables into `$OUT_DIR/unicode_properties.rs`.
+# The runtime closure does not link this crate.
+unicode-ident = "1"
+
+[[bench]]
+name = "memo"
+path = "benches/memo.rs"
+harness = false
+
+[[bench]]
+name = "incremental"
+path = "benches/incremental.rs"
+harness = false
+
+[[bench]]
+name = "follow_set"
+path = "benches/follow_set.rs"
+harness = false
+
+[[bench]]
+name = "lint"
+path = "benches/lint.rs"
+harness = false

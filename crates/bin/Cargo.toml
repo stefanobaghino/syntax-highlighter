@@ -1,0 +1,36 @@
+[package]
+name = "syntax-highlighter-bin"
+description = "Demo CLI, `pegc`, and `pegdb` binaries for the syntax-highlighter workspace."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+syntax-highlighter = { path = "../runtime" }
+syntax-highlighter-compiler = { path = "../compiler" }
+
+[build-dependencies]
+# `build.rs` reads `grammars/*.peg`, pipes them through `pegc::compile`
+# and writes the `pegb`-encoded bytecode to `OUT_DIR/<name>.pegb`. The
+# demo binary embeds those blobs via `include_bytes!`. Both crates are
+# compiled twice (once for host, once for target); incremental builds
+# reuse both caches.
+syntax-highlighter = { path = "../runtime" }
+syntax-highlighter-compiler = { path = "../compiler" }
+
+[[bin]]
+name = "demo"
+path = "src/bin/demo/main.rs"
+
+[[bin]]
+name = "pegc"
+path = "src/bin/pegc.rs"
+
+[[bin]]
+name = "pegdb"
+path = "src/bin/pegdb.rs"
