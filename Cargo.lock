@@ -5,7 +5,20 @@ version = 4
 [[package]]
 name = "syntax-highlighter"
 version = "0.1.0"
+
+[[package]]
+name = "syntax-highlighter-bin"
+version = "0.1.0"
 dependencies = [
+ "syntax-highlighter",
+ "syntax-highlighter-compiler",
+]
+
+[[package]]
+name = "syntax-highlighter-compiler"
+version = "0.1.0"
+dependencies = [
+ "syntax-highlighter",
  "unicode-ident",
 ]
 
