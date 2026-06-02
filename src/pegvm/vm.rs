@@ -1,6 +1,41 @@
 use std::collections::HashMap;
 
-use super::instruction::{CaptureKind, Instruction, LabelId, MemoId, RuleKind};
+use super::instruction::{ArgSrc, CaptureKind, CmpOp, Instruction, LabelId, MemoId, RuleKind};
+
+/// Argument component of a packrat memo key. A parameterized rule's
+/// cached outcome depends on the integer arguments it was called with
+/// (an indentation column, today), so the memo key carries them
+/// alongside `(MemoId, start_sp)`.
+///
+/// The three shapes keep the common cases cheap:
+/// - [`ArgKey::None`] — zero-arg rules (every rule in every
+///   non-indentation grammar). No allocation; the hot packrat probe
+///   `memo.get(&(id, sp, ArgKey::None))` stays a plain hash of two
+///   integers plus a discriminant.
+/// - [`ArgKey::One`] — the single-column case (`suite(i)`,
+///   `mapping(outer)`): one inline `i32`, still no allocation.
+/// - [`ArgKey::Many`] — two or more args. This is the seam for the
+///   future typed-arg extension (heredoc terminators, etc.); no shipped
+///   grammar reaches it yet, so the boxed slice never allocates in
+///   practice.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum ArgKey {
+    None,
+    One(i32),
+    Many(Box<[i32]>),
+}
+
+impl ArgKey {
+    /// Build the key component from the `argc` argument values a
+    /// `RuleEnter` popped, choosing the cheapest representation.
+    fn from_args(args: &[i32]) -> ArgKey {
+        match args {
+            [] => ArgKey::None,
+            [one] => ArgKey::One(*one),
+            many => ArgKey::Many(many.into()),
+        }
+    }
+}
 
 /// One half-open byte span `start..end` tagged with a [`CaptureKind`].
 ///
@@ -23,6 +58,14 @@ enum StackEntry {
         ip: usize,
         sp: usize,
         capture_len: usize,
+        /// Length of the VM's argument stack at the moment the `Choice`
+        /// fired. Restored on backtrack so a half-pushed argument run
+        /// (between an `ArgPush` and its `Call`) cannot leak across a
+        /// failed alternative. In practice arguments are pushed
+        /// immediately before their `Call`, so this equals the ambient
+        /// arg-stack depth and the truncate is usually a no-op — kept for
+        /// robustness, mirroring the `capture_len` snapshot.
+        args_len: usize,
     },
     Return {
         ip: usize,
@@ -37,6 +80,17 @@ enum StackEntry {
         memo_id: MemoId,
         start_sp: usize,
         capture_start_len: usize,
+        /// Argument component of this invocation's memo key, computed
+        /// once in `RuleEnter`'s miss path so `MemoClose` (success) and
+        /// `fail()`'s `Memo` arm (failure) write the same
+        /// `(memo_id, start_sp, arg_key)` slot without recomputing.
+        /// [`ArgKey::None`] for every zero-arg rule.
+        arg_key: ArgKey,
+        /// The VM's `locals_base` *before* this rule's activation frame
+        /// was pushed. Restored when the frame is popped so nested
+        /// parameterized calls see their own slots. Equal to the new
+        /// base for zero-local rules (the frame reserves nothing).
+        prev_locals_base: usize,
     },
     /// Frame for an in-flight left-recursive rule invocation. Pushed by
     /// `RuleEnter`'s `RuleKind::Lr` miss path on the first entry at a
@@ -52,6 +106,15 @@ enum StackEntry {
         capture_start_len: usize,
         return_addr: usize,
         seed: Option<LSeed>,
+        /// Argument component of this LR invocation's memo key (see the
+        /// `Memo` variant's `arg_key`). Written to the cache when the
+        /// seed-and-grow loop converges at `LRTail`. [`ArgKey::None`] for
+        /// zero-arg rules — i.e. every left-recursive rule shipped today,
+        /// since indentation rules aren't left-recursive.
+        arg_key: ArgKey,
+        /// The VM's `locals_base` before this LR frame was pushed; see
+        /// the `Memo` variant's `prev_locals_base`.
+        prev_locals_base: usize,
     },
     /// Tracking frame for a `^label` catch (and, transitively, for each
     /// iteration of the `*^` / `*^[cs]` desugar `(p ^recovery
@@ -322,9 +385,30 @@ pub struct VM<'p, 'i> {
     /// epoch, and only the suffix being dropped — never the bulk of
     /// the watermark prefix that survives every backtrack.
     saved_above: Vec<OpenCapture>,
-    /// Packrat memo table, keyed by `(memo_id, start_sp)`. Populated by
-    /// `MemoClose` on success and by `fail()` on failure escape (Commit 5).
-    memo: HashMap<(MemoId, usize), MemoEntry>,
+    /// Packrat memo table, keyed by `(memo_id, start_sp, arg_key)`.
+    /// Populated by `MemoClose` on success and by `fail()` on failure
+    /// escape. The [`ArgKey`] component is [`ArgKey::None`] for every
+    /// zero-arg rule, so non-indentation grammars key on the same two
+    /// integers as before.
+    memo: HashMap<(MemoId, usize, ArgKey), MemoEntry>,
+    /// Argument stack for the parameterized-rule call convention.
+    /// `ArgPush` appends; `RuleEnter` drains its rule's `argc` from the
+    /// top to form the memo key and seed the callee's parameter slots.
+    /// Snapshotted in `StackEntry::Backtrack` (`args_len`) and truncated
+    /// on backtrack. Empty whenever no `ArgPush`/`Call` pair is mid-flight
+    /// — i.e. almost always.
+    args: Vec<i32>,
+    /// Activation-locals arena. The current rule frame owns
+    /// `locals[locals_base..]`; `IndentMeasure`/`ArgSrc::Local` index it
+    /// as `locals_base + slot`. `RuleEnter` pushes a frame's parameter
+    /// seeds, the body grows it with measured widths, and the matching
+    /// `MemoClose` / `LRTail` / `fail()` truncates back to the frame's
+    /// base. Stays empty for grammars with no parameterized rules.
+    locals: Vec<i32>,
+    /// Base index into `locals` for the rule activation currently
+    /// executing. Saved into the `Memo` / `LFrame` frame on entry and
+    /// restored on exit so nested calls nest their slot windows.
+    locals_base: usize,
     /// Running count of resolved cache hits, exposed via `MemoStats`.
     memo_hits: usize,
     /// Running count of `RuleEnter` cache misses on `RuleKind::Memo`
@@ -458,6 +542,9 @@ impl<'p, 'i> VM<'p, 'i> {
             saved_lower: 0,
             saved_above: Vec::new(),
             memo: HashMap::new(),
+            args: Vec::new(),
+            locals: Vec::new(),
+            locals_base: 0,
             memo_hits: 0,
             memo_misses: 0,
             memo_threshold: Self::DEFAULT_MEMO_THRESHOLD,
@@ -575,7 +662,13 @@ impl<'p, 'i> VM<'p, 'i> {
     /// per-entry details (notably `examined_max`) and for the public
     /// `run_with_cache` variant that rewraps the table into a
     /// [`MemoCache`](super::incremental::MemoCache).
-    fn run_core(mut self) -> (MatchResult, MemoStats, HashMap<(MemoId, usize), MemoEntry>) {
+    fn run_core(
+        mut self,
+    ) -> (
+        MatchResult,
+        MemoStats,
+        HashMap<(MemoId, usize, ArgKey), MemoEntry>,
+    ) {
         loop {
             let instr = match self.program.get(self.ip) {
                 Some(i) => i,
@@ -655,6 +748,7 @@ impl<'p, 'i> VM<'p, 'i> {
                         ip: label.as_index(),
                         sp: self.sp,
                         capture_len: self.captures.len(),
+                        args_len: self.args.len(),
                     });
                     self.ip += 1;
                 }
@@ -666,10 +760,14 @@ impl<'p, 'i> VM<'p, 'i> {
                     let top = self.stack.last_mut().expect("PartialCommit on empty stack");
                     match top {
                         StackEntry::Backtrack {
-                            sp, capture_len, ..
+                            sp,
+                            capture_len,
+                            args_len,
+                            ..
                         } => {
                             *sp = self.sp;
                             *capture_len = self.captures.len();
+                            *args_len = self.args.len();
                         }
                         _ => panic!("PartialCommit expected Backtrack on stack top"),
                     }
@@ -678,15 +776,19 @@ impl<'p, 'i> VM<'p, 'i> {
                 Instruction::BackCommit(label) => {
                     self.maybe_snapshot();
                     let entry = self.pop_backtrack();
-                    let (sp, capture_len) = match entry {
+                    let (sp, capture_len, args_len) = match entry {
                         StackEntry::Backtrack {
-                            sp, capture_len, ..
-                        } => (sp, capture_len),
+                            sp,
+                            capture_len,
+                            args_len,
+                            ..
+                        } => (sp, capture_len, args_len),
                         _ => unreachable!("pop_backtrack returns only Backtrack frames"),
                     };
                     self.sp = sp;
                     self.protect_max_captures(capture_len);
                     self.captures.truncate(capture_len);
+                    self.args.truncate(args_len);
                     self.ip = label.as_index();
                 }
                 Instruction::FailTwice => {
@@ -714,13 +816,65 @@ impl<'p, 'i> VM<'p, 'i> {
                     };
                     self.ip = ret_ip;
                 }
-                Instruction::RuleEnter(memo_id, kind, return_label) => {
+                Instruction::IndentMeasure(slot) => {
+                    // Consume the indentation run `[ \t]*` forward, one
+                    // column per space or tab. Forward consumption is what
+                    // keeps incremental reparse sound — see the opcode doc.
+                    let start = self.sp;
+                    while matches!(self.input.get(self.sp), Some(b' ') | Some(b'\t')) {
+                        self.sp += 1;
+                    }
+                    // The terminating byte (or EOF) was examined to decide
+                    // the run ended; cover it so an edit there invalidates.
+                    self.track_read(1);
+                    let width = (self.sp - start) as i32;
+                    let idx = self.locals_base + *slot as usize;
+                    if idx >= self.locals.len() {
+                        self.locals.resize(idx + 1, 0);
+                    }
+                    self.locals[idx] = width;
+                    self.ip += 1;
+                }
+                Instruction::IndentCmp(op, slot, src) => {
+                    let measured = self.local(*slot);
+                    let reference = self.arg_value(*src);
+                    let holds = match op {
+                        CmpOp::Gt => measured > reference,
+                        CmpOp::Ge => measured >= reference,
+                        CmpOp::Eq => measured == reference,
+                    };
+                    if holds {
+                        self.ip += 1;
+                    } else if !self.fail() {
+                        return self.finalize_partial();
+                    }
+                }
+                Instruction::ArgPush(src) => {
+                    let value = self.arg_value(*src);
+                    self.args.push(value);
+                    self.ip += 1;
+                }
+                Instruction::RuleEnter(memo_id, kind, return_label, argc) => {
+                    // Drain this call's `argc` arguments off the argument
+                    // stack (the caller's `ArgPush` run left them on top in
+                    // left-to-right order). `param_values` seeds the
+                    // callee's activation slots on a miss; `arg_key` joins
+                    // the packrat key so the same rule at the same position
+                    // but a different indentation context caches separately.
+                    // For `argc == 0` (every non-indentation rule) the slice
+                    // is empty: no allocation, `ArgKey::None`, arg stack
+                    // untouched.
+                    let argc = *argc as usize;
+                    let arg_split = self.args.len() - argc;
+                    let param_values: Vec<i32> = self.args[arg_split..].to_vec();
+                    self.args.truncate(arg_split);
+                    let arg_key = ArgKey::from_args(&param_values);
                     // Shared cache-hit prologue. Both kinds probe the same
                     // packrat slot; only the post-miss frame layout differs.
                     // The `entry` borrow lives across the capture-replay loop
                     // and is released by NLL before the kind branch below,
                     // so the miss path can mutate `self` freely.
-                    if let Some(entry) = self.memo.get(&(*memo_id, self.sp)) {
+                    if let Some(entry) = self.memo.get(&(*memo_id, self.sp, arg_key.clone())) {
                         self.memo_hits += 1;
                         let hit_examined = entry.examined_max;
                         match entry.end_sp {
@@ -759,10 +913,13 @@ impl<'p, 'i> VM<'p, 'i> {
                     match kind {
                         RuleKind::Memo => {
                             self.memo_misses += 1;
+                            let prev_locals_base = self.push_locals_frame(&param_values);
                             self.stack.push(StackEntry::Memo {
                                 memo_id: *memo_id,
                                 start_sp: self.sp,
                                 capture_start_len: self.captures.len(),
+                                arg_key,
+                                prev_locals_base,
                             });
                             // Parallel watermark for this frame. Starts at the
                             // rule's entry sp; read sites bump it as the body
@@ -781,20 +938,24 @@ impl<'p, 'i> VM<'p, 'i> {
                         }
                         RuleKind::Lr => {
                             // Walk the stack top-down for an in-flight LFrame
-                            // at the same (memo_id, sp). The packrat probe
-                            // above has already returned None, so any matching
-                            // LFrame is a current recursive re-entry rather
-                            // than a stale converged seed.
+                            // at the same (memo_id, sp, arg_key). The packrat
+                            // probe above has already returned None, so any
+                            // matching LFrame is a current recursive re-entry
+                            // rather than a stale converged seed.
                             let lookup: Option<Option<LSeed>> =
                                 self.stack.iter().rev().find_map(|e| {
                                     if let StackEntry::LFrame {
                                         memo_id: id,
                                         start_sp,
                                         seed,
+                                        arg_key: frame_key,
                                         ..
                                     } = e
                                     {
-                                        if *id == *memo_id && *start_sp == self.sp {
+                                        if *id == *memo_id
+                                            && *start_sp == self.sp
+                                            && *frame_key == arg_key
+                                        {
                                             return Some(seed.clone());
                                         }
                                     }
@@ -805,7 +966,8 @@ impl<'p, 'i> VM<'p, 'i> {
                                     // Recursive entry with a seed: replay
                                     // captures and jump to the rule's Return
                                     // so the caller's `Call`-pushed Return
-                                    // frame fires normally.
+                                    // frame fires normally. No new activation
+                                    // frame — the live LFrame owns the slots.
                                     for c in &found.captures {
                                         self.captures.push(OpenCapture {
                                             kind: c.kind,
@@ -828,15 +990,19 @@ impl<'p, 'i> VM<'p, 'i> {
                                     }
                                 }
                                 None => {
-                                    // First entry at this sp — push an LFrame
-                                    // and a paired memo_examined watermark,
-                                    // then fall through to the body.
+                                    // First entry at this sp — seed the
+                                    // activation frame, push an LFrame and a
+                                    // paired memo_examined watermark, then
+                                    // fall through to the body.
+                                    let prev_locals_base = self.push_locals_frame(&param_values);
                                     self.stack.push(StackEntry::LFrame {
                                         memo_id: *memo_id,
                                         start_sp: self.sp,
                                         capture_start_len: self.captures.len(),
                                         return_addr: return_label.as_index(),
                                         seed: None,
+                                        arg_key,
+                                        prev_locals_base,
                                     });
                                     self.memo_examined.push(self.sp);
                                     // Mirror push for diagnostics; paired
@@ -852,16 +1018,29 @@ impl<'p, 'i> VM<'p, 'i> {
                     }
                 }
                 Instruction::MemoClose(memo_id) => {
-                    let (top_id, start_sp, capture_start_len) = match self.stack.pop() {
-                        Some(StackEntry::Memo {
-                            memo_id,
-                            start_sp,
-                            capture_start_len,
-                        }) => (memo_id, start_sp, capture_start_len),
-                        other => {
-                            panic!("MemoClose expected Memo on stack top, got {:?}", other)
-                        }
-                    };
+                    let (top_id, start_sp, capture_start_len, arg_key, prev_locals_base) =
+                        match self.stack.pop() {
+                            Some(StackEntry::Memo {
+                                memo_id,
+                                start_sp,
+                                capture_start_len,
+                                arg_key,
+                                prev_locals_base,
+                            }) => (
+                                memo_id,
+                                start_sp,
+                                capture_start_len,
+                                arg_key,
+                                prev_locals_base,
+                            ),
+                            other => {
+                                panic!("MemoClose expected Memo on stack top, got {:?}", other)
+                            }
+                        };
+                    // Restore the caller's activation frame now that the
+                    // body has finished; the cached captures don't depend
+                    // on the locals arena.
+                    self.pop_locals_frame(prev_locals_base);
                     debug_assert_eq!(
                         top_id, *memo_id,
                         "MemoClose id mismatch: expected {:?}, found {:?}",
@@ -929,6 +1108,7 @@ impl<'p, 'i> VM<'p, 'i> {
                         RuleKind::Memo,
                         *memo_id,
                         start_sp,
+                        arg_key,
                         self.sp,
                         examined_max,
                         rule_captures,
@@ -950,6 +1130,8 @@ impl<'p, 'i> VM<'p, 'i> {
                         capture_start_len,
                         return_addr: _,
                         seed,
+                        arg_key,
+                        prev_locals_base,
                     } = &mut self.stack[top_idx]
                     else {
                         unreachable!("rposition matched LFrame")
@@ -961,6 +1143,8 @@ impl<'p, 'i> VM<'p, 'i> {
                     );
                     let start_sp = *start_sp;
                     let capture_start_len = *capture_start_len;
+                    let frame_arg_key = arg_key.clone();
+                    let prev_locals_base = *prev_locals_base;
                     let body_end_sp = self.sp;
                     let grew = match seed {
                         None => body_end_sp > start_sp,
@@ -990,8 +1174,10 @@ impl<'p, 'i> VM<'p, 'i> {
                         // is still None here (body matched empty on first
                         // try), the rule succeeds with an empty match.
                         let final_seed = seed.take();
-                        // Pop the LFrame and the paired memo_examined.
+                        // Pop the LFrame and the paired memo_examined, and
+                        // restore the caller's activation frame.
                         let _frame = self.stack.remove(top_idx);
+                        self.pop_locals_frame(prev_locals_base);
                         let examined = self
                             .memo_examined
                             .pop()
@@ -1036,6 +1222,7 @@ impl<'p, 'i> VM<'p, 'i> {
                             RuleKind::Lr,
                             *memo_id,
                             start_sp,
+                            frame_arg_key,
                             final_sp,
                             examined,
                             seed_captures,
@@ -1317,18 +1504,25 @@ impl<'p, 'i> VM<'p, 'i> {
                     ip,
                     sp,
                     capture_len,
+                    args_len,
                 } => {
                     self.ip = ip;
                     self.sp = sp;
                     self.protect_max_captures(capture_len);
                     self.captures.truncate(capture_len);
+                    self.args.truncate(args_len);
                     return true;
                 }
                 StackEntry::Memo {
                     memo_id,
                     start_sp,
                     capture_start_len: _,
+                    arg_key,
+                    prev_locals_base,
                 } => {
+                    // Restore the caller's activation frame: the failed
+                    // rule's slots die with it.
+                    self.pop_locals_frame(prev_locals_base);
                     // Pop the paired examined watermark. See
                     // `RuleEnter`'s Memo-kind miss path — every
                     // `StackEntry::Memo` push is twinned with a
@@ -1352,7 +1546,7 @@ impl<'p, 'i> VM<'p, 'i> {
                     // this unwind (its `capture_len` was snapshotted *before*
                     // `RuleEnter`'s Memo-kind miss path pushed this frame).
                     self.memo.insert(
-                        (memo_id, start_sp),
+                        (memo_id, start_sp, arg_key),
                         MemoEntry {
                             end_sp: None,
                             examined_max,
@@ -1390,7 +1584,13 @@ impl<'p, 'i> VM<'p, 'i> {
                     capture_start_len,
                     return_addr,
                     seed,
+                    arg_key: _,
+                    prev_locals_base,
                 } => {
+                    // Restore the caller's activation frame before either
+                    // sub-case (seed rescue or continued unwind): the LR
+                    // rule's slots die with the failed body.
+                    self.pop_locals_frame(prev_locals_base);
                     // Pop the paired examined watermark. Successful LR
                     // converged seeds are cached at LRTail; LR-rule
                     // failures (this arm with seed=None) are not cached
@@ -1468,11 +1668,13 @@ impl<'p, 'i> VM<'p, 'i> {
     /// The captures source differs between callers (live buffer at
     /// `MemoClose`; already-closed `LSeed::captures` at `LRTail`);
     /// both pre-process to a closed `Vec<Capture>` before calling.
+    #[allow(clippy::too_many_arguments)]
     fn cache_success(
         &mut self,
         kind: RuleKind,
         memo_id: MemoId,
         start_sp: usize,
+        arg_key: ArgKey,
         end_sp: usize,
         examined_max: usize,
         captures: Vec<Capture>,
@@ -1483,13 +1685,64 @@ impl<'p, 'i> VM<'p, 'i> {
         };
         if should_cache {
             self.memo.insert(
-                (memo_id, start_sp),
+                (memo_id, start_sp, arg_key),
                 MemoEntry {
                     end_sp: Some(end_sp),
                     examined_max,
                     captures,
                 },
             );
+        }
+    }
+
+    /// Push a fresh activation frame: record the current `locals_base`
+    /// as the caller's, re-point the base at the top of the locals
+    /// arena, and seed the callee's parameter slots `0..params.len()`
+    /// with `params`. Returns the previous base for the matching
+    /// [`pop_locals_frame`](Self::pop_locals_frame). A zero-arg rule
+    /// (`params` empty) only snapshots and re-points the base — the arena
+    /// is untouched, so non-parameterized grammars pay nothing beyond the
+    /// saved `usize`.
+    fn push_locals_frame(&mut self, params: &[i32]) -> usize {
+        let prev = self.locals_base;
+        self.locals_base = self.locals.len();
+        self.locals.extend_from_slice(params);
+        prev
+    }
+
+    /// Pop the current activation frame: drop every slot at or above the
+    /// frame's base (params plus any `IndentMeasure`-grown slots) and
+    /// restore the caller's base. Paired with
+    /// [`push_locals_frame`](Self::push_locals_frame) at every rule-exit
+    /// edge — `MemoClose`, `LRTail`'s commit branch, and the `Memo` /
+    /// `LFrame` arms of `fail()`.
+    fn pop_locals_frame(&mut self, prev_locals_base: usize) {
+        self.locals.truncate(self.locals_base);
+        self.locals_base = prev_locals_base;
+    }
+
+    /// Read activation slot `n` of the current frame: index
+    /// `locals_base + n` into the locals arena. The compiler guarantees
+    /// every referenced slot was seeded (a param) or bound (an
+    /// `IndentMeasure`) before use, so the index is always in range.
+    fn local(&self, slot: u8) -> i32 {
+        let idx = self.locals_base + slot as usize;
+        debug_assert!(
+            idx < self.locals.len(),
+            "local slot {} out of range (base {}, len {})",
+            slot,
+            self.locals_base,
+            self.locals.len()
+        );
+        self.locals[idx]
+    }
+
+    /// Resolve an [`ArgSrc`] to its integer value: a literal verbatim, a
+    /// local through [`local`](Self::local).
+    fn arg_value(&self, src: ArgSrc) -> i32 {
+        match src {
+            ArgSrc::Lit(v) => v,
+            ArgSrc::Local(slot) => self.local(slot),
         }
     }
 
@@ -1677,7 +1930,13 @@ impl<'p, 'i> VM<'p, 'i> {
         }
     }
 
-    fn finalize_partial(mut self) -> (MatchResult, MemoStats, HashMap<(MemoId, usize), MemoEntry>) {
+    fn finalize_partial(
+        mut self,
+    ) -> (
+        MatchResult,
+        MemoStats,
+        HashMap<(MemoId, usize, ArgKey), MemoEntry>,
+    ) {
         self.maybe_snapshot();
         let stats = MemoStats {
             entries: self.memo.len(),
@@ -1788,7 +2047,9 @@ mod examined_max_tests {
         // 1 byte unconsumed, so the overall parse fails. The memo
         // entries it built before failing are still observable.
         assert!(!result.complete, "trailing 'y' leaves bytes after !.");
-        let root = memo.get(&(MemoId(0), 0)).expect("root's entry missing");
+        let root = memo
+            .get(&(MemoId(0), 0, ArgKey::None))
+            .expect("root's entry missing");
         assert_eq!(root.end_sp, None);
         assert_eq!(
             root.examined_max, 2,
@@ -1817,7 +2078,7 @@ mod examined_max_tests {
             .run_core();
         assert!(!result.complete, "overall parse must fail");
         let entry = memo
-            .get(&(MemoId(0), 0))
+            .get(&(MemoId(0), 0, ArgKey::None))
             .expect("start's failure entry missing");
         assert_eq!(entry.end_sp, None);
         assert_eq!(
@@ -1850,7 +2111,9 @@ mod examined_max_tests {
         assert!(result.complete);
         assert_eq!(result.matched, 2);
         // root is start → MemoId(0); inner is the other → MemoId(1).
-        let outer = memo.get(&(MemoId(0), 0)).expect("root entry missing");
+        let outer = memo
+            .get(&(MemoId(0), 0, ArgKey::None))
+            .expect("root entry missing");
         assert_eq!(outer.end_sp, Some(2));
         // The wrap's tail-`!.` reads byte 2 once to confirm EOF; the
         // bound is the body's reach plus that one-byte EOF probe.
@@ -1859,7 +2122,9 @@ mod examined_max_tests {
             "inner's examined reach must flow into root: {:?}",
             outer
         );
-        let inner = memo.get(&(MemoId(1), 0)).expect("inner entry missing");
+        let inner = memo
+            .get(&(MemoId(1), 0, ArgKey::None))
+            .expect("inner entry missing");
         assert_eq!(inner.end_sp, Some(1));
         assert_eq!(inner.examined_max, 1);
     }
@@ -1898,7 +2163,9 @@ mod examined_max_tests {
         // start's examined_max must include every byte start's execution
         // ever looked at: position 2 was examined when the first
         // alternative tried "aa" at sp=1 and "bb" at sp=1 needed byte 2.
-        let start = memo.get(&(MemoId(0), 0)).expect("start entry missing");
+        let start = memo
+            .get(&(MemoId(0), 0, ArgKey::None))
+            .expect("start entry missing");
         assert_eq!(start.end_sp, Some(3));
         // The `root` wrap's tail-`!.` reads byte 3 once to confirm
         // EOF; without that probe the watermark would land at 3.
@@ -1940,7 +2207,9 @@ mod examined_max_tests {
             .run_core();
         assert!(result.complete);
         assert_eq!(result.matched, 5);
-        let entry = memo.get(&(MemoId(0), 0)).expect("start entry missing");
+        let entry = memo
+            .get(&(MemoId(0), 0, ArgKey::None))
+            .expect("start entry missing");
         assert_eq!(entry.end_sp, Some(5));
         assert!(
             entry.examined_max >= 5,

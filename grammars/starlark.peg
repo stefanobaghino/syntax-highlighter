@@ -1,0 +1,120 @@
+# Starlark, a deliberately-pruned subset; out-of-subset gaps tracked in #164.
+# Line-structure rules are `atomic` so the horizontal-only auto-`ignore`
+# can't eat a line's indentation before a `%align` / `%indent` operator
+# measures it.
+
+starlark = module {
+
+    ignore = \h*
+
+    blanks: atomic = (\h* comment? \R)*
+    line_break: atomic = \h* comment? \R blanks
+    comment: atomic = @comment ('#' .. \R)
+
+    wsnl: atomic = (\s / comment)*
+
+    module: atomic =
+        blanks
+        (%root (stmt (line_break %align stmt)*))?
+        blanks
+
+    stmt = compound / simple
+
+    compound = if_stmt / for_stmt / while_stmt / def_stmt
+
+    clause_sep: atomic = line_break %align
+
+    if_stmt =
+        @keyword 'if' expr @punctuation ':' suite
+        (clause_sep @keyword 'elif' expr @punctuation ':' suite)*
+        (clause_sep @keyword 'else' @punctuation ':' suite)?
+
+    for_stmt =
+        @keyword 'for' targets @keyword 'in' expr @punctuation ':' suite
+
+    while_stmt =
+        @keyword 'while' expr @punctuation ':' suite
+
+    def_stmt =
+        @keyword 'def' @function name @punctuation '(' wsnl params? wsnl @punctuation ')'
+        @punctuation ':' suite
+
+    suite: atomic =
+        line_break
+        %indent (stmt (line_break %align stmt)*)
+
+    simple = small (@punctuation ';' small)* @punctuation ';'?
+
+    small = @keyword 'pass'
+          / @keyword 'break'
+          / @keyword 'continue'
+          / @keyword 'return' expr?
+          / load_stmt
+          / assign_or_expr
+
+    load_stmt = @keyword 'load' @punctuation '(' wsnl arglist? wsnl @punctuation ')'
+
+    assign_or_expr =
+        expr (@operator ('=' / '+=' / '-=' / '*=' / '//=' / '/=' / '%=') expr)?
+
+    targets = target (@punctuation ',' target)* @punctuation ','?
+    target = @variable name
+
+    params = param (@punctuation ',' param)*
+    param = @operator ('**' / '*')? @variable name (@punctuation '=' expr)?
+
+    expr = ternary
+    ternary = or_test (@keyword 'if' or_test @keyword 'else' expr)?
+    or_test = and_test (@keyword 'or' and_test)*
+    and_test = not_test (@keyword 'and' not_test)*
+    not_test = @keyword 'not' not_test / comparison
+    comparison = bit_or (comp_op bit_or)*
+    comp_op = @operator ('==' / '!=' / '<=' / '>=' / '<' / '>') / @keyword 'in'
+    bit_or = sum (@operator ('|' / '&' / '^') sum)*
+    sum = term (@operator ('+' / '-') term)*
+    term = factor (@operator ('*' / '//' / '/' / '%') factor)*
+    factor = @operator ('+' / '-' / '~') factor / power
+    power = postfix (@operator '**' factor)?
+
+    postfix = atom trailer*
+    trailer = @punctuation '.' @property name
+            / call
+            / index
+    call: atomic = @punctuation '(' wsnl arglist? wsnl @punctuation ')'
+    index: atomic = @punctuation '[' wsnl expr wsnl @punctuation ']'
+
+    arglist = arg (wsnl @punctuation ',' wsnl arg)* (wsnl @punctuation ',')?
+    arg = named_arg / @operator ('**' / '*') expr / expr
+    named_arg = @property name @punctuation '=' expr
+
+    atom = @string string
+         / @number number
+         / @constant ('True' / 'False' / 'None')
+         / list
+         / dict
+         / paren
+         / @variable name
+
+    list: atomic =
+        @punctuation '[' wsnl (expr (wsnl @punctuation ',' wsnl expr)* (wsnl @punctuation ',')?)? wsnl @punctuation ']'
+
+    dict: atomic =
+        @punctuation '{' wsnl (pair (wsnl @punctuation ',' wsnl pair)* (wsnl @punctuation ',')?)? wsnl @punctuation '}'
+    pair = expr wsnl @punctuation ':' wsnl expr
+
+    paren: atomic = @punctuation '(' wsnl expr wsnl @punctuation ')'
+
+    name: atomic = [A-Za-z_] [A-Za-z_0-9]*
+
+    string = triple_double / triple_single / double / single
+    triple_double: atomic = '"""' ..= '"""'
+    triple_single: atomic = "'''" ..= "'''"
+    double: atomic = '"' ('\\' . / [^"\\\n])* '"'
+    single: atomic = "'" ('\\' . / [^'\\\n])* "'"
+
+    number: atomic = '0' [xX] [\da-fA-F]+
+                   / '0' [oO] [0-7]+
+                   / '0' [bB] [01]+
+                   / \d+ ('.' \d*)? ([eE] [+\-]? \d+)?
+                   / '.' \d+
+}

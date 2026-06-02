@@ -755,6 +755,72 @@ boundary-only helpers as `name: atomic = … boundary` rather than `reserved`.
 Authors **reference** these
 two names but never **define** them (a definition is a parse error).
 
+### Indentation: the `%root` / `%align` / `%indent` operators
+
+For indentation-sensitive languages (Python/YAML class, issue #43), three
+prefix operators express block structure against the indentation of the
+current line. The shipped `grammars/starlark.peg` and `grammars/yaml.peg`
+are the worked examples.
+
+A single *ambient anchor* — the indentation column of the construct being
+parsed — threads through the grammar implicitly; the author never names it:
+
+| Operator | Meaning |
+| --- | --- |
+| `%root X` | seed a fresh anchor at the current line's column, then parse `X` under it |
+| `%indent X` | open a level strictly deeper than the ambient anchor, rebind the anchor to it, then parse `X` |
+| `%align` | assert the current line starts exactly at the ambient anchor (standalone — no operand) |
+
+`%root` and `%indent` bind a single following atom, the same rule as a
+`@kind` capture: `%indent a?` is `(%indent a)?`, and a multi-element block
+is parenthesized — `%indent ( stmt (line_break %align stmt)* )`. A typical
+block rule opens a level with `%indent (…)` and separates siblings inside
+it with `%align`; a dedent is simply an operator failure that ends the
+enclosing repetition, so there is no INDENT/DEDENT token stream.
+
+A rule that uses these operators must be `atomic`, so the horizontal-only
+auto-`ignore` can't swallow a line's indentation before it is measured. The
+operators consume the indentation they measure, so `%align stmt` lands
+`stmt` at the first non-space byte.
+
+**The machinery is hidden.** `%root` / `%align` / `%indent` are the whole
+surface. A compiler pass (`src/pegc/desugar_indent.rs`, run first in
+`Grammar::compile`) rewrites them into the lower-level IR the VM runs:
+rules implicitly parameterized by their anchor column, the
+`deeper` / `same` / `at_least` combinators that assert `>` / `==` / `>=`
+against it, and an arg-keyed packrat memo so a rule cached at one
+indentation context isn't reused at another. Only a rule that actually
+reads an inherited anchor gets the implicit parameter (a call-graph
+fixpoint), so every rule in every non-indentation grammar keeps the
+allocation-free `ArgKey::None` memo key. A `%align` / `%indent` or anchored
+call reachable from the root with no enclosing `%root` / `%indent` to
+establish the column is a compile error
+(`CompileError::IndentAnchorOutOfScope`).
+
+**Incremental soundness.** Indentation is measured *forward* (the operator
+consumes the whitespace run), so the enclosing rule's `examined_max` covers
+it and a warm reparse correctly invalidates any entry whose measured
+indentation an edit changed — see `tests/incremental_indent_tests.rs`.
+
+**Integer-only, by design.** The desugared anchor is an `i32` column; the
+memo key's argument component (`pegvm::vm::ArgKey`) is `None` / `One(i32)` /
+`Many(Box<[i32]>)`, where `None` keeps every zero-argument rule (i.e. every
+rule in every non-indentation grammar) allocation-free and byte-identical
+to the unparameterized key. The single ambient anchor uses only the
+`One(i32)` arm; the `Many` arm and the underlying multiple-column IR are the
+seam for a future **typed-argument** extension (e.g. a heredoc terminator
+string, or a Ruby-style backreference). That extension is **documented, not
+built** — no shipped grammar needs it, and no surface exposes the richer IR.
+
+**Pruned-language gaps.** Both shipped indentation grammars are
+deliberately reduced subsets; each file's header comment lists the exact
+out-of-subset constructs. The common theme is that anything needing
+*column arithmetic* (`n + 1`, YAML's `seq-spaces(n,c) = n - 1`, compact
+block-in-block nesting) or *typed arguments* (block-scalar indicators,
+anchors/aliases) is out of scope — the single ambient anchor expresses only
+relative `>` / `>=` / `==`. Tabs count as one column (no tab-stop
+expansion).
+
 ### Reserved syntax
 
 `^<non-ident-byte>` is a parse error today and reserved for future

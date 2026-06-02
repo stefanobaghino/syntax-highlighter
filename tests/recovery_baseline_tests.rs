@@ -32,7 +32,9 @@ fn grammar_for(ext: &str) -> Option<&'static str> {
         "json" => Some("json"),
         "rs" => Some("rust"),
         "sql" => Some("sqlite"),
+        "star" => Some("starlark"),
         "toml" => Some("toml"),
+        "yaml" => Some("yaml"),
         _ => None,
     }
 }

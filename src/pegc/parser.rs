@@ -5,7 +5,8 @@ use super::analysis::{
     synthesize_reserved_preferred, wrap_root,
 };
 use super::compiler::{compile_rules, CompileError};
-use super::pattern::{Pattern, Span};
+use super::desugar_indent::desugar_indent;
+use super::pattern::{IndentOpKind, Pattern, Span};
 use crate::pegvm::{CharSet, Program};
 
 /// Append `c` as UTF-8 to `out`. ASCII chars produce one byte; non-ASCII
@@ -113,6 +114,15 @@ pub struct Grammar {
     /// position check in [`Grammar::compile`] also walks the names in
     /// order to verify `root` is the first rule.
     pub rule_headers: Vec<RuleHeader>,
+    /// Declared parameter names of each parameterized rule, keyed by flat
+    /// rule name (e.g. `suite` → `["outer"]`). The parameters are the
+    /// integer indentation columns a rule is called with; the compiler
+    /// reads `.len()` as the rule's `argc` and
+    /// resolves `ArgSrc::Local` references against this list (params
+    /// occupy the first activation slots). Absent / empty for every
+    /// non-parameterized rule — which is every rule in every grammar that
+    /// predates the indentation surface.
+    pub rule_params: HashMap<String, Vec<String>>,
 }
 
 /// Byte ranges of one rule's pieces in the grammar source. All offsets
@@ -168,6 +178,7 @@ impl Grammar {
             percent_rules: HashSet::new(),
             preferred_rules: HashSet::new(),
             rule_headers: Vec::new(),
+            rule_params: HashMap::new(),
         }
     }
 
@@ -182,6 +193,7 @@ impl Grammar {
             percent_rules: HashSet::new(),
             preferred_rules: HashSet::new(),
             rule_headers: Vec::new(),
+            rule_params: HashMap::new(),
         }
     }
 
@@ -191,6 +203,11 @@ impl Grammar {
     /// [`compile`](super::compile) instead.
     ///
     /// Pipeline:
+    /// 0. Desugar the implicit indentation operators (`%root` / `%align`
+    ///    / `%indent`) via [`desugar_indent`] into the column-threading
+    ///    IR — parameterized rules plus `deeper` / `same` / `at_least`
+    ///    combinators — so every later pass and the whole backend see
+    ///    only that lower-level form. Runs first, before any analysis.
     /// 1. Resolve `Pattern::InferBoundaryCatch` placeholders (`^^lbl`)
     ///    via [`resolve_inferred_boundaries`] — synthesizes each
     ///    boundary from FOLLOW.
@@ -219,7 +236,9 @@ impl Grammar {
             percent_rules: self.percent_rules.clone(),
             preferred_rules: self.preferred_rules.clone(),
             rule_headers: self.rule_headers.clone(),
+            rule_params: self.rule_params.clone(),
         };
+        desugar_indent(&mut resolved)?;
         resolve_inferred_boundaries(&mut resolved)?;
         let findings = lint_partial_match(&resolved);
         if !findings.is_empty() {
@@ -239,7 +258,7 @@ impl Grammar {
         // `CompileError::UndefinedRule("boundary")` from `compile_rules`.
         append_boundary_check(&mut resolved);
         wrap_root(&mut resolved);
-        compile_rules(&resolved.rules, &resolved.root)
+        compile_rules(&resolved.rules, &resolved.root, &resolved.rule_params)
     }
 }
 
@@ -543,6 +562,10 @@ impl<'a> Parser<'a> {
         let mut percent: HashSet<String> = HashSet::new();
         let mut preferred: HashSet<String> = HashSet::new();
         let mut rule_headers: Vec<RuleHeader> = Vec::new();
+        // Indentation parameters are synthesized later by `desugar_indent`
+        // from the `%root` / `%align` / `%indent` operators; the surface
+        // has no parameter syntax, so resolution leaves this empty.
+        let rule_params: HashMap<String, Vec<String>> = HashMap::new();
 
         let root_flat = root.name.clone();
         // Base frame: the root rule itself, visible everywhere (so the
@@ -576,6 +599,7 @@ impl<'a> Parser<'a> {
             percent_rules: percent,
             preferred_rules: preferred,
             rule_headers,
+            rule_params,
         })
     }
 
@@ -704,7 +728,22 @@ impl<'a> Parser<'a> {
                 Self::rewrite_refs(inner, stack);
                 Self::rewrite_refs(recovery, stack);
             }
-            Pattern::Literal { .. } | Pattern::CharClass { .. } | Pattern::AnyChar { .. } => {}
+            // `%root X` / `%indent X` bind a sub-expression that can name
+            // rules (`%root node`); resolve inside the operand. `%align`
+            // carries none.
+            Pattern::IndentOp { operand, .. } => {
+                if let Some(inner) = operand {
+                    Self::rewrite_refs(inner, stack);
+                }
+            }
+            // An indent combinator's `IndentArg::Local` is an activation
+            // local, not a rule reference, so name resolution leaves it
+            // untouched. (It only appears post-desugar, never during the
+            // parse-time resolution this walk performs.)
+            Pattern::Literal { .. }
+            | Pattern::CharClass { .. }
+            | Pattern::AnyChar { .. }
+            | Pattern::IndentCombinator { .. } => {}
         }
     }
 
@@ -1101,11 +1140,16 @@ impl<'a> Parser<'a> {
                 Ok(Pattern::AnyChar { span })
             }
             Some(b'@') => self.parse_capture(),
+            Some(b'%') => self.parse_indent_op(),
             Some(b'\\') => self.parse_backslash_atom(),
             Some(c) if is_ident_start(c) => {
                 // Disambiguation against `name = ...` is handled by at_prefix_start.
                 let name = self.parse_ident()?;
-                Ok(Pattern::NonTerminal { name, span })
+                Ok(Pattern::NonTerminal {
+                    name,
+                    args: Vec::new(),
+                    span,
+                })
             }
             Some(c) => Err(self.err(format!("unexpected '{}'", c as char))),
             None => Err(self.err("unexpected end of input".into())),
@@ -1211,6 +1255,49 @@ impl<'a> Parser<'a> {
         Ok(Pattern::Capture {
             kind: name,
             inner: Box::new(inner),
+            span,
+        })
+    }
+
+    /// Parse a `%`-prefixed indentation operator: `%root X`, `%align`,
+    /// `%indent X`. The keyword touches the `%` (no whitespace), the same
+    /// tight-binding rule as `@kind`. `%root` and `%indent` take a single
+    /// following atom as their operand — `parse_atom`, never a bare
+    /// sequence — so `%indent a?` reads as `(%indent a)?` and a
+    /// multi-element block is parenthesized (`%indent ( a b )`), exactly
+    /// like `@kind`. `%align` is standalone.
+    ///
+    /// The result is a transient [`Pattern::IndentOp`]; the
+    /// [`desugar_indent`](super::desugar_indent::desugar_indent) pass
+    /// rewrites it into the column-threading IR before any other pass
+    /// runs, so no analysis or the backend ever sees this node.
+    fn parse_indent_op(&mut self) -> Result<Pattern, ParseError> {
+        // Span of the operator is the position of the `%` sigil.
+        let span = self.span();
+        self.expect(b'%')?;
+        let kw = self
+            .parse_ident()
+            .map_err(|_| self.err("expected `root`, `align`, or `indent` after `%`".into()))?;
+        let kind = match kw.as_str() {
+            "root" => IndentOpKind::Root,
+            "align" => IndentOpKind::Align,
+            "indent" => IndentOpKind::Indent,
+            other => {
+                return Err(self.err(format!(
+                    "unknown indentation operator `%{other}`; expected `%root`, `%align`, \
+                     or `%indent`"
+                )))
+            }
+        };
+        let operand = if matches!(kind, IndentOpKind::Align) {
+            None
+        } else {
+            self.skip_ws();
+            Some(Box::new(self.parse_atom()?))
+        };
+        Ok(Pattern::IndentOp {
+            kind,
+            operand,
             span,
         })
     }
@@ -1675,7 +1762,7 @@ fn is_ident_cont(c: u8) -> bool {
 fn is_atom_start(c: u8) -> bool {
     matches!(
         c,
-        b'(' | b'"' | b'\'' | b'[' | b'.' | b'@' | b'!' | b'&' | b'\\'
+        b'(' | b'"' | b'\'' | b'[' | b'.' | b'@' | b'%' | b'!' | b'&' | b'\\'
     ) || is_ident_start(c)
 }
 

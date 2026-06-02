@@ -76,7 +76,15 @@ pub(crate) fn compute_nullable(rules: &HashMap<String, Pattern>) -> HashSet<Stri
 pub(crate) fn pattern_nullable(pat: &Pattern, nullable: &HashSet<String>) -> bool {
     match pat {
         Pattern::Literal { bytes, .. } => bytes.is_empty(),
-        Pattern::CharClass { .. } | Pattern::AnyChar { .. } => false,
+        // An indent combinator consumes the leading `[ \t]*` and then
+        // asserts a relation — treated as non-nullable (see its Pattern
+        // doc), like any other consuming atom.
+        Pattern::CharClass { .. } | Pattern::AnyChar { .. } | Pattern::IndentCombinator { .. } => {
+            false
+        }
+        Pattern::IndentOp { .. } => {
+            unreachable!("Pattern::IndentOp is desugared by desugar_indent before analysis")
+        }
         Pattern::Sequence { items, .. } => items.iter().all(|p| pattern_nullable(p, nullable)),
         Pattern::OrderedChoice { alts, .. } => alts.iter().any(|p| pattern_nullable(p, nullable)),
         Pattern::Repeat { .. } | Pattern::Optional { .. } => true,
@@ -122,7 +130,15 @@ fn compute_first_calls(
 
 fn collect_first_calls(pat: &Pattern, nullable: &HashSet<String>, out: &mut HashSet<String>) {
     match pat {
-        Pattern::Literal { .. } | Pattern::CharClass { .. } | Pattern::AnyChar { .. } => {}
+        // An indent combinator references no rule (its arg is a column,
+        // not a non-terminal), so it routes no first-call edge.
+        Pattern::Literal { .. }
+        | Pattern::CharClass { .. }
+        | Pattern::AnyChar { .. }
+        | Pattern::IndentCombinator { .. } => {}
+        Pattern::IndentOp { .. } => {
+            unreachable!("Pattern::IndentOp is desugared by desugar_indent before analysis")
+        }
         Pattern::Sequence { items, .. } => {
             for it in items {
                 collect_first_calls(it, nullable, out);
@@ -335,6 +351,12 @@ fn pattern_first(pat: &Pattern, nullable: &HashSet<String>) -> FollowSet {
             out.extend(pattern_first(inner, nullable));
         }
         Pattern::NotPredicate { .. } => {}
+        // No FIRST non-terminal: the combinator's only observable prefix
+        // is `[ \t]*`, deliberately not surfaced (see its Pattern doc).
+        Pattern::IndentCombinator { .. } => {}
+        Pattern::IndentOp { .. } => {
+            unreachable!("Pattern::IndentOp is desugared by desugar_indent before analysis")
+        }
         Pattern::AndPredicate { inner, .. } => {
             out.extend(pattern_first(inner, nullable));
         }
@@ -411,7 +433,13 @@ fn collect_follow(
     changed: &mut bool,
 ) {
     match pat {
-        Pattern::Literal { .. } | Pattern::CharClass { .. } | Pattern::AnyChar { .. } => {}
+        Pattern::Literal { .. }
+        | Pattern::CharClass { .. }
+        | Pattern::AnyChar { .. }
+        | Pattern::IndentCombinator { .. } => {}
+        Pattern::IndentOp { .. } => {
+            unreachable!("Pattern::IndentOp is desugared by desugar_indent before analysis")
+        }
         Pattern::NonTerminal { name, .. } => {
             extend_follow(follow, name, trailing, changed);
         }
@@ -673,8 +701,14 @@ fn walk_for_call_sites<'a>(
     findings: &mut Vec<LintFinding>,
 ) {
     match pat {
-        Pattern::Literal { .. } | Pattern::CharClass { .. } | Pattern::AnyChar { .. } => {}
-        Pattern::NonTerminal { name, span } => {
+        Pattern::Literal { .. }
+        | Pattern::CharClass { .. }
+        | Pattern::AnyChar { .. }
+        | Pattern::IndentCombinator { .. } => {}
+        Pattern::IndentOp { .. } => {
+            unreachable!("Pattern::IndentOp is desugared by desugar_indent before analysis")
+        }
+        Pattern::NonTerminal { name, span, .. } => {
             let Some(t) = ctx.trailing.get(name) else {
                 return;
             };
@@ -868,7 +902,13 @@ fn find_callsite_unguarded<'a>(
     found_callsite: &mut bool,
 ) -> bool {
     match pat {
-        Pattern::Literal { .. } | Pattern::CharClass { .. } | Pattern::AnyChar { .. } => false,
+        Pattern::Literal { .. }
+        | Pattern::CharClass { .. }
+        | Pattern::AnyChar { .. }
+        | Pattern::IndentCombinator { .. } => false,
+        Pattern::IndentOp { .. } => {
+            unreachable!("Pattern::IndentOp is desugared by desugar_indent before analysis")
+        }
         Pattern::NonTerminal { name, .. } => {
             if name != probe.target_caller {
                 return false;
@@ -1161,7 +1201,11 @@ fn resolve_in_pattern(
         Pattern::Literal { .. }
         | Pattern::CharClass { .. }
         | Pattern::AnyChar { .. }
-        | Pattern::NonTerminal { .. } => Ok(pat.clone()),
+        | Pattern::NonTerminal { .. }
+        | Pattern::IndentCombinator { .. } => Ok(pat.clone()),
+        Pattern::IndentOp { .. } => {
+            unreachable!("Pattern::IndentOp is desugared by desugar_indent before analysis")
+        }
         Pattern::Sequence { items, span } => {
             let mut out = Vec::with_capacity(items.len());
             for i in 0..items.len() {
@@ -1406,7 +1450,13 @@ pub(crate) fn compute_ignore_rules(rules: &HashMap<String, Pattern>) -> HashMap<
 /// rule bodies.
 pub fn tally_non_terminal_refs(pat: &Pattern, out: &mut HashMap<String, usize>) {
     match pat {
-        Pattern::Literal { .. } | Pattern::CharClass { .. } | Pattern::AnyChar { .. } => {}
+        Pattern::Literal { .. }
+        | Pattern::CharClass { .. }
+        | Pattern::AnyChar { .. }
+        | Pattern::IndentCombinator { .. } => {}
+        Pattern::IndentOp { .. } => {
+            unreachable!("Pattern::IndentOp is desugared by desugar_indent before analysis")
+        }
         Pattern::Sequence { items, .. } => {
             for it in items {
                 tally_non_terminal_refs(it, out);
@@ -1439,7 +1489,13 @@ pub fn tally_non_terminal_refs(pat: &Pattern, out: &mut HashMap<String, usize>) 
 
 fn collect_non_terminal_refs(pat: &Pattern, out: &mut HashSet<String>) {
     match pat {
-        Pattern::Literal { .. } | Pattern::CharClass { .. } | Pattern::AnyChar { .. } => {}
+        Pattern::Literal { .. }
+        | Pattern::CharClass { .. }
+        | Pattern::AnyChar { .. }
+        | Pattern::IndentCombinator { .. } => {}
+        Pattern::IndentOp { .. } => {
+            unreachable!("Pattern::IndentOp is desugared by desugar_indent before analysis")
+        }
         Pattern::Sequence { items, .. } => {
             for it in items {
                 collect_non_terminal_refs(it, out);
@@ -1476,7 +1532,11 @@ fn body_contains_catch(pat: &Pattern) -> bool {
         Pattern::Literal { .. }
         | Pattern::CharClass { .. }
         | Pattern::AnyChar { .. }
-        | Pattern::NonTerminal { .. } => false,
+        | Pattern::NonTerminal { .. }
+        | Pattern::IndentCombinator { .. } => false,
+        Pattern::IndentOp { .. } => {
+            unreachable!("Pattern::IndentOp is desugared by desugar_indent before analysis")
+        }
         Pattern::Sequence { items, .. } => items.iter().any(body_contains_catch),
         Pattern::OrderedChoice { alts, .. } => alts.iter().any(body_contains_catch),
         Pattern::Repeat { inner, .. }
@@ -1597,7 +1657,11 @@ fn inject_ignore_in(pat: &mut Pattern) {
         Pattern::Literal { .. }
         | Pattern::CharClass { .. }
         | Pattern::AnyChar { .. }
-        | Pattern::NonTerminal { .. } => {}
+        | Pattern::NonTerminal { .. }
+        | Pattern::IndentCombinator { .. } => {}
+        Pattern::IndentOp { .. } => {
+            unreachable!("Pattern::IndentOp is desugared by desugar_indent before analysis")
+        }
     }
 }
 
@@ -1727,7 +1791,11 @@ fn contains_capture(pat: &Pattern) -> bool {
         Pattern::Literal { .. }
         | Pattern::CharClass { .. }
         | Pattern::AnyChar { .. }
-        | Pattern::NonTerminal { .. } => false,
+        | Pattern::NonTerminal { .. }
+        | Pattern::IndentCombinator { .. } => false,
+        Pattern::IndentOp { .. } => {
+            unreachable!("Pattern::IndentOp is desugared by desugar_indent before analysis")
+        }
     }
 }
 

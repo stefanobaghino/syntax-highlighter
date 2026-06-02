@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 
 use super::analysis::{analyze_left_recursion, LintFinding};
-use super::pattern::{Pattern, Span};
-use crate::pegvm::{CaptureKind, Instruction, Label, LabelId, MemoId, Program, RuleKind};
+use super::pattern::{IndentArg, IndentOp, Pattern, Span};
+use crate::pegvm::{
+    ArgSrc, CaptureKind, CmpOp, Instruction, Label, LabelId, MemoId, Program, RuleKind,
+};
 
 #[derive(Debug)]
 pub enum CompileError {
@@ -36,6 +38,34 @@ pub enum CompileError {
     /// in identifier position. Emitted by `synthesize_reserved_preferred`.
     /// The payload is the offending literals (UTF-8 lossy), sorted.
     ReservedPreferredConflict(Vec<String>),
+    /// A parameterized call passes the wrong number of indentation
+    /// arguments for the callee's declared parameter list — e.g.
+    /// `suite()` or `suite(a, b)` for a `suite(outer)`. Detected in
+    /// `check_refs` against [`Grammar::rule_params`](super::Grammar::rule_params).
+    ArgCountMismatch {
+        callee: String,
+        expected: usize,
+        found: usize,
+    },
+    /// An indent combinator or call argument references a local name
+    /// (`same(i)`, `block(n)`) that is not in scope — no enclosing rule
+    /// parameter or earlier `as`-binding introduced it. Carries the
+    /// offending name and the rule it appeared in.
+    UnboundIndentLocal {
+        rule: String,
+        name: String,
+    },
+    /// A `%align` / `%indent` operator, or a call to an
+    /// indentation-anchored rule, is reachable from the grammar root with
+    /// no enclosing `%root` / `%indent` to establish the anchor column, so
+    /// the column would have no provider at runtime. Emitted by
+    /// `desugar_indent`. `rule` is where the unanchored demand surfaced
+    /// (the grammar root); `demand` describes the construct that needed
+    /// the anchor.
+    IndentAnchorOutOfScope {
+        rule: String,
+        demand: String,
+    },
 }
 
 impl std::fmt::Display for CompileError {
@@ -69,6 +99,25 @@ impl std::fmt::Display for CompileError {
                  so the synthesized `reserved` / `preferred` sets would overlap: {}",
                 words.join(", ")
             ),
+            CompileError::ArgCountMismatch {
+                callee,
+                expected,
+                found,
+            } => write!(
+                f,
+                "rule `{callee}` takes {expected} indentation argument(s) but is called with {found}"
+            ),
+            CompileError::UnboundIndentLocal { rule, name } => write!(
+                f,
+                "indentation local `{name}` referenced in rule `{rule}` is not in scope \
+                 (no enclosing parameter or `as` binding introduces it)"
+            ),
+            CompileError::IndentAnchorOutOfScope { rule, demand } => write!(
+                f,
+                "{demand} in rule `{rule}` has no indentation anchor in scope: it is reachable \
+                 from the grammar root with no enclosing `%root` or `%indent` to establish the \
+                 column"
+            ),
         }
     }
 }
@@ -92,6 +141,24 @@ struct Compiler {
     label_names: Vec<String>,
     char_sets: Vec<crate::pegvm::CharSet>,
     char_set_dedup: HashMap<crate::pegvm::CharSet, crate::pegvm::SetId>,
+    /// Activation-slot environment for the rule currently being
+    /// compiled, in slot order: `Some(name)` for a parameter or an
+    /// `as`-bound indent width, `None` for an anonymous measure (e.g.
+    /// the throwaway width a `same(i)` measures). The slot index of a
+    /// name is its position here, so `IndentArg::Local` resolves by
+    /// reverse lookup. Reset per rule by [`begin_rule_locals`].
+    ///
+    /// [`begin_rule_locals`]: Compiler::begin_rule_locals
+    locals: Vec<Option<String>>,
+    /// The rule name owning `locals`, for error messages.
+    current_rule: String,
+    /// First unresolved-local error seen while lowering, surfaced by
+    /// `compile_rules` after the whole grammar is walked. Kept as
+    /// accumulated state (rather than threading `Result` through the
+    /// infallible `compile_pat`) so the bare-pattern path stays simple;
+    /// the validation in `check_refs` catches the same class of error
+    /// for the grammar path up front.
+    local_error: Option<CompileError>,
 }
 
 impl Compiler {
@@ -105,6 +172,50 @@ impl Compiler {
             label_names: Vec::new(),
             char_sets: Vec::new(),
             char_set_dedup: HashMap::new(),
+            locals: Vec::new(),
+            current_rule: String::new(),
+            local_error: None,
+        }
+    }
+
+    /// Reset the activation-slot environment for a new rule: parameters
+    /// occupy the first slots in declaration order, anonymous /
+    /// `as`-bound slots accrue after them as the body is lowered.
+    fn begin_rule_locals(&mut self, rule: &str, params: &[String]) {
+        self.current_rule = rule.to_string();
+        self.locals = params.iter().map(|p| Some(p.clone())).collect();
+    }
+
+    /// Resolve an [`IndentArg`] to a runtime [`ArgSrc`]: a literal
+    /// verbatim, a local by reverse-lookup of its slot. An unresolved
+    /// local records a [`CompileError::UnboundIndentLocal`] (first one
+    /// wins) and falls back to slot 0 so lowering can continue to a
+    /// clean error return rather than panicking.
+    fn indent_arg_src(&mut self, arg: &IndentArg) -> ArgSrc {
+        match arg {
+            IndentArg::Lit(v) => ArgSrc::Lit(*v),
+            IndentArg::Local(name) => ArgSrc::Local(self.resolve_local(name)),
+        }
+    }
+
+    /// Slot index of local `name` in the current rule's environment
+    /// (most-recent binding wins). Records an error and returns 0 if
+    /// absent.
+    fn resolve_local(&mut self, name: &str) -> u8 {
+        if let Some(pos) = self
+            .locals
+            .iter()
+            .rposition(|slot| slot.as_deref() == Some(name))
+        {
+            u8::try_from(pos).unwrap_or(u8::MAX)
+        } else {
+            if self.local_error.is_none() {
+                self.local_error = Some(CompileError::UnboundIndentLocal {
+                    rule: self.current_rule.clone(),
+                    name: name.to_string(),
+                });
+            }
+            0
         }
     }
 
@@ -156,7 +267,9 @@ impl Compiler {
             Instruction::PartialCommit(_) => Instruction::PartialCommit(target),
             Instruction::BackCommit(_) => Instruction::BackCommit(target),
             Instruction::Call(_) => Instruction::Call(target),
-            Instruction::RuleEnter(id, kind, _) => Instruction::RuleEnter(*id, *kind, target),
+            Instruction::RuleEnter(id, kind, _, argc) => {
+                Instruction::RuleEnter(*id, *kind, target, *argc)
+            }
             Instruction::LRTail(id, _) => Instruction::LRTail(*id, target),
             other => panic!("patch_jump: not a jump instruction: {:?}", other),
         };
@@ -277,9 +390,36 @@ impl Compiler {
                 self.patch_jump(choice, l1);
                 self.patch_jump(back, l2);
             }
-            Pattern::NonTerminal { name, .. } => {
+            Pattern::NonTerminal { name, args, .. } => {
+                // Push the indentation arguments (if any) left-to-right so
+                // the callee's `RuleEnter` seeds parameter slot 0 with the
+                // first argument. A plain reference (empty `args`) emits
+                // just the `Call`, exactly as before.
+                for arg in args {
+                    let src = self.indent_arg_src(arg);
+                    self.emit(Instruction::ArgPush(src));
+                }
                 let idx = self.emit(Instruction::Call(Label(0)));
                 self.pending_calls.push((idx, name.clone()));
+            }
+            Pattern::IndentCombinator { op, arg, bind, .. } => {
+                // Resolve the reference column against the environment
+                // *before* introducing this combinator's own slot, so
+                // `same(i)` binds to the earlier `i` and a degenerate
+                // `deeper(i) as i` resolves `i` as unbound rather than to
+                // its own not-yet-measured slot.
+                let src = self.indent_arg_src(arg);
+                let measure_slot = u8::try_from(self.locals.len()).unwrap_or(u8::MAX);
+                // The measured width takes the next slot — named by the
+                // `as` binder, or anonymous for a bare assertion.
+                self.locals.push(bind.clone());
+                self.emit(Instruction::IndentMeasure(measure_slot));
+                let cmp = match op {
+                    IndentOp::Deeper => CmpOp::Gt,
+                    IndentOp::Same => CmpOp::Eq,
+                    IndentOp::AtLeast => CmpOp::Ge,
+                };
+                self.emit(Instruction::IndentCmp(cmp, measure_slot, src));
             }
             Pattern::Capture { kind, inner, .. } => {
                 let kind_id = self.intern_capture(kind);
@@ -344,6 +484,14 @@ impl Compiler {
                      analysis::resolve_inferred_boundaries before compilation"
                 )
             }
+            // `desugar_indent` runs first in `Grammar::compile`, rewriting
+            // every `%`-operator into the combinator IR; none survives to
+            // lowering.
+            Pattern::IndentOp { .. } => {
+                unreachable!(
+                    "Pattern::IndentOp must be desugared by desugar_indent before compilation"
+                )
+            }
         }
     }
 }
@@ -358,6 +506,9 @@ pub fn compile_pattern(pat: &Pattern) -> Program {
             "compile_pattern: unresolved NonTerminal({}) — use Grammar::compile",
             name
         );
+    }
+    if let Some(err) = &c.local_error {
+        panic!("compile_pattern: {err} — use Grammar::compile");
     }
     Program {
         code: c.code,
@@ -387,6 +538,7 @@ pub fn compile_pattern(pat: &Pattern) -> Program {
 pub(crate) fn compile_rules(
     rules: &HashMap<String, Pattern>,
     root: &str,
+    rule_params: &HashMap<String, Vec<String>>,
 ) -> Result<Program, CompileError> {
     let start = root;
     debug_assert!(
@@ -394,10 +546,11 @@ pub(crate) fn compile_rules(
         "compile_rules: entry rule must be present (Grammar::compile enforces this)"
     );
 
-    // Detect undefined NonTerminal references up front so the LR analysis
-    // doesn't have to defend against missing rules in the call graph.
+    // Detect undefined NonTerminal references and argument-arity
+    // mismatches up front so the LR analysis doesn't have to defend
+    // against missing rules in the call graph.
     for (rule_name, body) in rules {
-        check_refs(rule_name, body, rules)?;
+        check_refs(rule_name, body, rules, rule_params)?;
     }
 
     // Identify left-recursive rules (direct and indirect).
@@ -441,9 +594,18 @@ pub(crate) fn compile_rules(
         // RuleEnter's Label is patched to the Return address below so a cache
         // hit can skip straight past the body. LR rules close the body with
         // LRTail (the seed-and-grow controller); non-LR rules close with
-        // MemoClose (the success-entry committer).
-        let enter = c.emit(Instruction::RuleEnter(memo_id, kind, Label(0)));
+        // MemoClose (the success-entry committer). `argc` is the rule's
+        // declared parameter count, looked up from the grammar's
+        // `rule_params`; 0 for every non-parameterized rule.
+        let argc =
+            u8::try_from(rule_params.get(name.as_str()).map_or(0, Vec::len)).unwrap_or(u8::MAX);
+        let enter = c.emit(Instruction::RuleEnter(memo_id, kind, Label(0), argc));
         let body_start = c.pos();
+        // Seed the activation-slot environment with this rule's params
+        // before lowering its body, so `IndentArg::Local` references and
+        // `as`-bindings resolve to stable slot indices.
+        let params: &[String] = rule_params.get(name).map_or(&[], Vec::as_slice);
+        c.begin_rule_locals(name, params);
         c.compile_pat(&rules[name]);
         match kind {
             RuleKind::Lr => {
@@ -456,6 +618,13 @@ pub(crate) fn compile_rules(
         let return_addr = c.pos();
         c.emit(Instruction::Return);
         c.patch_jump(enter, return_addr);
+    }
+
+    // Surface any unresolved indentation-local reference encountered
+    // during lowering (the env-tracked counterpart to `check_refs`'s
+    // arity check).
+    if let Some(err) = c.local_error.take() {
+        return Err(err);
     }
 
     // Patch the bootstrap Call.
@@ -489,18 +658,25 @@ fn check_refs(
     _rule: &str,
     pat: &Pattern,
     rules: &HashMap<String, Pattern>,
+    rule_params: &HashMap<String, Vec<String>>,
 ) -> Result<(), CompileError> {
     match pat {
-        Pattern::Literal { .. } | Pattern::CharClass { .. } | Pattern::AnyChar { .. } => Ok(()),
+        Pattern::Literal { .. }
+        | Pattern::CharClass { .. }
+        | Pattern::AnyChar { .. }
+        // An indent combinator references no rule and carries no inner
+        // pattern; its only name is an `IndentArg::Local`, validated
+        // during lowering against the activation environment.
+        | Pattern::IndentCombinator { .. } => Ok(()),
         Pattern::Sequence { items, .. } => {
             for it in items {
-                check_refs(_rule, it, rules)?;
+                check_refs(_rule, it, rules, rule_params)?;
             }
             Ok(())
         }
         Pattern::OrderedChoice { alts, .. } => {
             for it in alts {
-                check_refs(_rule, it, rules)?;
+                check_refs(_rule, it, rules, rule_params)?;
             }
             Ok(())
         }
@@ -510,20 +686,34 @@ fn check_refs(
         | Pattern::NotPredicate { inner, .. }
         | Pattern::AndPredicate { inner, .. }
         | Pattern::Capture { inner, .. }
-        | Pattern::Lenient { inner, .. } => check_refs(_rule, inner, rules),
+        | Pattern::Lenient { inner, .. } => check_refs(_rule, inner, rules, rule_params),
         Pattern::Catch {
             inner, recovery, ..
         } => {
-            check_refs(_rule, inner, rules)?;
-            check_refs(_rule, recovery, rules)
+            check_refs(_rule, inner, rules, rule_params)?;
+            check_refs(_rule, recovery, rules, rule_params)
         }
-        Pattern::InferBoundaryCatch { inner, .. } => check_refs(_rule, inner, rules),
-        Pattern::NonTerminal { name, .. } => {
-            if rules.contains_key(name) {
-                Ok(())
-            } else {
-                Err(CompileError::UndefinedRule(name.clone()))
+        Pattern::InferBoundaryCatch { inner, .. } => check_refs(_rule, inner, rules, rule_params),
+        // Desugared away before `compile_rules` runs.
+        Pattern::IndentOp { .. } => {
+            unreachable!("Pattern::IndentOp must be desugared by desugar_indent before compilation")
+        }
+        Pattern::NonTerminal { name, args, .. } => {
+            if !rules.contains_key(name) {
+                return Err(CompileError::UndefinedRule(name.clone()));
             }
+            // A parameterized call must pass exactly the callee's
+            // declared parameter count; a plain reference (no args) to a
+            // parameterized rule is itself a mismatch (0 vs N).
+            let expected = rule_params.get(name).map_or(0, Vec::len);
+            if args.len() != expected {
+                return Err(CompileError::ArgCountMismatch {
+                    callee: name.clone(),
+                    expected,
+                    found: args.len(),
+                });
+            }
+            Ok(())
         }
     }
 }

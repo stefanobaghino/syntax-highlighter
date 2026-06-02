@@ -67,6 +67,35 @@ pub struct SetId(pub u16);
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
 pub struct LabelId(pub u16);
 
+/// Relation tested by [`Instruction::IndentCmp`] between a measured
+/// indentation width (left) and a reference column (right). All three
+/// are the relations the declarative indent combinators desugar to:
+/// `deeper` → [`CmpOp::Gt`], `at_least` → [`CmpOp::Ge`], `same` →
+/// [`CmpOp::Eq`]. A false relation routes through `fail()` like any
+/// other match miss.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CmpOp {
+    /// Strictly deeper: `measured > reference`.
+    Gt,
+    /// At least as deep: `measured >= reference`.
+    Ge,
+    /// Exactly aligned: `measured == reference`.
+    Eq,
+}
+
+/// Source of an integer argument for [`Instruction::ArgPush`],
+/// [`Instruction::IndentCmp`], and the rule-call convention. Either a
+/// compile-time literal column or a read from the current activation's
+/// local slots (params first, then `as`-bound indent widths).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArgSrc {
+    /// A literal column value (e.g. the `0` in `block(0)`).
+    Lit(i32),
+    /// Read activation slot `n` of the current rule frame: index
+    /// `locals_base + n` into the VM's locals arena.
+    Local(u8),
+}
+
 /// Discriminator on a [`Instruction::RuleEnter`] selecting the post-cache-miss
 /// behavior. The cache-hit prologue is identical for both kinds; only the
 /// miss path differs.
@@ -122,6 +151,39 @@ pub enum Instruction {
     Call(Label),
     Return,
 
+    /// Measure the indentation run `[ \t]*` at the current input pointer,
+    /// **consuming it forward** (advancing `sp`, with each byte counted
+    /// against the enclosing rule's `examined_max` watermark), and store
+    /// the column width into activation slot `n` (index `locals_base + n`
+    /// of the VM's locals arena, growing it with zeros if `n` is past the
+    /// current frame's end). One column per space *or* tab — a documented
+    /// simplification (no tab-stop expansion).
+    ///
+    /// Forward-consuming is the incremental-soundness lynchpin: because
+    /// the whitespace is read through the normal `track_read` path, an
+    /// edit anywhere in the measured run is covered by the memo entry's
+    /// `examined_max`, so warm reparses invalidate correctly. A backward
+    /// scan to the previous newline would create a dependency on bytes
+    /// before `start_sp` that the incremental invalidator cannot see.
+    IndentMeasure(u8),
+    /// Compare activation slot `n` (a previously [`IndentMeasure`]d width)
+    /// against a reference column under the [`CmpOp`] relation. The
+    /// reference comes from the [`ArgSrc`] (a literal or another local).
+    /// A false relation routes to `fail()`; a true one falls through. The
+    /// slot is left intact so a single measured width can be both compared
+    /// and (via the same slot) referenced later — e.g. `deeper(outer) as i`
+    /// measures into `i`, compares `i > outer`, and leaves `i` bound for
+    /// the suite's `same(i)` lines.
+    ///
+    /// [`IndentMeasure`]: Instruction::IndentMeasure
+    IndentCmp(CmpOp, u8, ArgSrc),
+    /// Push one integer argument onto the VM's argument stack ahead of a
+    /// `Call`/`RuleEnter` to a parameterized rule. The matching
+    /// `RuleEnter` pops `argc` of these to form its memo key and seed the
+    /// callee's parameter slots. Emitted in left-to-right argument order,
+    /// so the callee's slot `0` is the first argument.
+    ArgPush(ArgSrc),
+
     /// Rule-entry prologue. Probes the packrat cache at `(memo_id, sp)`:
     /// on a hit replays the cached captures, advances `sp` to the cached
     /// end, and jumps to the `Label` (the rule's `Return` address); on a
@@ -134,7 +196,16 @@ pub enum Instruction {
     ///   (`seed: None` ⇒ `fail()`; `seed: Some` ⇒ jump to `Label`); first
     ///   entry pushes a fresh `LFrame { seed: None, return_addr: Label }`
     ///   and falls through. `LRTail` commits the converged seed.
-    RuleEnter(MemoId, RuleKind, Label),
+    ///
+    /// The trailing `u8` is the rule's **arg count** (`argc`). The
+    /// prologue pops that many values off the VM's argument stack (pushed
+    /// by the caller's `ArgPush` run) to form the [`MemoId`]-keyed memo
+    /// probe's argument component, and — on a miss — seeds the callee's
+    /// first `argc` activation slots with them. `argc = 0` is exactly the
+    /// pre-parameterization behavior: no args popped, an empty
+    /// (allocation-free) arg key, and no slot seeding — the hot path every
+    /// non-indentation grammar takes.
+    RuleEnter(MemoId, RuleKind, Label, u8),
     /// Rule-level memoization epilogue. Pops the matching `StackEntry::Memo`
     /// frame and records a success entry for this rule at the frame's
     /// `start_sp` (subject to the memo-threshold filter).

@@ -1028,14 +1028,14 @@ fn grammar_rules_are_wrapped_in_memo_open_close() {
         vec![
             Instruction::Call(Label(2)),
             Instruction::End,
-            Instruction::RuleEnter(MemoId(0), RuleKind::Memo, Label(8)),
+            Instruction::RuleEnter(MemoId(0), RuleKind::Memo, Label(8), 0),
             Instruction::Byte(b'a'),
             Instruction::Choice(Label(7)),
             Instruction::Any,
             Instruction::FailTwice,
             Instruction::MemoClose(MemoId(0)),
             Instruction::Return,
-            Instruction::RuleEnter(MemoId(1), RuleKind::Memo, Label(12)),
+            Instruction::RuleEnter(MemoId(1), RuleKind::Memo, Label(12), 0),
             Instruction::Byte(b'b'),
             Instruction::MemoClose(MemoId(1)),
             Instruction::Return,
@@ -1077,7 +1077,7 @@ fn direct_lr_rule_emits_lrbody_lrtail_skeleton() {
     assert!(matches!(prog.code[1], Instruction::End));
     assert!(matches!(
         prog.code[2],
-        Instruction::RuleEnter(MemoId(0), RuleKind::Lr, _)
+        Instruction::RuleEnter(MemoId(0), RuleKind::Lr, _, _)
     ));
     // Last three instructions: LRTail, then the final Return for the rule.
     let n = prog.code.len();
@@ -1092,14 +1092,14 @@ fn direct_lr_rule_emits_lrbody_lrtail_skeleton() {
         assert!(
             !matches!(
                 ins,
-                Instruction::RuleEnter(_, RuleKind::Memo, _) | Instruction::MemoClose(..)
+                Instruction::RuleEnter(_, RuleKind::Memo, _, _) | Instruction::MemoClose(..)
             ),
             "LR rule must not emit Memo-kind RuleEnter/MemoClose: {:?}",
             ins
         );
     }
     // RuleEnter's return label points at the rule's Return (last instruction).
-    if let Instruction::RuleEnter(_, RuleKind::Lr, Label(ret)) = prog.code[2] {
+    if let Instruction::RuleEnter(_, RuleKind::Lr, Label(ret), _) = prog.code[2] {
         assert_eq!(ret as usize, n - 1);
     }
     // LRTail's body-start label points at the instruction after RuleEnter.
@@ -1130,11 +1130,11 @@ fn right_recursive_rule_is_not_marked_lr() {
     let has_memo_open = prog
         .code
         .iter()
-        .any(|i| matches!(i, Instruction::RuleEnter(_, RuleKind::Memo, _)));
+        .any(|i| matches!(i, Instruction::RuleEnter(_, RuleKind::Memo, _, _)));
     let has_lr = prog.code.iter().any(|i| {
         matches!(
             i,
-            Instruction::RuleEnter(_, RuleKind::Lr, _) | Instruction::LRTail(..)
+            Instruction::RuleEnter(_, RuleKind::Lr, _, _) | Instruction::LRTail(..)
         )
     });
     assert!(
@@ -1169,7 +1169,7 @@ fn indirect_lr_cycle_of_2_emits_lrbody_lrtail() {
     let lr_bodies = prog
         .code
         .iter()
-        .filter(|i| matches!(i, Instruction::RuleEnter(_, RuleKind::Lr, _)))
+        .filter(|i| matches!(i, Instruction::RuleEnter(_, RuleKind::Lr, _, _)))
         .count();
     let lr_tails = prog
         .code
@@ -1184,7 +1184,7 @@ fn indirect_lr_cycle_of_2_emits_lrbody_lrtail() {
     let a_idx = prog.rule_names.iter().position(|n| n == "a").unwrap();
     let b_idx = prog.rule_names.iter().position(|n| n == "b").unwrap();
     for ins in &prog.code {
-        if let Instruction::RuleEnter(id, RuleKind::Memo, _) = ins {
+        if let Instruction::RuleEnter(id, RuleKind::Memo, _, _) = ins {
             assert!(
                 id.0 as usize != a_idx && id.0 as usize != b_idx,
                 "indirect-LR cycle members must not emit Memo-kind RuleEnter: {:?}",
@@ -1234,7 +1234,7 @@ fn indirect_lr_cycle_of_3_emits_lrbody_lrtail() {
     let lr_bodies = prog
         .code
         .iter()
-        .filter(|i| matches!(i, Instruction::RuleEnter(_, RuleKind::Lr, _)))
+        .filter(|i| matches!(i, Instruction::RuleEnter(_, RuleKind::Lr, _, _)))
         .count();
     let lr_tails = prog
         .code
@@ -1253,7 +1253,7 @@ fn indirect_lr_cycle_of_3_emits_lrbody_lrtail() {
         .map(|n| prog.rule_names.iter().position(|r| r == *n).unwrap())
         .collect();
     for ins in &prog.code {
-        if let Instruction::RuleEnter(id, RuleKind::Memo, _) = ins {
+        if let Instruction::RuleEnter(id, RuleKind::Memo, _, _) = ins {
             assert!(
                 !cycle.contains(&(id.0 as usize)),
                 "indirect-LR cycle members must not emit Memo-kind RuleEnter: {:?}",
@@ -1297,14 +1297,14 @@ fn right_recursive_two_rule_grammar_is_not_marked_lr() {
     let has_lr = prog.code.iter().any(|i| {
         matches!(
             i,
-            Instruction::RuleEnter(_, RuleKind::Lr, _) | Instruction::LRTail(..)
+            Instruction::RuleEnter(_, RuleKind::Lr, _, _) | Instruction::LRTail(..)
         )
     });
     assert!(!has_lr, "non-first-call mutual recursion must not emit LR");
     let has_memo_open = prog
         .code
         .iter()
-        .any(|i| matches!(i, Instruction::RuleEnter(_, RuleKind::Memo, _)));
+        .any(|i| matches!(i, Instruction::RuleEnter(_, RuleKind::Memo, _, _)));
     assert!(has_memo_open, "non-LR rules must use Memo-kind RuleEnter");
 }
 
@@ -1332,7 +1332,7 @@ fn lr_through_nullable_prefix_is_detected() {
     assert!(prog
         .code
         .iter()
-        .any(|i| matches!(i, Instruction::RuleEnter(MemoId(0), RuleKind::Lr, _))));
+        .any(|i| matches!(i, Instruction::RuleEnter(MemoId(0), RuleKind::Lr, _, _))));
 }
 
 // -- FOLLOW analysis ------------------------------------------------------

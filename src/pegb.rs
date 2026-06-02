@@ -60,7 +60,8 @@
 //! instructions decodes in sub-millisecond time.
 
 use crate::pegvm::{
-    CaptureKind, CharSet, Instruction, Label, LabelId, MemoId, Program, RuleKind, SetId,
+    ArgSrc, CaptureKind, CharSet, CmpOp, Instruction, Label, LabelId, MemoId, Program, RuleKind,
+    SetId,
 };
 
 /// Failure modes for [`decode`]. [`encode`] is infallible for any
@@ -75,6 +76,12 @@ pub enum Error {
     /// `RuleEnter`'s `RuleKind` discriminator was neither `0` (`Memo`)
     /// nor `1` (`Lr`).
     InvalidRuleKind { tag: u8, position: usize },
+    /// `IndentCmp`'s `CmpOp` discriminator was outside `0..=2`
+    /// (`Gt` / `Ge` / `Eq`).
+    InvalidCmpOp { tag: u8, position: usize },
+    /// An `ArgSrc` discriminator (in `ArgPush` / `IndentCmp`) was neither
+    /// `0` (`Lit`) nor `1` (`Local`).
+    InvalidArgSrc { tag: u8, position: usize },
     /// Varint read either ran past the 5-byte upper bound for a `u32`
     /// value, or the 5th byte had bits set that overflow `u32`.
     MalformedVarint { position: usize },
@@ -115,6 +122,16 @@ impl std::fmt::Display for Error {
             Error::InvalidRuleKind { tag, position } => write!(
                 f,
                 "invalid RuleKind discriminant {} at position {}",
+                tag, position
+            ),
+            Error::InvalidCmpOp { tag, position } => write!(
+                f,
+                "invalid CmpOp discriminant {} at position {}",
+                tag, position
+            ),
+            Error::InvalidArgSrc { tag, position } => write!(
+                f,
+                "invalid ArgSrc discriminant {} at position {}",
                 tag, position
             ),
             Error::MalformedVarint { position } => {
@@ -163,6 +180,9 @@ const TAG_CAPTURE_END: u8 = 0x11;
 const TAG_RECOVER_SCOPE_BEGIN: u8 = 0x12;
 const TAG_RECOVER_TO_SCOPED_MAX: u8 = 0x13;
 const TAG_RECOVER_SCOPE_END: u8 = 0x14;
+const TAG_INDENT_MEASURE: u8 = 0x15;
+const TAG_INDENT_CMP: u8 = 0x16;
+const TAG_ARG_PUSH: u8 = 0x17;
 
 // `End` is the program-termination sentinel; placed at the top of the
 // `u8` range to keep it visually distinct from the matching /
@@ -171,6 +191,19 @@ const TAG_END: u8 = 0xFF;
 
 const RULE_KIND_MEMO: u8 = 0;
 const RULE_KIND_LR: u8 = 1;
+
+// `CmpOp` discriminants for the `IndentCmp` payload.
+const CMP_GT: u8 = 0;
+const CMP_GE: u8 = 1;
+const CMP_EQ: u8 = 2;
+
+// `ArgSrc` discriminants for the `ArgPush` / `IndentCmp` payloads. A
+// `Lit` carries its `i32` as a varint over the value's `u32` bit pattern
+// (round-trips any value, including the negatives the type permits even
+// though the compiler only emits non-negative columns); a `Local`
+// carries its one-byte slot index.
+const ARG_SRC_LIT: u8 = 0;
+const ARG_SRC_LOCAL: u8 = 1;
 
 /// Sanity cap on the declared instruction count read from the wire,
 /// enforced by [`decode`]. Without it, the decoder would happily
@@ -304,7 +337,7 @@ fn write_instruction(out: &mut Vec<u8>, ins: &Instruction) {
             write_varint_u32(out, label.0);
         }
         Instruction::Return => out.push(TAG_RETURN),
-        Instruction::RuleEnter(memo_id, kind, label) => {
+        Instruction::RuleEnter(memo_id, kind, label, argc) => {
             out.push(TAG_RULE_ENTER);
             write_varint_u32(out, memo_id.0);
             out.push(match kind {
@@ -312,6 +345,7 @@ fn write_instruction(out: &mut Vec<u8>, ins: &Instruction) {
                 RuleKind::Lr => RULE_KIND_LR,
             });
             write_varint_u32(out, label.0);
+            out.push(*argc);
         }
         Instruction::MemoClose(memo_id) => {
             out.push(TAG_MEMO_CLOSE);
@@ -333,7 +367,38 @@ fn write_instruction(out: &mut Vec<u8>, ins: &Instruction) {
         }
         Instruction::RecoverToScopedMax => out.push(TAG_RECOVER_TO_SCOPED_MAX),
         Instruction::RecoverScopeEnd => out.push(TAG_RECOVER_SCOPE_END),
+        Instruction::IndentMeasure(slot) => {
+            out.push(TAG_INDENT_MEASURE);
+            out.push(*slot);
+        }
+        Instruction::IndentCmp(op, slot, src) => {
+            out.push(TAG_INDENT_CMP);
+            out.push(match op {
+                CmpOp::Gt => CMP_GT,
+                CmpOp::Ge => CMP_GE,
+                CmpOp::Eq => CMP_EQ,
+            });
+            out.push(*slot);
+            write_arg_src(out, *src);
+        }
+        Instruction::ArgPush(src) => {
+            out.push(TAG_ARG_PUSH);
+            write_arg_src(out, *src);
+        }
         Instruction::End => out.push(TAG_END),
+    }
+}
+
+fn write_arg_src(out: &mut Vec<u8>, src: ArgSrc) {
+    match src {
+        ArgSrc::Lit(v) => {
+            out.push(ARG_SRC_LIT);
+            write_varint_u32(out, v as u32);
+        }
+        ArgSrc::Local(slot) => {
+            out.push(ARG_SRC_LOCAL);
+            out.push(slot);
+        }
     }
 }
 
@@ -479,7 +544,8 @@ fn read_instruction(cur: &mut Cursor<'_>) -> Result<Instruction, Error> {
                 }
             };
             let label = Label(cur.read_varint_u32()?);
-            Instruction::RuleEnter(memo_id, kind, label)
+            let argc = cur.read_u8()?;
+            Instruction::RuleEnter(memo_id, kind, label, argc)
         }
         TAG_MEMO_CLOSE => Instruction::MemoClose(MemoId(cur.read_varint_u32()?)),
         TAG_LR_TAIL => {
@@ -498,6 +564,25 @@ fn read_instruction(cur: &mut Cursor<'_>) -> Result<Instruction, Error> {
         }
         TAG_RECOVER_TO_SCOPED_MAX => Instruction::RecoverToScopedMax,
         TAG_RECOVER_SCOPE_END => Instruction::RecoverScopeEnd,
+        TAG_INDENT_MEASURE => Instruction::IndentMeasure(cur.read_u8()?),
+        TAG_INDENT_CMP => {
+            let op_pos = cur.pos;
+            let op = match cur.read_u8()? {
+                CMP_GT => CmpOp::Gt,
+                CMP_GE => CmpOp::Ge,
+                CMP_EQ => CmpOp::Eq,
+                other => {
+                    return Err(Error::InvalidCmpOp {
+                        tag: other,
+                        position: op_pos,
+                    })
+                }
+            };
+            let slot = cur.read_u8()?;
+            let src = read_arg_src(cur)?;
+            Instruction::IndentCmp(op, slot, src)
+        }
+        TAG_ARG_PUSH => Instruction::ArgPush(read_arg_src(cur)?),
         TAG_END => Instruction::End,
         _ => {
             return Err(Error::InvalidOpcode {
@@ -508,10 +593,24 @@ fn read_instruction(cur: &mut Cursor<'_>) -> Result<Instruction, Error> {
     })
 }
 
+fn read_arg_src(cur: &mut Cursor<'_>) -> Result<ArgSrc, Error> {
+    let kind_pos = cur.pos;
+    Ok(match cur.read_u8()? {
+        ARG_SRC_LIT => ArgSrc::Lit(cur.read_varint_u32()? as i32),
+        ARG_SRC_LOCAL => ArgSrc::Local(cur.read_u8()?),
+        other => {
+            return Err(Error::InvalidArgSrc {
+                tag: other,
+                position: kind_pos,
+            })
+        }
+    })
+}
+
 fn derive_rule_count(code: &[Instruction]) -> usize {
     code.iter()
         .filter_map(|ins| match ins {
-            Instruction::RuleEnter(id, _, _)
+            Instruction::RuleEnter(id, _, _, _)
             | Instruction::MemoClose(id)
             | Instruction::LRTail(id, _) => Some(id.0),
             _ => None,
@@ -735,8 +834,8 @@ mod tests {
                 Instruction::Fail,
                 Instruction::Call(Label(31)),
                 Instruction::Return,
-                Instruction::RuleEnter(MemoId(0), RuleKind::Memo, Label(37)),
-                Instruction::RuleEnter(MemoId(1), RuleKind::Lr, Label(41)),
+                Instruction::RuleEnter(MemoId(0), RuleKind::Memo, Label(37), 0),
+                Instruction::RuleEnter(MemoId(1), RuleKind::Lr, Label(41), 2),
                 Instruction::MemoClose(MemoId(0)),
                 Instruction::LRTail(MemoId(1), Label(43)),
                 Instruction::CaptureBegin(CaptureKind(0)),
@@ -744,6 +843,12 @@ mod tests {
                 Instruction::RecoverScopeBegin(LabelId(0)),
                 Instruction::RecoverToScopedMax,
                 Instruction::RecoverScopeEnd,
+                Instruction::IndentMeasure(0),
+                Instruction::IndentCmp(CmpOp::Gt, 1, ArgSrc::Local(0)),
+                Instruction::IndentCmp(CmpOp::Ge, 2, ArgSrc::Lit(4)),
+                Instruction::IndentCmp(CmpOp::Eq, 0, ArgSrc::Local(3)),
+                Instruction::ArgPush(ArgSrc::Lit(0)),
+                Instruction::ArgPush(ArgSrc::Local(7)),
                 Instruction::CharSet(SetId(1)),
                 Instruction::End,
             ],
@@ -933,7 +1038,7 @@ mod tests {
     fn decode_recomputes_rule_count_from_code_stream() {
         let p = Program {
             code: vec![
-                Instruction::RuleEnter(MemoId(0), RuleKind::Memo, Label(2)),
+                Instruction::RuleEnter(MemoId(0), RuleKind::Memo, Label(2), 0),
                 Instruction::MemoClose(MemoId(0)),
                 Instruction::Return,
             ],
