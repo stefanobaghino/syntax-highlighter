@@ -10,6 +10,13 @@
 //! library exposes `Parser` and `walk` as the load-bearing API; ANSI
 //! presentation is a demo concern.
 //!
+//! # Bytecode-only construction
+//!
+//! [`Highlighter::from_pegb`] takes the AOT-precompiled bytecode
+//! emitted by the bin crate's `build.rs`. The demo never compiles a
+//! grammar at startup; it embeds one `.pegb` blob per shipped
+//! language and forwards the matching one here.
+//!
 //! # Load-bearing invariant
 //!
 //! The renderer never reorders, drops, or substitutes input bytes —
@@ -19,37 +26,38 @@
 //! exactly. Walker correctness is asserted by unit tests in
 //! `src/walk.rs::tests`.
 
+use syntax_highlighter::pegb;
 use syntax_highlighter::pegvm::Capture;
 use syntax_highlighter::walk::walk;
-use syntax_highlighter_compiler::parser::{Parser, ParserError};
+use syntax_highlighter_compiler::parser::Parser;
 
 use super::theme;
 
 #[derive(Debug)]
-pub struct HighlightError(ParserError);
+pub struct HighlightError(String);
 
 impl std::fmt::Display for HighlightError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
+        f.write_str(&self.0)
     }
 }
 
 impl std::error::Error for HighlightError {}
-
-impl From<ParserError> for HighlightError {
-    fn from(e: ParserError) -> Self {
-        HighlightError(e)
-    }
-}
 
 pub struct Highlighter {
     parser: Parser,
 }
 
 impl Highlighter {
-    pub fn new(grammar_source: &str) -> Result<Self, HighlightError> {
+    /// Build a highlighter from `pegb`-encoded bytecode embedded by the
+    /// bin crate's `build.rs`. Decoding is on the order of microseconds
+    /// per grammar; the demo's startup is dominated by stdin/stdout I/O
+    /// rather than program loading.
+    pub fn from_pegb(bytes: &[u8]) -> Result<Self, HighlightError> {
+        let program =
+            pegb::decode(bytes).map_err(|e| HighlightError(format!("decode pegb: {e}")))?;
         Ok(Self {
-            parser: Parser::new(grammar_source)?,
+            parser: Parser::from_program(program),
         })
     }
 

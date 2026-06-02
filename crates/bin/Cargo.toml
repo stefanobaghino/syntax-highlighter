@@ -14,6 +14,15 @@ homepage.workspace = true
 syntax-highlighter = { path = "../runtime" }
 syntax-highlighter-compiler = { path = "../compiler" }
 
+[build-dependencies]
+# `build.rs` reads `grammars/*.peg`, pipes them through `pegc::compile`
+# and writes the `pegb`-encoded bytecode to `OUT_DIR/<name>.pegb`. The
+# demo binary embeds those blobs via `include_bytes!`. Both crates are
+# compiled twice (once for host, once for target); incremental builds
+# reuse both caches.
+syntax-highlighter = { path = "../runtime" }
+syntax-highlighter-compiler = { path = "../compiler" }
+
 [[bin]]
 name = "demo"
 path = "src/bin/demo/main.rs"

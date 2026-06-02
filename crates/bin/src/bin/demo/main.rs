@@ -7,59 +7,63 @@ mod theme;
 
 use highlight::Highlighter;
 
-const JSON_GRAMMAR: &str = include_str!("../../../../../grammars/json.peg");
-const TOML_GRAMMAR: &str = include_str!("../../../../../grammars/toml.peg");
-const SQLITE_GRAMMAR: &str = include_str!("../../../../../grammars/sqlite.peg");
-const RUST_GRAMMAR: &str = include_str!("../../../../../grammars/rust.peg");
-const JS_GRAMMAR: &str = include_str!("../../../../../grammars/javascript.peg");
-const GO_GRAMMAR: &str = include_str!("../../../../../grammars/go.peg");
-const C_GRAMMAR: &str = include_str!("../../../../../grammars/c.peg");
-const CSS_GRAMMAR: &str = include_str!("../../../../../grammars/css.peg");
-const STARLARK_GRAMMAR: &str = include_str!("../../../../../grammars/starlark.peg");
-const YAML_GRAMMAR: &str = include_str!("../../../../../grammars/yaml.peg");
+/// AOT-precompiled grammar bytecode produced by `build.rs` into
+/// `$OUT_DIR/<lang>.pegb`. Embedded here so the demo never compiles
+/// a grammar at startup; `Highlighter::from_pegb` decodes the blob
+/// (microseconds) and the parser runs directly off the bytecode.
+const JSON_PEGB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/json.pegb"));
+const TOML_PEGB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/toml.pegb"));
+const SQLITE_PEGB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/sqlite.pegb"));
+const RUST_PEGB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rust.pegb"));
+const JS_PEGB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/javascript.pegb"));
+const GO_PEGB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/go.pegb"));
+const C_PEGB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/c.pegb"));
+const CSS_PEGB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/css.pegb"));
+const STARLARK_PEGB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/starlark.pegb"));
+const YAML_PEGB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/yaml.pegb"));
 
-/// Default grammar source used when neither `-l` nor a path-extension
-/// hint is available (e.g. stdin without flags).
-const DEFAULT: &str = JSON_GRAMMAR;
+/// Default grammar used when neither `-l` nor a path-extension hint
+/// is available (e.g. stdin without flags).
+const DEFAULT: &[u8] = JSON_PEGB;
 
 /// Pipe-separated list of canonical language names, suitable for
 /// embedding in usage strings.
 const LANG_NAMES: &str = "json|toml|sql|rust|js|go|c|css|starlark|yaml";
 
 /// Resolve a language name (canonical or common alias) to the embedded
-/// grammar source. Aliases: `sql|sqlite`, `rs|rust`, `js|javascript|mjs|cjs`,
+/// `pegb` bytecode. Aliases: `sql|sqlite`, `rs|rust`, `js|javascript|mjs|cjs`,
 /// `c|h`, `starlark|star|bzl`, `yaml|yml`. Starlark and YAML are
 /// deliberately-pruned subsets (issue #43); see `grammars/{starlark,yaml}.peg`.
-fn by_name(name: &str) -> Option<&'static str> {
+fn by_name(name: &str) -> Option<&'static [u8]> {
     match name {
-        "json" => Some(JSON_GRAMMAR),
-        "toml" => Some(TOML_GRAMMAR),
-        "sql" | "sqlite" => Some(SQLITE_GRAMMAR),
-        "rs" | "rust" => Some(RUST_GRAMMAR),
-        "js" | "javascript" | "mjs" | "cjs" => Some(JS_GRAMMAR),
-        "go" => Some(GO_GRAMMAR),
-        "c" | "h" => Some(C_GRAMMAR),
-        "css" => Some(CSS_GRAMMAR),
-        "starlark" | "star" | "bzl" => Some(STARLARK_GRAMMAR),
-        "yaml" | "yml" => Some(YAML_GRAMMAR),
+        "json" => Some(JSON_PEGB),
+        "toml" => Some(TOML_PEGB),
+        "sql" | "sqlite" => Some(SQLITE_PEGB),
+        "rs" | "rust" => Some(RUST_PEGB),
+        "js" | "javascript" | "mjs" | "cjs" => Some(JS_PEGB),
+        "go" => Some(GO_PEGB),
+        "c" | "h" => Some(C_PEGB),
+        "css" => Some(CSS_PEGB),
+        "starlark" | "star" | "bzl" => Some(STARLARK_PEGB),
+        "yaml" | "yml" => Some(YAML_PEGB),
         _ => None,
     }
 }
 
-/// Resolve a path's extension to an embedded grammar source.
-fn by_extension(path: &Path) -> Option<&'static str> {
+/// Resolve a path's extension to embedded `pegb` bytecode.
+fn by_extension(path: &Path) -> Option<&'static [u8]> {
     path.extension()
         .and_then(|ext| ext.to_str())
         .and_then(by_name)
 }
 
 struct Cli {
-    grammar: Option<&'static str>,
+    grammar: Option<&'static [u8]>,
     path: Option<String>,
 }
 
 fn parse_args<I: Iterator<Item = String>>(args: I) -> Result<Cli, String> {
-    let mut grammar: Option<&'static str> = None;
+    let mut grammar: Option<&'static [u8]> = None;
     let mut path = None;
     let mut it = args.peekable();
     while let Some(arg) = it.next() {
@@ -89,7 +93,7 @@ fn parse_args<I: Iterator<Item = String>>(args: I) -> Result<Cli, String> {
     Ok(Cli { grammar, path })
 }
 
-fn pick_grammar(cli: &Cli) -> Result<&'static str, String> {
+fn pick_grammar(cli: &Cli) -> Result<&'static [u8], String> {
     if let Some(g) = cli.grammar {
         return Ok(g);
     }
@@ -139,7 +143,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let mut highlighter = match Highlighter::new(grammar) {
+    let mut highlighter = match Highlighter::from_pegb(grammar) {
         Ok(h) => h,
         Err(e) => {
             eprintln!("demo: grammar error: {}", e);
