@@ -150,6 +150,28 @@ fn sqlite_roundtrips() {
 }
 
 #[test]
+fn starlark_roundtrips() {
+    // The Starlark program carries the indentation opcodes
+    // (`IndentMeasure`, `IndentCmp`, `ArgPush`, and `RuleEnter` with a
+    // non-zero argc); the sample drives an indented suite so they all
+    // execute on both sides of the round-trip.
+    assert_grammar(
+        "starlark",
+        include_str!("../grammars/starlark.peg"),
+        b"def f(n):\n    if n:\n        return n\n    else:\n        return 0\n",
+    );
+}
+
+#[test]
+fn yaml_roundtrips() {
+    assert_grammar(
+        "yaml",
+        include_str!("../grammars/yaml.peg"),
+        b"root:\n  child: value\n  list:\n    - a\n    - b\n",
+    );
+}
+
+#[test]
 fn labeled_catch_program_round_trips() {
     // Exercises `RecoverScopeBegin(LabelId)` plus the label-name
     // table. Input drives the catch through both success and recovery

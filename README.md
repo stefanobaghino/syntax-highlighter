@@ -66,18 +66,22 @@ override).
 
 ## Status
 
-Early MVP; expect breaking changes. Eight grammars ship today, plus
-an ANSI-coloring CLI. The "kilobyte range per grammar" design goal
-holds across the shipped set: as a representative data point, the
-largest grammar (SQLite) compiles to roughly 5,600 instructions
-across 426 rules — comfortably within the kilobyte-per-grammar target.
+Early MVP; expect breaking changes. Ten grammars ship today — eight
+free-form, plus deliberately-pruned Starlark and YAML subsets that
+validate the implicit indentation operators (issue #43; see
+[`src/pegc/README.md`](src/pegc/README.md)) — plus an ANSI-coloring CLI.
+The "kilobyte range per grammar" design goal holds across the shipped
+set: as a representative data point, the largest grammar (SQLite)
+compiles to roughly 5,600 instructions across 426 rules — comfortably
+within the kilobyte-per-grammar target.
 
 For current per-grammar numbers, run `cargo run --bin pegc -- stats grammars/<lang>.peg`; see [`TOOLS.md`](TOOLS.md) for the developer tools' full contract.
 
 The CLI picks a grammar by file extension (`.json`, `.toml`, `.sql`,
-`.rs`, `.js`/`.mjs`/`.cjs`, `.go`, `.c`/`.h`, `.css`) or an explicit
-`-l json|toml|sql|rust|js|go|c|css` flag; stdin without a flag
-defaults to JSON.
+`.rs`, `.js`/`.mjs`/`.cjs`, `.go`, `.c`/`.h`, `.css`, `.star`/`.bzl`,
+`.yaml`/`.yml`) or an explicit
+`-l json|toml|sql|rust|js|go|c|css|starlark|yaml` flag; stdin without a
+flag defaults to JSON.
 
 Malformed or incomplete inputs render the longest valid prefix styled and
 the rest plain (see `src/pegvm/vm.rs` for the farthest-failure tracking).

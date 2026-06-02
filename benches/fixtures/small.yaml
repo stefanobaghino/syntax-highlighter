@@ -1,0 +1,29 @@
+--- # sample document
+name: example-service
+version: 1.4.2
+enabled: true
+metadata:
+  owner: platform
+  labels:
+    tier: backend
+    region: us-east-1
+  annotations:
+    note: "a quoted value"
+replicas: 3
+ports:
+  - 8080
+  - 8443
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+args: [serve, --verbose, --port=8080]
+labels: {app: web, env: prod}
+nested:
+  - first
+  - second
+  - third
+...

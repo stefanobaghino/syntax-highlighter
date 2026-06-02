@@ -1,0 +1,73 @@
+# YAML, a deliberately-pruned subset; out-of-subset gaps tracked in #165.
+# Line-structure rules are `atomic` so the horizontal-only auto-`ignore`
+# can't eat a line's indentation before a `%align` / `%indent` operator
+# measures it.
+
+yaml = stream {
+
+    ignore = \h*
+
+    blanks: atomic = (\h* comment? \R)*
+    line_break: atomic = \h* comment? \R blanks
+    comment: atomic = @comment ('#' .. \R)
+    wsnl: atomic = (\s / comment)*
+
+    stream: atomic =
+        blanks
+        document?
+        blanks
+
+    document: atomic =
+        (doc_start blanks)?
+        (%root node)?
+        blanks
+        doc_end?
+
+    doc_start: atomic = @punctuation '---'
+    doc_end: atomic = @punctuation '...'
+
+    node = mapping / sequence / scalar
+
+    mapping: atomic =
+        entry
+        (align entry)*
+
+    align: atomic = line_break %align
+
+    entry = @property key @punctuation ':' value?
+
+    sequence: atomic =
+        seq_item
+        (align seq_item)*
+
+    seq_item = @punctuation '-' value?
+
+    value = flow_seq / flow_map / quoted / plain / block
+
+    block: atomic =
+        line_break
+        %indent (mapping / sequence)
+
+    scalar = flow_seq / flow_map / quoted / plain
+    quoted = @string (double / single)
+    double: atomic = '"' ('\\' . / [^"\\\n])* '"'
+    single: atomic = "'" ([^'\n] / "''")* "'"
+
+    plain: atomic = @string (!indicator (!\R !comment_start .)+)
+    indicator: atomic = [\-?:,\[\]{}#&*!|>'"%@`] / \R
+    comment_start: atomic = \h '#'
+
+    key: atomic = [A-Za-z0-9_/.\-]+
+
+    flow_seq: atomic =
+        @punctuation '[' wsnl (flow_node (wsnl @punctuation ',' wsnl flow_node)* (wsnl @punctuation ',')?)? wsnl @punctuation ']'
+
+    flow_map: atomic =
+        @punctuation '{' wsnl (flow_pair (wsnl @punctuation ',' wsnl flow_pair)* (wsnl @punctuation ',')?)? wsnl @punctuation '}'
+
+    flow_pair = @property flow_key wsnl @punctuation ':' wsnl flow_node
+    flow_key: atomic = [A-Za-z0-9_/.\-]+
+
+    flow_node = flow_seq / flow_map / quoted / @string flow_plain
+    flow_plain: atomic = (![,\[\]{}:] !\s .)+
+}

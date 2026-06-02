@@ -31,6 +31,8 @@ const JS_GRAMMAR: &str = include_str!("../grammars/javascript.peg");
 const GO_GRAMMAR: &str = include_str!("../grammars/go.peg");
 const C_GRAMMAR: &str = include_str!("../grammars/c.peg");
 const CSS_GRAMMAR: &str = include_str!("../grammars/css.peg");
+const STARLARK_GRAMMAR: &str = include_str!("../grammars/starlark.peg");
+const YAML_GRAMMAR: &str = include_str!("../grammars/yaml.peg");
 
 const JSON_SMALL: &str = include_str!("fixtures/small.json");
 const JSON_MEDIUM: &str = include_str!("fixtures/medium.json");
@@ -71,6 +73,16 @@ const CSS_SMALL: &str = include_str!("fixtures/small.css");
 const CSS_MEDIUM: &str = include_str!("fixtures/medium.css");
 const CSS_LARGE: &str = include_str!("fixtures/large.css");
 const CSS_XLARGE: &str = include_str!("fixtures/xlarge.css");
+
+const STAR_SMALL: &str = include_str!("fixtures/small.star");
+const STAR_MEDIUM: &str = include_str!("fixtures/medium.star");
+const STAR_LARGE: &str = include_str!("fixtures/large.star");
+const STAR_XLARGE: &str = include_str!("fixtures/xlarge.star");
+
+const YAML_SMALL: &str = include_str!("fixtures/small.yaml");
+const YAML_MEDIUM: &str = include_str!("fixtures/medium.yaml");
+const YAML_LARGE: &str = include_str!("fixtures/large.yaml");
+const YAML_XLARGE: &str = include_str!("fixtures/xlarge.yaml");
 
 const RUNS_PER_CELL: usize = 11;
 
@@ -350,6 +362,26 @@ fn main() {
                 ("medium", CSS_MEDIUM),
                 ("large", CSS_LARGE),
                 ("xlarge", CSS_XLARGE),
+            ],
+        },
+        GrammarCase {
+            label: "starlark",
+            source: STARLARK_GRAMMAR,
+            fixtures: &[
+                ("small", STAR_SMALL),
+                ("medium", STAR_MEDIUM),
+                ("large", STAR_LARGE),
+                ("xlarge", STAR_XLARGE),
+            ],
+        },
+        GrammarCase {
+            label: "yaml",
+            source: YAML_GRAMMAR,
+            fixtures: &[
+                ("small", YAML_SMALL),
+                ("medium", YAML_MEDIUM),
+                ("large", YAML_LARGE),
+                ("xlarge", YAML_XLARGE),
             ],
         },
     ];

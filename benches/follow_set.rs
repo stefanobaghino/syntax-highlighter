@@ -30,6 +30,8 @@ const JS_GRAMMAR: &str = include_str!("../grammars/javascript.peg");
 const GO_GRAMMAR: &str = include_str!("../grammars/go.peg");
 const C_GRAMMAR: &str = include_str!("../grammars/c.peg");
 const CSS_GRAMMAR: &str = include_str!("../grammars/css.peg");
+const STARLARK_GRAMMAR: &str = include_str!("../grammars/starlark.peg");
+const YAML_GRAMMAR: &str = include_str!("../grammars/yaml.peg");
 
 const RUNS_PER_CELL: usize = 11;
 
@@ -90,6 +92,14 @@ fn main() {
         GrammarCase {
             name: "css",
             grammar: parse_case("css", CSS_GRAMMAR),
+        },
+        GrammarCase {
+            name: "starlark",
+            grammar: parse_case("starlark", STARLARK_GRAMMAR),
+        },
+        GrammarCase {
+            name: "yaml",
+            grammar: parse_case("yaml", YAML_GRAMMAR),
         },
     ];
 

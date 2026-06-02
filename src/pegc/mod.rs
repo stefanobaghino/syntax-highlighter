@@ -28,6 +28,7 @@
 
 pub mod analysis;
 pub mod compiler;
+pub mod desugar_indent;
 pub mod parser;
 pub mod pattern;
 pub mod unicode_properties;
@@ -35,7 +36,7 @@ pub mod unicode_properties;
 pub use analysis::{tally_non_terminal_refs, LintFinding, LintKind};
 pub use compiler::{compile_pattern, CompileError};
 pub use parser::{parse, Grammar, ParseError, RuleHeader};
-pub use pattern::{Pattern, Span};
+pub use pattern::{IndentArg, IndentOp, IndentOpKind, Pattern, Span};
 
 use crate::pegvm::Program;
 

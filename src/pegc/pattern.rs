@@ -34,6 +34,51 @@ impl std::fmt::Display for Span {
     }
 }
 
+/// One integer argument to a parameterized rule call or an indent
+/// combinator: either a literal column or a reference to an in-scope
+/// local (a rule parameter or an `as`-bound indent width). Lowered to a
+/// concrete [`crate::pegvm::ArgSrc`] by the compiler, which resolves
+/// `Local` names to activation-slot indices.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IndentArg {
+    /// A literal column — the `0` in `block(0)`.
+    Lit(i32),
+    /// A reference to an in-scope local by name (`outer`, `i`).
+    Local(String),
+}
+
+/// The relation a declarative indent combinator asserts between the
+/// indentation it measures at the current line and its argument column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndentOp {
+    /// `deeper(n)` — measured strictly greater than `n`.
+    Deeper,
+    /// `same(n)` — measured exactly equal to `n`.
+    Same,
+    /// `at_least(n)` — measured greater than or equal to `n`.
+    AtLeast,
+}
+
+/// Surface-level indentation operator — the `%root` / `%align` / `%indent`
+/// the grammar author writes. A transient kind: the parser produces a
+/// [`Pattern::IndentOp`] carrying one of these, and `desugar_indent`
+/// rewrites the whole thing into the lower-level [`IndentCombinator`] +
+/// parameterized [`Pattern::NonTerminal`] threading before any other pass
+/// runs. It never reaches analysis, lowering, or the VM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndentOpKind {
+    /// `%root X` — seed a fresh anchor at the line's own column and run
+    /// `X` under it. Desugars to `at_least(0) as <anchor>` over `X`.
+    Root,
+    /// `%align` — assert the current line starts at the ambient anchor
+    /// column. Standalone (no operand). Desugars to `same(<anchor>)`.
+    Align,
+    /// `%indent X` — open a level strictly deeper than the ambient anchor,
+    /// rebind the anchor to it, and run `X`. Desugars to
+    /// `deeper(<anchor>) as <inner>` over `X`.
+    Indent,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pattern {
     Literal {
@@ -79,6 +124,14 @@ pub enum Pattern {
     },
     NonTerminal {
         name: String,
+        /// Indentation arguments for a parameterized call (`suite(i)`,
+        /// `block(0)`). Empty for an ordinary reference — every call in
+        /// every grammar that predates the indentation surface. A
+        /// parameterized call is still fundamentally a rule reference, so
+        /// the analyses treat it like any other `NonTerminal`; only the
+        /// compiler reads `args` (to emit the `ArgPush` run before the
+        /// `Call`).
+        args: Vec<IndentArg>,
         span: Span,
     },
     Capture {
@@ -134,6 +187,37 @@ pub enum Pattern {
         label: String,
         span: Span,
     },
+    /// A declarative indentation combinator — `deeper(outer) as i`,
+    /// `same(i)`, `at_least(n) as i`. Measures the indentation run at the
+    /// current line (which must be a line start; the grammar places these
+    /// right after a newline), asserts [`IndentOp`] against `arg`, and
+    /// optionally binds the measured width to `bind` so later `same(bind)`
+    /// lines in the same suite can re-check alignment.
+    ///
+    /// The compiler lowers it to `IndentMeasure` + `IndentCmp` over the
+    /// current activation's local slots (see `src/pegvm/instruction.rs`).
+    /// It is **non-nullable and consuming** (it eats the leading
+    /// `[ \t]*`) and contributes **no FIRST/FOLLOW non-terminal**, so the
+    /// static analyses treat it as an opaque consuming leaf.
+    IndentCombinator {
+        op: IndentOp,
+        arg: IndentArg,
+        bind: Option<String>,
+        span: Span,
+    },
+    /// Transient surface indentation operator — `%root X`, `%align`,
+    /// `%indent X`. The parser emits this; `desugar_indent` (run first in
+    /// `Grammar::compile`) rewrites it into [`IndentCombinator`] plus the
+    /// implicit anchor parameter threaded through [`Pattern::NonTerminal`]
+    /// `args`. `%align` carries no operand; `%root` / `%indent` carry
+    /// exactly one. Because desugaring happens before every other pass,
+    /// all downstream `Pattern` matches treat this variant as
+    /// `unreachable!`.
+    IndentOp {
+        kind: IndentOpKind,
+        operand: Option<Box<Pattern>>,
+        span: Span,
+    },
 }
 
 impl Pattern {
@@ -155,7 +239,9 @@ impl Pattern {
             | Pattern::Capture { span, .. }
             | Pattern::Catch { span, .. }
             | Pattern::Lenient { span, .. }
-            | Pattern::InferBoundaryCatch { span, .. } => *span,
+            | Pattern::InferBoundaryCatch { span, .. }
+            | Pattern::IndentCombinator { span, .. }
+            | Pattern::IndentOp { span, .. } => *span,
         }
     }
 
@@ -253,6 +339,7 @@ impl Pattern {
     pub fn nt(name: impl Into<String>) -> Pattern {
         Pattern::NonTerminal {
             name: name.into(),
+            args: Vec::new(),
             span: Span::SYNTHETIC,
         }
     }
@@ -330,8 +417,9 @@ impl Pattern {
                 inner: Box::new(inner.strip_spans()),
                 span: Span::SYNTHETIC,
             },
-            Pattern::NonTerminal { name, .. } => Pattern::NonTerminal {
+            Pattern::NonTerminal { name, args, .. } => Pattern::NonTerminal {
                 name: name.clone(),
+                args: args.clone(),
                 span: Span::SYNTHETIC,
             },
             Pattern::Capture { kind, inner, .. } => Pattern::Capture {
@@ -357,6 +445,17 @@ impl Pattern {
             Pattern::InferBoundaryCatch { inner, label, .. } => Pattern::InferBoundaryCatch {
                 inner: Box::new(inner.strip_spans()),
                 label: label.clone(),
+                span: Span::SYNTHETIC,
+            },
+            Pattern::IndentCombinator { op, arg, bind, .. } => Pattern::IndentCombinator {
+                op: *op,
+                arg: arg.clone(),
+                bind: bind.clone(),
+                span: Span::SYNTHETIC,
+            },
+            Pattern::IndentOp { kind, operand, .. } => Pattern::IndentOp {
+                kind: *kind,
+                operand: operand.as_ref().map(|p| Box::new(p.strip_spans())),
                 span: Span::SYNTHETIC,
             },
         }

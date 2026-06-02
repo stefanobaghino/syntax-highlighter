@@ -527,8 +527,8 @@ fn lr_expr_program() -> Vec<Instruction> {
         // 0: bootstrap
         Instruction::Call(Label(2)),
         Instruction::End,
-        // 2: RuleEnter (return_addr = 14)
-        Instruction::RuleEnter(MemoId(0), RuleKind::Lr, Label(14)),
+        // 2: RuleEnter (return_addr = 14, argc = 0)
+        Instruction::RuleEnter(MemoId(0), RuleKind::Lr, Label(14), 0),
         // 3 (body_start): Choice → 11 (second alternative)
         Instruction::Choice(Label(10)),
         // 4: Call(expr)  -- recursive

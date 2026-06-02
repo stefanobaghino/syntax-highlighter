@@ -51,7 +51,7 @@
 use std::collections::HashMap;
 
 use super::instruction::MemoId;
-use super::vm::MemoEntry;
+use super::vm::{ArgKey, MemoEntry};
 
 /// A description of a single edit to the parser's input. The replacement
 /// content itself is not stored — the cache only needs the byte offsets.
@@ -119,7 +119,7 @@ impl Edit {
 /// next run, and reclaim the post-run table via `VM::into_cache`.
 #[derive(Debug, Default, Clone)]
 pub struct MemoCache {
-    table: HashMap<(MemoId, usize), MemoEntry>,
+    table: HashMap<(MemoId, usize, ArgKey), MemoEntry>,
 }
 
 impl MemoCache {
@@ -145,17 +145,19 @@ impl MemoCache {
         }
         let delta = edit.delta();
         let mut next = HashMap::with_capacity(self.table.len());
-        for ((memo_id, start_sp), mut entry) in self.table.drain() {
+        for ((memo_id, start_sp, arg_key), mut entry) in self.table.drain() {
             if invalidates(edit, start_sp, &entry) {
                 continue;
             }
             if start_sp >= edit.old_end {
                 let new_start_sp = start_sp.wrapping_add_signed(delta);
                 shift_entry(&mut entry, delta);
-                next.insert((memo_id, new_start_sp), entry);
+                next.insert((memo_id, new_start_sp, arg_key), entry);
             } else {
                 // Entry lives entirely before the edit; keep unshifted.
-                next.insert((memo_id, start_sp), entry);
+                // The arg key is an indentation context, not a position,
+                // so it rides along untouched.
+                next.insert((memo_id, start_sp, arg_key), entry);
             }
         }
         self.table = next;
@@ -165,7 +167,7 @@ impl MemoCache {
     /// hook for `VM::new_with_cache` (next commit) to seed its memo
     /// directly without an extra copy.
     #[allow(dead_code)] // consumed by the VM wiring in the next commit
-    pub(crate) fn take(&mut self) -> HashMap<(MemoId, usize), MemoEntry> {
+    pub(crate) fn take(&mut self) -> HashMap<(MemoId, usize, ArgKey), MemoEntry> {
         std::mem::take(&mut self.table)
     }
 
@@ -173,15 +175,18 @@ impl MemoCache {
     /// `VM::into_cache` (next commit) to return a populated cache after
     /// a run.
     #[allow(dead_code)] // consumed by the VM wiring in the next commit
-    pub(crate) fn install(&mut self, table: HashMap<(MemoId, usize), MemoEntry>) {
+    pub(crate) fn install(&mut self, table: HashMap<(MemoId, usize, ArgKey), MemoEntry>) {
         self.table = table;
     }
 
     /// Package-internal read access for tests to assert on per-entry
-    /// structure without leaking `MemoEntry`.
+    /// structure without leaking `MemoEntry`. Probes the zero-arg slot
+    /// ([`ArgKey::None`]) — the only shape the invalidation/shift unit
+    /// tests build; arg-keyed end-to-end invalidation is covered by the
+    /// grammar integration tests.
     #[cfg(test)]
     pub(crate) fn get(&self, memo_id: MemoId, start_sp: usize) -> Option<&MemoEntry> {
-        self.table.get(&(memo_id, start_sp))
+        self.table.get(&(memo_id, start_sp, ArgKey::None))
     }
 }
 
@@ -239,8 +244,10 @@ mod tests {
     fn populate(pairs: Vec<((MemoId, usize), MemoEntry)>) -> MemoCache {
         let mut cache = MemoCache::new();
         let mut table = HashMap::new();
-        for (k, v) in pairs {
-            table.insert(k, v);
+        for ((memo_id, start_sp), v) in pairs {
+            // The invalidation/shift logic is independent of the arg key,
+            // so these fixtures all use the zero-arg slot.
+            table.insert((memo_id, start_sp, ArgKey::None), v);
         }
         cache.install(table);
         cache
