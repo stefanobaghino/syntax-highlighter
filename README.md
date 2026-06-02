@@ -59,6 +59,8 @@ cargo run --bin demo -- crates/compiler/benches/fixtures/medium.c
 cargo run --bin demo -- crates/compiler/benches/fixtures/medium.js
 cargo run --bin demo -- crates/compiler/benches/fixtures/medium.go
 cargo run --bin demo -- crates/compiler/benches/fixtures/medium.rs
+cargo run --bin demo -- crates/compiler/benches/fixtures/medium.star
+cargo run --bin demo -- crates/compiler/benches/fixtures/medium.yaml
 ```
 
 Stdin is also accepted (defaults to JSON; pass `-l <lang>` to
