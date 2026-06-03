@@ -1,6 +1,6 @@
 ---
 name: grammar-refactor
-description: Audit the shipped grammars (`grammars/*.peg`) for inlining and dead-code cleanup opportunities, in the spirit of PRs #123 and #136. Surfaces and classifies candidates — thin aliases, single-use rules, name-longer-than-body rules, character-class re-aliases, duplicate-body rules — without applying changes, because the keep-or-inline call is judgment-heavy. Invoke explicitly.
+description: Audit the shipped grammars (`grammars/*.peg`) for inlining, dead-code, and comment/frontmatter cleanup opportunities, in the spirit of PRs #123, #136, and #162. Surfaces and classifies inlining candidates — thin aliases, single-use rules, name-longer-than-body rules, character-class re-aliases, duplicate-body rules — and flags over-commented grammars (self-explanatory frontmatter, section headers, what-describing comments), without applying changes, because the keep-or-inline call is judgment-heavy. Invoke explicitly.
 ---
 
 # grammar-refactor
@@ -20,6 +20,17 @@ Each candidate falls into one of four categories. The first two are mechanical, 
 2. **Duplicate-body rules (mechanical).** Two atomic rules with byte-identical bodies under different names — e.g. a grammar carrying both `ident_cont: atomic = [a-zA-Z\d_]` and a separate `ident_char: atomic = [a-zA-Z\d_]` boundary class. Merge to one name unless the dual naming documents a future divergence.
 3. **Refs=1 single-use rules (judgment).** Many rules are referenced once. Most are NOT inline candidates — they exist to name a multi-line cascade entry, an alternation, or a spec-significant phrase. Only inline when the body is a single `name+` / `name*` / `name` / `[...]` / literal — i.e. a textbook thin wrapper.
 4. **Name ≥ body (judgment).** When the rule name is at least as long as the body string, the indirection isn't paying its way. Same evaluation as refs=1: only inline trivial wrappers.
+
+## Comment and frontmatter cleanup
+
+A second, independent axis — the prose, not the rules. Grammars accrue comments that restate what the source already says; strip them. The reader knows PEG and the target language, so a comment earns its place only by recording something the grammar can't express. This needs no stats: read the file, cut, then prove no rule body moved (diff the non-comment lines against `HEAD`) and run `cargo test`.
+
+- **Frontmatter.** Drop anything self-explanatory — that it's a grammar, that it's for language X, that it highlights syntax. Keep only genuine quirks (a constraint that silently breaks the grammar if violated, e.g. the `atomic` requirement on indentation line-structure rules) and TODOs. Dropping the frontmatter entirely is a fine outcome. Out-of-subset gap lists belong in the per-grammar "close documented subset gaps" tracking issue (#31–#34, #164, #165), not duplicated in the header.
+- **No language lessons.** Don't teach the target language or the engine. A comment explaining how `%`-reserved-word boundary matching works, or why a keyword can't fire on a longer identifier, is engine behavior documented centrally — cut it.
+- **No section headers.** Drop `# ---- external declarations ----`-style dividers; the rule names already group the file, and self-explanatory dividers are the worst offenders.
+- **No "what" descriptions.** Don't restate what a rule matches — `# Type-specifier + declarator + block.`, `# Declarations end in ';' ...` — the body says it. A comment survives only if it records a non-obvious *why*: a hidden constraint, a workaround, a footgun that bites on edit.
+
+PR #162 trimmed `grammars/starlark.peg` (160→122 lines) and `grammars/yaml.peg` (106→74) to this bar, keeping one quirk per file (the `atomic` line-structure requirement).
 
 ## Workflow
 
