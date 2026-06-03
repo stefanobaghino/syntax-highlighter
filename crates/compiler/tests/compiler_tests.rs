@@ -1661,11 +1661,14 @@ fn lint_partial_match_validated_by_disjoint_consumer() {
 }
 
 #[test]
-fn lint_partial_match_absorbed_by_outer_catch_flagged() {
+fn lint_partial_match_clean_resync_catch_discharged() {
     // root = (a)*^[;]
     // a = 'x' 'y'?
-    // a's leniency at the call site is absorbed by the *^ recovery
-    // wrapper — exactly the PR #101 shape.
+    // a's leniency is absorbed by a *clean-resync* catch: the recovery
+    // skips to the `;` sync token, so a leak surfaces as a visible
+    // recovery span at the statement boundary rather than silent loss.
+    // Leg 2 (clean-resync dominator) discharges it — `a` is the whole
+    // iteration body, nothing meaningful sits between it and `;`.
     let mut rules = HashMap::new();
     let recovery_body = Pattern::repeat(Pattern::seq(vec![
         Pattern::not_predicate(Pattern::literal(";")),
@@ -1686,8 +1689,85 @@ fn lint_partial_match_absorbed_by_outer_catch_flagged() {
         ]),
     );
     let g = Grammar::new(rules);
+    assert!(
+        lint_partial_match(&g).is_empty(),
+        "clean-resync sync-set catch should discharge the leniency"
+    );
+}
+
+#[test]
+fn lint_partial_match_bare_skip_catch_flagged() {
+    // root = (a)*^
+    // a = 'x' 'y'?
+    // Same shape but the recovery is the bare byte-by-byte skip (`.`) of a
+    // plain `*^`: a leak is absorbed one byte at a time — exactly the PR
+    // #101 footgun (the partial match silently "succeeds"). Not a clean
+    // resync, so the call still flags.
+    let mut rules = HashMap::new();
+    let call_inside_catch = Pattern::repeat(Pattern::Catch {
+        inner: Box::new(Pattern::nt("a")),
+        label: "recovery".into(),
+        recovery: Box::new(Pattern::capture("recovery", Pattern::any_char())),
+        span: Span::SYNTHETIC,
+    });
+    rules.insert("root".into(), call_inside_catch);
+    rules.insert(
+        "a".into(),
+        Pattern::seq(vec![
+            Pattern::literal("x"),
+            Pattern::optional(Pattern::literal("y")),
+        ]),
+    );
+    let g = Grammar::new(rules);
     let findings = lint_partial_match(&g);
     assert_eq!(findings, vec![finding("a", "root")]);
+}
+
+#[test]
+fn lint_partial_match_clean_resync_nested_constituent_flagged() {
+    // root = (item)*^[;]
+    // item = c (',' c)*
+    // c    = 'x' 'y'?
+    // `c` sits *inside* `item`, with a meaningful `(',' c)*` tail before
+    // the `;` boundary — the minimized `aliased_expr` shape. A leak in `c`
+    // would let the sync-set swallow the remaining `, c` constituents, so
+    // the clean catch is too coarse here: leg 2 must keep `c` flagged
+    // (the fix is a constituent-level boundary, like sqlite's
+    // `^^bad_column`), even though the statement-level `item` discharges.
+    let mut rules = HashMap::new();
+    let catch = Pattern::repeat(Pattern::Catch {
+        inner: Box::new(Pattern::nt("item")),
+        label: "recovery".into(),
+        recovery: Box::new(Pattern::seq(vec![
+            Pattern::repeat(Pattern::seq(vec![
+                Pattern::not_predicate(Pattern::literal(";")),
+                Pattern::any_char(),
+            ])),
+            Pattern::literal(";"),
+        ])),
+        span: Span::SYNTHETIC,
+    });
+    rules.insert("root".into(), catch);
+    rules.insert(
+        "item".into(),
+        Pattern::seq(vec![
+            Pattern::nt("c"),
+            Pattern::repeat(Pattern::seq(vec![Pattern::literal(","), Pattern::nt("c")])),
+        ]),
+    );
+    rules.insert(
+        "c".into(),
+        Pattern::seq(vec![
+            Pattern::literal("x"),
+            Pattern::optional(Pattern::literal("y")),
+        ]),
+    );
+    let g = Grammar::new(rules);
+    let findings = lint_partial_match(&g);
+    assert!(
+        findings.iter().any(|f| f.rule == "c" && f.caller == "item"),
+        "nested constituent with a meaningful tail must stay flagged: {findings:?}"
+    );
 }
 
 #[test]
@@ -1771,9 +1851,10 @@ fn partial_must_precede_main_ascription() {
 
 #[test]
 fn definition_lenient_suppresses_lint_at_every_call_site() {
-    // Use the Catch-absorbed shape the lint reliably flags: a
-    // top-level `*^[;]` recovery loop calling a trailing-Optional rule.
-    let unmarked = parse("root = (r)*^[;] {\nr = 'x' 'y'?\n}").expect("parse unmarked");
+    // Use the shape the lint reliably flags: a top-level bare `*^`
+    // (byte-by-byte recovery) loop calling a trailing-Optional rule. The
+    // bare skip is not a clean resync, so leg 2 leaves it flagged.
+    let unmarked = parse("root = (r)*^ {\nr = 'x' 'y'?\n}").expect("parse unmarked");
     assert!(
         lint_partial_match(&unmarked)
             .iter()
@@ -1781,7 +1862,7 @@ fn definition_lenient_suppresses_lint_at_every_call_site() {
         "baseline: unmarked grammar should flag r"
     );
 
-    let marked = parse("root = (r)*^[;] {\nr: partial = 'x' 'y'?\n}").expect("parse marked");
+    let marked = parse("root = (r)*^ {\nr: partial = 'x' 'y'?\n}").expect("parse marked");
     let findings = lint_partial_match(&marked);
     assert!(
         !findings.iter().any(|f| f.rule == "r"),
@@ -1809,8 +1890,9 @@ fn definition_lenient_marker_is_runtime_transparent() {
 
 #[test]
 fn compile_errors_on_partial_match_leniency() {
-    // `*^[;]` Catch-absorbed shape — the lint reliably flags this.
-    let g = parse("root = (r)*^[;] {\nr = 'x' 'y'?\n}").expect("parse");
+    // Bare `*^` byte-by-byte recovery shape — the lint reliably flags
+    // this (no clean resync, so leg 2 does not discharge it).
+    let g = parse("root = (r)*^ {\nr = 'x' 'y'?\n}").expect("parse");
     let err = g.compile().expect_err("compile should fail");
     match err {
         syntax_highlighter_compiler::pegc::CompileError::PartialMatchLeniency(findings) => {
@@ -1825,7 +1907,7 @@ fn compile_errors_on_partial_match_leniency() {
 
 #[test]
 fn compile_succeeds_with_definition_lenient_on_flagged_rule() {
-    let g = parse("root = (r)*^[;] {\nr: partial = 'x' 'y'?\n}").expect("parse");
+    let g = parse("root = (r)*^ {\nr: partial = 'x' 'y'?\n}").expect("parse");
     g.compile()
         .expect("compile should succeed with definition-level `r: partial`");
 }
@@ -1880,7 +1962,7 @@ fn bracketed_close_catch_runs_recovery_path() {
 
 #[test]
 fn compile_error_display_lists_findings() {
-    let g = parse("root = (r)*^[;] {\nr = 'x' 'y'?\n}").expect("parse");
+    let g = parse("root = (r)*^ {\nr = 'x' 'y'?\n}").expect("parse");
     let err = g.compile().expect_err("compile should fail");
     let msg = format!("{err}");
     assert!(msg.contains("partial-match leniency"));
@@ -2008,11 +2090,11 @@ fn all_shipped_grammars_compile_clean() {
 
 #[test]
 fn partial_match_leniency_carries_call_site_span_in_display() {
-    // `(r)*^[;]` is the catch-absorbed shape that reliably flags — the
-    // `r` reference at line 1, col 9 is the call site the lint
-    // surfaces. The rendered Display must include `{line}:{col}` so
+    // Bare `(r)*^` is the byte-by-byte recovery shape that reliably
+    // flags — the `r` reference at line 1, col 9 is the call site the
+    // lint surfaces. The rendered Display must include `{line}:{col}` so
     // grammar authors can jump to the unanchored call directly.
-    let src = "root = (r)*^[;] {\nr = 'x' 'y'?\n}";
+    let src = "root = (r)*^ {\nr = 'x' 'y'?\n}";
     let g = parse(src).expect("parses");
     let err = g.compile().expect_err("partial-match leniency expected");
     let rendered = format!("{err}");
@@ -2028,7 +2110,7 @@ fn partial_match_leniency_finding_carries_call_site_span() {
     // the Display impl is a thin formatting layer over it. Pin the
     // structured field directly so callers (e.g. editor diagnostics)
     // get the same position the rendered text reports.
-    let src = "root = (r)*^[;] {\nr = 'x' 'y'?\n}";
+    let src = "root = (r)*^ {\nr = 'x' 'y'?\n}";
     let g = parse(src).expect("parses");
     let findings = lint_partial_match(&g);
     let f = findings

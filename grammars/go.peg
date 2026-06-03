@@ -158,8 +158,8 @@ go = package_clause import_decl* (top_decl)*^ {
         empty_stmt = @punctuation ';'
         labeled_stmt = @variable ident @punctuation ':' stmt
 
-        if_stmt: partial = kw_if (simple_stmt @punctuation ';')? expr_no_compound block
-                           (kw_else (if_stmt / block))? {
+        if_stmt = kw_if (simple_stmt @punctuation ';')? expr_no_compound block
+                  (kw_else (if_stmt / block))? {
             kw_if: reserved = @keyword 'if'
             kw_else: reserved = @keyword 'else'
         }
@@ -218,15 +218,15 @@ go = package_clause import_decl* (top_decl)*^ {
             kw_defer: reserved = @keyword 'defer'
         }
 
-        return_stmt: partial = kw_return expr_list? {
+        return_stmt = kw_return expr_list? {
             kw_return: reserved = @keyword 'return'
         }
 
-        break_stmt: partial = kw_break (@variable ident)? {
+        break_stmt = kw_break (@variable ident)? {
             kw_break: reserved = @keyword 'break'
         }
 
-        continue_stmt: partial = kw_continue (@variable ident)? {
+        continue_stmt = kw_continue (@variable ident)? {
             kw_continue: reserved = @keyword 'continue'
         }
 

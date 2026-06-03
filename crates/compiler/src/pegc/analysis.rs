@@ -593,6 +593,7 @@ pub struct LintFinding {
 /// Findings are returned sorted by `(rule, caller)`.
 pub fn lint_partial_match(grammar: &Grammar) -> Vec<LintFinding> {
     let nullable = compute_nullable(&grammar.rules);
+    let first = compute_first(grammar);
 
     let trailing: HashMap<String, FollowSet> = grammar
         .rules
@@ -606,12 +607,20 @@ pub fn lint_partial_match(grammar: &Grammar) -> Vec<LintFinding> {
     let ctx = LintCtx {
         grammar,
         nullable: &nullable,
+        first: &first,
         trailing: &trailing,
     };
     for caller in rule_names {
         let body = &grammar.rules[caller];
         let mut cont_stack: Vec<&[Pattern]> = Vec::new();
-        walk_for_call_sites(body, caller, &mut cont_stack, false, &ctx, &mut findings);
+        walk_for_call_sites(
+            body,
+            caller,
+            &mut cont_stack,
+            &Absorber::outside(),
+            &ctx,
+            &mut findings,
+        );
     }
 
     findings.sort();
@@ -623,7 +632,172 @@ pub fn lint_partial_match(grammar: &Grammar) -> Vec<LintFinding> {
 struct LintCtx<'a> {
     grammar: &'a Grammar,
     nullable: &'a HashSet<String>,
+    first: &'a HashMap<String, FollowSet>,
     trailing: &'a HashMap<String, FollowSet>,
+}
+
+/// State threaded through the outward leniency walk describing the
+/// recovery scope, if any, that encloses the current call site.
+///
+/// The base lint (PR #101) flags a leniency that is absorbed by *any*
+/// recovery `Catch`. Leg 2 (clean-resync dominator) refines this: a catch
+/// whose recovery body resyncs to a structural boundary (`*^[cs]`,
+/// `^^lbl B`, `^^block_close`) cleanly contains the leniency, provided
+/// nothing but separators sit between the lenient rule and that boundary.
+/// A bare `*^` (byte-by-byte skip) is *not* clean — it absorbs the PR #101
+/// bug itself — so it keeps flagging.
+///
+/// - `in_catch`: the call site is enclosed by some recovery catch.
+/// - `clean_boundary`: when the innermost enclosing catch resyncs cleanly,
+///   the FIRST bytes of its boundary token(s); `None` for a bare-byte catch
+///   (or no catch).
+/// - `crossed`: FIRST bytes of the tail elements walked past on the way
+///   from the call site out to that catch. A clean catch discharges the
+///   call iff every crossed byte is part of the boundary — i.e. only the
+///   construct's own separators lie between it and its terminator.
+#[derive(Clone)]
+struct Absorber {
+    in_catch: bool,
+    clean_boundary: Option<CharSet>,
+    crossed: CharSet,
+}
+
+impl Absorber {
+    /// Not (yet) inside any recovery catch.
+    fn outside() -> Self {
+        Absorber {
+            in_catch: false,
+            clean_boundary: None,
+            crossed: CharSet::empty(),
+        }
+    }
+
+    /// Enter the inner region of a recovery `Catch`. The innermost catch
+    /// is the first absorber, so the boundary is set to the entered catch's
+    /// cleanness. The crossed-tail accumulator is *kept*: when the outward
+    /// walk reaches this catch from a nested rule, those crossings are the
+    /// meaningful structure sitting between the lenient rule and the
+    /// boundary (e.g. `aliased_expr`'s `(',' result_column)*` before the
+    /// `*^[;]`), which a coarse resync would swallow — they must keep the
+    /// call flagged.
+    fn enter_catch(&self, recovery: &Pattern, ctx: &LintCtx<'_>) -> Self {
+        Absorber {
+            in_catch: true,
+            clean_boundary: recovery_boundary_bytes(recovery, ctx.nullable, ctx.first),
+            crossed: self.crossed.clone(),
+        }
+    }
+
+    /// Record FIRST bytes of a tail element walked past before reaching
+    /// the boundary.
+    fn cross(&mut self, bytes: &CharSet) {
+        self.crossed = self.crossed.union(bytes);
+    }
+
+    /// Does the leniency leak (i.e. should the call site flag)? It leaks
+    /// when absorbed by a catch that is either bare-byte (`clean_boundary`
+    /// is `None`) or clean but with meaningful content — a crossed tail
+    /// byte outside the boundary — between the rule and its terminator.
+    fn leaks(&self) -> bool {
+        if !self.in_catch {
+            return false;
+        }
+        match &self.clean_boundary {
+            None => true,
+            Some(boundary) => !charset_subset(&self.crossed, boundary),
+        }
+    }
+}
+
+/// `a ⊆ b` over character sets.
+fn charset_subset(a: &CharSet, b: &CharSet) -> bool {
+    a.union(b) == *b
+}
+
+/// FIRST bytes of the resync boundary embedded in a clean-resync recovery
+/// body — the `X` of the `(!X .)*` guarded-skip loop the desugarers
+/// synthesize for `*^[cs]`, `^^lbl B` and `^^block_close`, plus the
+/// trailing sync token of the `*^[cs]` form. Returns `None` for a
+/// bare-byte recovery (a lone `AnyChar`), which has no boundary.
+fn recovery_boundary_bytes(
+    recovery: &Pattern,
+    nullable: &HashSet<String>,
+    first: &HashMap<String, FollowSet>,
+) -> Option<CharSet> {
+    fn walk(
+        pat: &Pattern,
+        nullable: &HashSet<String>,
+        first: &HashMap<String, FollowSet>,
+        out: &mut CharSet,
+    ) -> bool {
+        match pat {
+            Pattern::Repeat { inner, .. } => {
+                if let Pattern::Sequence { items, .. } = &**inner {
+                    if let Some(Pattern::NotPredicate { inner: b, .. }) = items.first() {
+                        *out = out.union(&first_bytes(&pattern_first(b, nullable), first));
+                        return true;
+                    }
+                }
+                walk(inner, nullable, first, out)
+            }
+            Pattern::Sequence { items, .. } => {
+                let mut found = false;
+                for it in items {
+                    found |= walk(it, nullable, first, out);
+                    // The trailing sync token in `*^[cs]` (a CharClass after
+                    // the guarded-skip loop) is consumed on resync, so it is
+                    // part of the boundary too.
+                    if let Pattern::CharClass { set, .. } = it {
+                        *out = out.union(set);
+                    }
+                }
+                found
+            }
+            Pattern::Capture { inner, .. } => walk(inner, nullable, first, out),
+            _ => false,
+        }
+    }
+    let mut out = CharSet::empty();
+    walk(recovery, nullable, first, &mut out).then_some(out)
+}
+
+/// Lower a FOLLOW/FIRST set to the set of first bytes its elements can
+/// match, expanding rule references through `first` (one level of opaque
+/// `Rule` per visited name, cycle-guarded). Captures are transparent;
+/// `Eof` contributes nothing (it is not a byte).
+fn first_bytes(fs: &FollowSet, first: &HashMap<String, FollowSet>) -> CharSet {
+    fn elem(
+        e: &FollowElement,
+        first: &HashMap<String, FollowSet>,
+        visited: &mut HashSet<String>,
+        out: &mut CharSet,
+    ) {
+        match e {
+            FollowElement::Literal(bytes) => {
+                if let Some(&b) = bytes.first() {
+                    *out = out.union(&CharSet::singleton(b as char));
+                }
+            }
+            FollowElement::CharClass(cs) => *out = out.union(cs),
+            FollowElement::Capture { inner, .. } => elem(inner, first, visited, out),
+            FollowElement::Rule(name) => {
+                if visited.insert(name.clone()) {
+                    if let Some(rf) = first.get(name) {
+                        for e in rf {
+                            elem(e, first, visited, out);
+                        }
+                    }
+                }
+            }
+            FollowElement::Eof => {}
+        }
+    }
+    let mut out = CharSet::empty();
+    let mut visited = HashSet::new();
+    for e in fs {
+        elem(e, first, &mut visited, &mut out);
+    }
+    out
 }
 
 /// FIRST set of any trailing-Optional position in `pat`.
@@ -696,7 +870,7 @@ fn walk_for_call_sites<'a>(
     pat: &'a Pattern,
     caller: &str,
     continuations: &mut Vec<&'a [Pattern]>,
-    inside_catch: bool,
+    absorber: &Absorber,
     ctx: &LintCtx<'a>,
     findings: &mut Vec<LintFinding>,
 ) {
@@ -719,7 +893,7 @@ fn walk_for_call_sites<'a>(
                 t,
                 caller,
                 continuations,
-                inside_catch,
+                absorber.clone(),
                 ctx,
                 &mut HashSet::new(),
             ) {
@@ -735,48 +909,57 @@ fn walk_for_call_sites<'a>(
         Pattern::Sequence { items, .. } => {
             for i in 0..items.len() {
                 continuations.push(&items[i + 1..]);
-                walk_for_call_sites(
-                    &items[i],
-                    caller,
-                    continuations,
-                    inside_catch,
-                    ctx,
-                    findings,
-                );
+                walk_for_call_sites(&items[i], caller, continuations, absorber, ctx, findings);
                 continuations.pop();
             }
         }
         Pattern::OrderedChoice { alts, .. } => {
             for alt in alts {
-                walk_for_call_sites(alt, caller, continuations, inside_catch, ctx, findings);
+                walk_for_call_sites(alt, caller, continuations, absorber, ctx, findings);
             }
         }
         Pattern::Optional { inner, .. }
         | Pattern::Capture { inner, .. }
         | Pattern::Repeat { inner, .. }
         | Pattern::RepeatOne { inner, .. } => {
-            walk_for_call_sites(inner, caller, continuations, inside_catch, ctx, findings);
+            walk_for_call_sites(inner, caller, continuations, absorber, ctx, findings);
         }
         Pattern::NotPredicate { inner, .. } | Pattern::AndPredicate { inner, .. } => {
             let mut isolated: Vec<&[Pattern]> = Vec::new();
-            walk_for_call_sites(inner, caller, &mut isolated, inside_catch, ctx, findings);
+            walk_for_call_sites(inner, caller, &mut isolated, absorber, ctx, findings);
         }
         Pattern::Catch {
             inner, recovery, ..
         } => {
             // Inside the Catch's `inner`: leniency that leaks past `inner`
-            // is absorbed by `recovery` (the recovery body fires whenever
-            // the next outer-context matching step fails on the leftover).
-            walk_for_call_sites(inner, caller, continuations, true, ctx, findings);
+            // is absorbed by `recovery`. Leg 2 records whether that
+            // recovery resyncs cleanly (`enter_catch`); a clean resync to a
+            // structural boundary discharges the leniency, a bare-byte skip
+            // keeps flagging it.
+            walk_for_call_sites(
+                inner,
+                caller,
+                continuations,
+                &absorber.enter_catch(recovery, ctx),
+                ctx,
+                findings,
+            );
             let mut isolated: Vec<&[Pattern]> = Vec::new();
-            walk_for_call_sites(recovery, caller, &mut isolated, false, ctx, findings);
+            walk_for_call_sites(
+                recovery,
+                caller,
+                &mut isolated,
+                &Absorber::outside(),
+                ctx,
+                findings,
+            );
         }
         // `Lenient` at a rule's body root makes the rule's `trailing_first`
         // empty — so the rule never appears as a flag target. The walker
         // still descends transparently to find unrelated unguarded calls
         // the lenient rule's body may itself contain.
         Pattern::Lenient { inner, .. } => {
-            walk_for_call_sites(inner, caller, continuations, inside_catch, ctx, findings);
+            walk_for_call_sites(inner, caller, continuations, absorber, ctx, findings);
         }
         // The resolver runs before the lint, so the lint should
         // never see an unresolved boundary-anchored catch.
@@ -791,25 +974,30 @@ fn walk_for_call_sites<'a>(
 
 /// Returns `true` iff bytes that `target_trailing` could match can reach
 /// an unguarded position from the current continuation stack outward
-/// through call sites of `caller`. "Unguarded" means no `AndPredicate`
-/// anchor and no non-nullable consumer with a FIRST disjoint from
-/// `target_trailing` is encountered along the way.
+/// through call sites of `caller`. "Unguarded" means the leniency is
+/// neither validated (an `AndPredicate` anchor or a non-nullable consumer
+/// with a FIRST disjoint from `target_trailing`) nor cleanly absorbed by
+/// a clean-resync catch — see [`Absorber::leaks`].
 fn leniency_reaches_unguarded(
     target_trailing: &FollowSet,
     caller: &str,
     continuations: &[&[Pattern]],
-    inside_catch: bool,
+    mut absorber: Absorber,
     ctx: &LintCtx<'_>,
     visited_callers: &mut HashSet<String>,
 ) -> bool {
     for frame in continuations.iter().rev() {
-        match scan_frame_for_validator(frame, target_trailing, ctx.nullable) {
+        match scan_frame_for_validator(frame, target_trailing, &mut absorber, ctx) {
             FrameOutcome::Validated => {
-                // A non-Catch validator only saves the call site if we
-                // haven't already passed through a Catch absorber on the
-                // path — a Catch's recovery body would consume the
-                // leniency bytes before a downstream validator fires.
-                if inside_catch {
+                // A bare-byte catch absorber consumes the leniency bytes
+                // before a downstream validator can fire, so the validator
+                // does not save the call site — keep walking out (and it
+                // flags at the bare-`*^` root). A *clean*-resync catch is
+                // different: a validator that rejects the leftover is
+                // exactly what trips the catch's structural resync, so the
+                // leniency is contained. No catch at all: the validator
+                // discharges directly.
+                if absorber.in_catch && absorber.clean_boundary.is_none() {
                     continue;
                 }
                 return false;
@@ -823,13 +1011,13 @@ fn leniency_reaches_unguarded(
         // Caller cycle: returning `true` here would treat a recursive
         // self-call as a confirmed leak, but the same target_trailing
         // is already being evaluated at the outer frame. Defer the
-        // verdict to that frame by returning `inside_catch` (same
-        // sentinel the root-rule short-circuit below uses). If the
+        // verdict to that frame by returning the absorber's leak verdict
+        // (same sentinel the root-rule short-circuit below uses). If the
         // outer frame eventually concludes the leniency is contained,
         // the cycle is too; if it concludes the leniency leaks via
         // some non-cyclic caller, the iteration over other rules in
         // the outer frame will catch that.
-        return inside_catch;
+        return absorber.leaks();
     }
 
     let mut rule_names: Vec<&String> = ctx.grammar.rules.keys().collect();
@@ -837,7 +1025,7 @@ fn leniency_reaches_unguarded(
 
     if caller == ctx.grammar.root && !target_trailing.contains(&FollowElement::Eof) {
         visited_callers.remove(caller);
-        return inside_catch;
+        return absorber.leaks();
     }
 
     let mut found_call_site = false;
@@ -854,7 +1042,7 @@ fn leniency_reaches_unguarded(
             body,
             &probe,
             &mut new_continuations,
-            inside_catch,
+            &absorber,
             ctx,
             visited_callers,
             &mut local_findings,
@@ -867,7 +1055,7 @@ fn leniency_reaches_unguarded(
     visited_callers.remove(caller);
 
     if !found_call_site {
-        return inside_catch;
+        return absorber.leaks();
     }
 
     false
@@ -896,7 +1084,7 @@ fn find_callsite_unguarded<'a>(
     pat: &'a Pattern,
     probe: &CallsiteProbe<'a>,
     continuations: &mut Vec<&'a [Pattern]>,
-    inside_catch: bool,
+    absorber: &Absorber,
     ctx: &LintCtx<'a>,
     visited_callers: &mut HashSet<String>,
     found_callsite: &mut bool,
@@ -918,7 +1106,7 @@ fn find_callsite_unguarded<'a>(
                 probe.target_trailing,
                 probe.in_rule,
                 continuations,
-                inside_catch,
+                absorber.clone(),
                 ctx,
                 visited_callers,
             )
@@ -930,7 +1118,7 @@ fn find_callsite_unguarded<'a>(
                     &items[i],
                     probe,
                     continuations,
-                    inside_catch,
+                    absorber,
                     ctx,
                     visited_callers,
                     found_callsite,
@@ -948,7 +1136,7 @@ fn find_callsite_unguarded<'a>(
                     alt,
                     probe,
                     continuations,
-                    inside_catch,
+                    absorber,
                     ctx,
                     visited_callers,
                     found_callsite,
@@ -965,7 +1153,7 @@ fn find_callsite_unguarded<'a>(
             inner,
             probe,
             continuations,
-            inside_catch,
+            absorber,
             ctx,
             visited_callers,
             found_callsite,
@@ -976,7 +1164,7 @@ fn find_callsite_unguarded<'a>(
                 inner,
                 probe,
                 &mut isolated,
-                inside_catch,
+                absorber,
                 ctx,
                 visited_callers,
                 found_callsite,
@@ -989,7 +1177,7 @@ fn find_callsite_unguarded<'a>(
                 inner,
                 probe,
                 continuations,
-                true,
+                &absorber.enter_catch(recovery, ctx),
                 ctx,
                 visited_callers,
                 found_callsite,
@@ -1001,7 +1189,7 @@ fn find_callsite_unguarded<'a>(
                 recovery,
                 probe,
                 &mut isolated,
-                false,
+                &Absorber::outside(),
                 ctx,
                 visited_callers,
                 found_callsite,
@@ -1015,7 +1203,7 @@ fn find_callsite_unguarded<'a>(
             inner,
             probe,
             continuations,
-            inside_catch,
+            absorber,
             ctx,
             visited_callers,
             found_callsite,
@@ -1041,11 +1229,19 @@ enum FrameOutcome {
 
 /// Scan one continuation frame (a slice of siblings after the current
 /// position in some Sequence) looking for a hard validator.
+///
+/// As a side effect, records into `absorber.crossed` the FIRST bytes of
+/// every consuming tail element walked past — leg 2 compares these against
+/// the enclosing clean catch's boundary to tell genuine separators (which
+/// the boundary subsumes) from meaningful structure that a coarse resync
+/// would silently swallow.
 fn scan_frame_for_validator(
     frame: &[Pattern],
     target_trailing: &FollowSet,
-    nullable: &HashSet<String>,
+    absorber: &mut Absorber,
+    ctx: &LintCtx<'_>,
 ) -> FrameOutcome {
+    let nullable = ctx.nullable;
     for item in frame {
         if matches!(item, Pattern::AndPredicate { .. }) {
             return FrameOutcome::Anchored;
@@ -1071,6 +1267,7 @@ fn scan_frame_for_validator(
         }
         if !pattern_nullable(item, nullable) {
             let item_first = pattern_first(item, nullable);
+            absorber.cross(&first_bytes(&item_first, ctx.first));
             if item_first.is_disjoint(target_trailing) {
                 return FrameOutcome::Validated;
             }
@@ -1080,7 +1277,8 @@ fn scan_frame_for_validator(
             // beyond it; stop walking this frame.
             return FrameOutcome::PassedThrough;
         }
-        // Nullable item: walk past it.
+        // Nullable item: walk past it, recording the structure crossed.
+        absorber.cross(&first_bytes(&pattern_first(item, nullable), ctx.first));
     }
     FrameOutcome::PassedThrough
 }
