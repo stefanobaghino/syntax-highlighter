@@ -1301,6 +1301,41 @@ fn element_subsumed_by(elem: &FollowElement, set: &FollowSet) -> bool {
     set.contains(elem)
 }
 
+/// Replace every `Rule(name)` element of a FOLLOW set with the terminal
+/// elements of its FIRST set, transitively (cycle-guarded). Literal,
+/// `CharClass`, `Capture` and `Eof` elements pass through unchanged. Used
+/// to lower an inferred `^^lbl` boundary to a pure token set — see the
+/// `InferBoundaryCatch` arm of `resolve_in_pattern`.
+fn expand_follow_to_terminals(fs: &FollowSet, first: &HashMap<String, FollowSet>) -> FollowSet {
+    fn go(
+        elem: &FollowElement,
+        first: &HashMap<String, FollowSet>,
+        visited: &mut HashSet<String>,
+        out: &mut FollowSet,
+    ) {
+        match elem {
+            FollowElement::Rule(name) => {
+                if visited.insert(name.clone()) {
+                    if let Some(rf) = first.get(name) {
+                        for e in rf {
+                            go(e, first, visited, out);
+                        }
+                    }
+                }
+            }
+            other => {
+                out.insert(other.clone());
+            }
+        }
+    }
+    let mut out = FollowSet::new();
+    let mut visited = HashSet::new();
+    for elem in fs {
+        go(elem, first, &mut visited, &mut out);
+    }
+    out
+}
+
 // -- FOLLOW-inferred boundary catch resolver -----------------------------
 
 /// Synthesize a boundary pattern from a FOLLOW set. Used by the
@@ -1378,11 +1413,12 @@ fn follow_element_inner_to_pattern(elem: &FollowElement) -> Pattern {
 /// pass, no `InferBoundaryCatch` remains in the rule bodies.
 pub fn resolve_inferred_boundaries(grammar: &mut Grammar) -> Result<(), CompileError> {
     let nullable = compute_nullable(&grammar.rules);
+    let first = compute_first(grammar);
     let follow = compute_follow(grammar);
     let mut new_rules: HashMap<String, Pattern> = HashMap::with_capacity(grammar.rules.len());
     for (name, body) in &grammar.rules {
         let rule_follow = follow.get(name).cloned().unwrap_or_default();
-        let resolved = resolve_in_pattern(body, &rule_follow, &nullable, name)?;
+        let resolved = resolve_in_pattern(body, &rule_follow, &nullable, &first, name)?;
         new_rules.insert(name.clone(), resolved);
     }
     grammar.rules = new_rules;
@@ -1393,6 +1429,7 @@ fn resolve_in_pattern(
     pat: &Pattern,
     trailing: &FollowSet,
     nullable: &HashSet<String>,
+    first: &HashMap<String, FollowSet>,
     rule_name: &str,
 ) -> Result<Pattern, CompileError> {
     match pat {
@@ -1412,6 +1449,7 @@ fn resolve_in_pattern(
                     &items[i],
                     &sub_trailing,
                     nullable,
+                    first,
                     rule_name,
                 )?);
             }
@@ -1423,7 +1461,9 @@ fn resolve_in_pattern(
         Pattern::OrderedChoice { alts, span } => {
             let mut out = Vec::with_capacity(alts.len());
             for alt in alts {
-                out.push(resolve_in_pattern(alt, trailing, nullable, rule_name)?);
+                out.push(resolve_in_pattern(
+                    alt, trailing, nullable, first, rule_name,
+                )?);
             }
             Ok(Pattern::OrderedChoice {
                 alts: out,
@@ -1440,6 +1480,7 @@ fn resolve_in_pattern(
                     inner,
                     &sub_trailing,
                     nullable,
+                    first,
                     rule_name,
                 )?),
                 span: *span,
@@ -1453,13 +1494,16 @@ fn resolve_in_pattern(
                     inner,
                     &sub_trailing,
                     nullable,
+                    first,
                     rule_name,
                 )?),
                 span: *span,
             })
         }
         Pattern::Optional { inner, span } => Ok(Pattern::Optional {
-            inner: Box::new(resolve_in_pattern(inner, trailing, nullable, rule_name)?),
+            inner: Box::new(resolve_in_pattern(
+                inner, trailing, nullable, first, rule_name,
+            )?),
             span: *span,
         }),
         Pattern::NotPredicate { inner, span } => Ok(Pattern::NotPredicate {
@@ -1467,6 +1511,7 @@ fn resolve_in_pattern(
                 inner,
                 &FollowSet::new(),
                 nullable,
+                first,
                 rule_name,
             )?),
             span: *span,
@@ -1476,17 +1521,22 @@ fn resolve_in_pattern(
                 inner,
                 &FollowSet::new(),
                 nullable,
+                first,
                 rule_name,
             )?),
             span: *span,
         }),
         Pattern::Capture { kind, inner, span } => Ok(Pattern::Capture {
             kind: kind.clone(),
-            inner: Box::new(resolve_in_pattern(inner, trailing, nullable, rule_name)?),
+            inner: Box::new(resolve_in_pattern(
+                inner, trailing, nullable, first, rule_name,
+            )?),
             span: *span,
         }),
         Pattern::Lenient { inner, span } => Ok(Pattern::Lenient {
-            inner: Box::new(resolve_in_pattern(inner, trailing, nullable, rule_name)?),
+            inner: Box::new(resolve_in_pattern(
+                inner, trailing, nullable, first, rule_name,
+            )?),
             span: *span,
         }),
         Pattern::Catch {
@@ -1498,9 +1548,13 @@ fn resolve_in_pattern(
             // Success branch: inner inherits the catch's trailing.
             // Recovery branch: trailing is also the catch's trailing.
             Ok(Pattern::Catch {
-                inner: Box::new(resolve_in_pattern(inner, trailing, nullable, rule_name)?),
+                inner: Box::new(resolve_in_pattern(
+                    inner, trailing, nullable, first, rule_name,
+                )?),
                 label: label.clone(),
-                recovery: Box::new(resolve_in_pattern(recovery, trailing, nullable, rule_name)?),
+                recovery: Box::new(resolve_in_pattern(
+                    recovery, trailing, nullable, first, rule_name,
+                )?),
                 span: *span,
             })
         }
@@ -1512,9 +1566,18 @@ fn resolve_in_pattern(
                     span: *span,
                 });
             }
-            let boundary = follow_set_to_boundary_pattern(trailing);
+            // Expand rule references in the FOLLOW set to their terminal
+            // FIRST before synthesizing the boundary. A bare `^^lbl`'s
+            // boundary is "the next legitimate follower token", so it must
+            // be a token set: leaving a `Rule(R)` reference in the `&B`
+            // lookahead would (a) re-introduce R's own leniency into the
+            // lookahead — a fresh unanchored call site the lint then flags
+            // — and (b) be opaque. Expanding to terminals is complete by
+            // construction (it is the rule's real FOLLOW) and cascade-free.
+            let boundary =
+                follow_set_to_boundary_pattern(&expand_follow_to_terminals(trailing, first));
             // Resolve nested catches inside the inner first.
-            let resolved_inner = resolve_in_pattern(inner, trailing, nullable, rule_name)?;
+            let resolved_inner = resolve_in_pattern(inner, trailing, nullable, first, rule_name)?;
             Ok(lower_inferred_boundary_catch(
                 resolved_inner,
                 label.clone(),

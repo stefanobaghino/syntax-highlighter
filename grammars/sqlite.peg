@@ -89,7 +89,7 @@ sqlite = (statement stmt_sep?)*^[;] {
     having_clause = kw_having expr
 
     order_clause = kw_order kw_by order_item (@punctuation ',' order_item)*
-    order_item: partial = expr ((kw_asc / kw_desc))?
+    order_item = (expr ((kw_asc / kw_desc))?) ^^bad_order_item
 
     limit_clause: partial = kw_limit expr (kw_offset expr
                                                 / @punctuation ',' expr)?

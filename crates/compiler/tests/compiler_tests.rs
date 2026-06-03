@@ -5,7 +5,8 @@ use syntax_highlighter::pegvm::{
     Capture, CaptureKind, CharSet, Instruction, Label, LabelId, MatchResult, MemoId, RuleKind, VM,
 };
 use syntax_highlighter_compiler::pegc::analysis::{
-    compute_follow, lint_partial_match, FollowElement, LintFinding, LintKind,
+    compute_follow, lint_partial_match, resolve_inferred_boundaries, FollowElement, LintFinding,
+    LintKind,
 };
 use syntax_highlighter_compiler::pegc::{compile_pattern, parse, Grammar, Pattern, Span};
 
@@ -1777,7 +1778,10 @@ fn lint_partial_match_real_sqlite_grammar_aliased_expr_anchored() {
     // must not flag aliased_expr → result_column.
     let source = std::fs::read_to_string(workspace_root().join("grammars/sqlite.peg"))
         .expect("sqlite.peg fixture present");
-    let g = parse(&source).expect("sqlite.peg parses");
+    let mut g = parse(&source).expect("sqlite.peg parses");
+    // The lint runs after boundary resolution (the `^^lbl` catches the
+    // grammar now carries must be lowered first).
+    resolve_inferred_boundaries(&mut g).expect("boundaries resolve");
     let findings = lint_partial_match(&g);
     let bad = findings
         .iter()
@@ -1796,10 +1800,12 @@ fn lint_partial_match_real_sqlite_grammar_unanchored_aliased_expr_flagged() {
     let source = std::fs::read_to_string(workspace_root().join("grammars/sqlite.peg"))
         .expect("sqlite.peg fixture present");
     let mut g = parse(&source).expect("sqlite.peg parses");
-    // Replace result_column's body with an unanchored version. Under
-    // lexical scoping `table_star` / `aliased_expr` nest inside
-    // `result_column`, so their flat keys are the mangled
+    // Resolve the grammar's `^^lbl` catches first (the lint's
+    // precondition), then replace result_column's body with an unanchored
+    // version. Under lexical scoping `table_star` / `aliased_expr` nest
+    // inside `result_column`, so their flat keys are the mangled
     // `result_column::…` names — reference those so the choice resolves.
+    resolve_inferred_boundaries(&mut g).expect("boundaries resolve");
     g.rules.insert(
         "result_column".into(),
         Pattern::choice(vec![
