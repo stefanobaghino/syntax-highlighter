@@ -42,12 +42,12 @@ go = package_clause import_decl* (top_decl)*^ {
         }
     }
 
-    decl: partial = kw_var var_spec_group
-                  / kw_var var_spec opt_semi
-                  / kw_const const_spec_group
-                  / kw_const const_spec opt_semi
-                  / kw_type type_spec_group
-                  / kw_type type_spec opt_semi {
+    decl = kw_var var_spec_group
+         / kw_var var_spec opt_semi
+         / kw_const const_spec_group
+         / kw_const const_spec opt_semi
+         / kw_type type_spec_group
+         / kw_type type_spec opt_semi {
         kw_var: reserved = @keyword 'var'
         kw_const: reserved = @keyword 'const'
         var_spec_group = @punctuation '(' (var_spec opt_semi)* @punctuation ')'

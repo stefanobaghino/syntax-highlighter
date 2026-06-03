@@ -174,7 +174,7 @@ c = (external_decl)*^ {
                   / @operator '=' !'='
     }
 
-    expr_cond: partial = expr_lor (@operator '?' expr @punctuation ':' expr_assign)?
+    expr_cond = expr_lor (@operator '?' expr @punctuation ':' expr_assign)?
 
     expr_lor = expr_lor @operator '||' expr_land / expr_land
     expr_land = expr_land @operator '&&' expr_bor / expr_bor

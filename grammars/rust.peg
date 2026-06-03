@@ -237,8 +237,8 @@ rust = (item)*^ {
     pattern_box = kw_box pattern_atom
     pattern_tuple = @punctuation '(' pattern_list? @punctuation ')'
     pattern_list = pattern (@punctuation ',' pattern)* (@punctuation ',')?
-    pattern_struct_or_enum: partial = @type upper_ident (@punctuation '::' @type upper_ident)*
-                                     (pattern_struct_body / pattern_tuple)?
+    pattern_struct_or_enum = @type upper_ident (@punctuation '::' @type upper_ident)*
+                             (pattern_struct_body / pattern_tuple)?
     pattern_struct_body = @punctuation '{' pattern_struct_fields? @punctuation '}'
     pattern_struct_fields = pattern_struct_field (@punctuation ',' pattern_struct_field)* (@punctuation ',')?
     pattern_struct_field = @property ident @punctuation ':' pattern
@@ -249,8 +249,8 @@ rust = (item)*^ {
     pattern_literal = string_lit / char_lit / number_lit / lit_const
     pattern_wild = @punctuation '_'
     pattern_rest = @punctuation '..'
-    pattern_binding: partial = kw_ref? kw_mut? @variable ident
-                              (@punctuation '@' pattern_atom)?
+    pattern_binding = kw_ref? kw_mut? @variable ident
+                      (@punctuation '@' pattern_atom)?
 
     expr = expr_assign
 
