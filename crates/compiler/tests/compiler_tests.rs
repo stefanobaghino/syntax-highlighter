@@ -1832,6 +1832,40 @@ fn lint_partial_match_real_sqlite_grammar_function_call_anchored() {
 }
 
 #[test]
+fn lint_partial_match_real_go_grammar_opt_semi_anchored() {
+    // `opt_semi = ';'? ^&semi_tail` is a *nullable* body: without the
+    // trailing-`&B` precision in `trailing_first`, the reverse tail-walk
+    // would still see the `';'?` and flag it. The anchor pins it to the
+    // statement-follower FOLLOW (the ASI boundary), discharging it; strip
+    // the anchor and the leniency lint flags it again.
+    let source = std::fs::read_to_string(workspace_root().join("grammars/go.peg"))
+        .expect("go.peg fixture present");
+
+    let mut anchored = parse(&source).expect("go.peg parses");
+    resolve_inferred_boundaries(&mut anchored).expect("boundaries resolve");
+    assert!(
+        !lint_partial_match(&anchored)
+            .iter()
+            .any(|f| f.rule == "opt_semi"),
+        "opt_semi is anchored; should not be flagged"
+    );
+
+    let stripped_src = source.replace(" ^&semi_tail", "");
+    assert!(
+        stripped_src != source,
+        "expected to strip the `^&semi_tail` anchor from the fixture"
+    );
+    let mut stripped = parse(&stripped_src).expect("stripped grammar parses");
+    resolve_inferred_boundaries(&mut stripped).expect("boundaries resolve");
+    assert!(
+        lint_partial_match(&stripped)
+            .iter()
+            .any(|f| f.rule == "opt_semi"),
+        "nullable opt_semi must flag once the anchor is stripped"
+    );
+}
+
+#[test]
 fn lint_partial_match_real_sqlite_grammar_aliased_expr_anchored() {
     // The shipped grammar has the PR #101 fix: aliased_expr is anchored
     // via `&(ws result_column_boundary)` inside result_column. The lint

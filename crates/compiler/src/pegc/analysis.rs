@@ -823,6 +823,18 @@ fn trailing_first(pat: &Pattern, nullable: &HashSet<String>) -> FollowSet {
         }
         Pattern::Sequence { items, .. } => {
             for item in items.iter().rev() {
+                // A trailing `&B` anchor (from `^&lbl`, or written by hand)
+                // pins the rule to its FOLLOW boundary: `B` is guaranteed
+                // to follow the match, so nothing the body leaves can
+                // silently leak past it. When the reverse walk reaches the
+                // anchor with nothing trailing accumulated yet, the rule is
+                // anchored — its `trailing_first` is empty regardless of the
+                // optionals before the anchor. For a non-nullable body the
+                // walk would stop at the body anyway; this also discharges
+                // nullable bodies like `opt_semi = ';'?`.
+                if out.is_empty() && matches!(item, Pattern::AndPredicate { .. }) {
+                    return FollowSet::new();
+                }
                 if pattern_nullable(item, nullable) {
                     if is_trailing_optional_like(item) {
                         out.extend(pattern_first(item, nullable));
