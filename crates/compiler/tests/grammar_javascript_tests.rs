@@ -291,6 +291,17 @@ fn try_catch_finally_parses() {
 }
 
 #[test]
+fn try_requires_catch_or_finally() {
+    // A `try` block alone is a syntax error in JS — `try_stmt` requires at
+    // least a catch or a finally. Both single-clause forms parse; the bare
+    // form does not complete.
+    assert_complete_full("try { f(); } catch (e) { log(e); }\n");
+    assert_complete_full("try { f(); } finally { cleanup(); }\n");
+    let (_, _, _, complete) = run("try { f(); }\n");
+    assert!(!complete, "bare `try {{}}` must not be a complete parse");
+}
+
+#[test]
 fn switch_case_parses() {
     let input = "switch (x) { case 1: a(); break; case 2: b(); break; default: c(); }\n";
     let (_, _) = assert_complete_full(input);
