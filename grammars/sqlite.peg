@@ -30,16 +30,16 @@ sqlite = (statement stmt_sep?)*^[;] {
                    / reindex_stmt
                    / analyze_stmt
 
-    select_stmt: partial = with_clause? select_core compound_tail* order_clause? limit_clause?
+    select_stmt = with_clause? select_core compound_tail* order_clause? limit_clause? ^&select_tail
 
     with_clause = kw_with (kw_recursive)? cte_defn (@punctuation ',' cte_defn)*
     cte_defn = @type bare_ident
                (@punctuation '(' ident_list @punctuation ')')?
                kw_as @punctuation '(' select_stmt @punctuation ')'
 
-    select_core: partial = kw_select ((kw_distinct / kw_all))? result_list
+    select_core = kw_select ((kw_distinct / kw_all))? result_list
                            (from_clause)? (where_clause)? (group_clause)? (having_clause)?
-                           (window_clause)?
+                           (window_clause)? ^&core_tail
 
     result_list = result_column (@punctuation ',' result_column)*
     result_column = (table_star / @operator '*' / aliased_expr)
@@ -59,11 +59,11 @@ sqlite = (statement stmt_sep?)*^[;] {
     from_clause = kw_from table_or_subquery (join_clause)*
     table_or_subquery = @punctuation '(' select_stmt @punctuation ')' (table_alias)?
                       / qualified_table_name (table_alias)?
-    qualified_table_name: partial = @type bare_ident_nonkw (@punctuation '.' @type bare_ident_nonkw)?
+    qualified_table_name = @type bare_ident_nonkw (@punctuation '.' @type bare_ident_nonkw)? ^&qtn_tail
     table_alias = kw_as @variable bare_ident_nonkw
                 / @variable bare_ident_nonkw
 
-    join_clause: partial = join_op table_or_subquery (join_constraint)? {
+    join_clause = join_op table_or_subquery (join_constraint)? ^&join_tail {
         join_op = @punctuation ','
                 / kw_natural (join_type)? kw_join
                 / join_type kw_join
@@ -91,8 +91,8 @@ sqlite = (statement stmt_sep?)*^[;] {
     order_clause = kw_order kw_by order_item (@punctuation ',' order_item)*
     order_item = (expr ((kw_asc / kw_desc))?) ^^bad_order_item
 
-    limit_clause: partial = kw_limit expr (kw_offset expr
-                                                / @punctuation ',' expr)?
+    limit_clause = kw_limit expr (kw_offset expr
+                                                / @punctuation ',' expr)? ^&limit_tail
 
     window_clause = kw_window named_window (@punctuation ',' named_window)* {
         named_window = @variable bare_ident_nonkw kw_as window_defn
@@ -193,9 +193,9 @@ sqlite = (statement stmt_sep?)*^[;] {
 
     # SQLite accepts multi-word type names like `DOUBLE PRECISION` and
     # `UNSIGNED BIG INT`.
-    type_name: partial = @type bare_ident_nonkw (@type bare_ident_nonkw)*
+    type_name = @type bare_ident_nonkw (@type bare_ident_nonkw)*
                          (@punctuation '(' signed_number
-                              (@punctuation ',' signed_number)? @punctuation ')')?
+                              (@punctuation ',' signed_number)? @punctuation ')')? ^&type_tail
 
     signed_number = (@operator '-' / @operator '+')? @number number_body
 
