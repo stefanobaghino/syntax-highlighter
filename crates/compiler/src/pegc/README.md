@@ -107,14 +107,15 @@ atom       "abc"   [a-z]   .   ident   (...)   @name ...
 postfix    p*      p+      p?      p{n}    p*^     p+^     p*^[cs]   p+^[cs]
 prefix     !p      &p
 sequence   p1 p2 p3          (juxtaposition)
-catch      p1 ^label p2      p1 ^^label B      p1 ^^label      p1 ^&label
+catch      p1 ^label p2      p1 ^^label B      p1 ^^label
+anchor     seq $
 choice     p1 / p2 / p3
 ```
 
-The `^&label` form is the anchor-only member of the boundary family: it
-pins `p1` to its FOLLOW with a bare lookahead and synthesizes no recovery
-branch — see [`INNER ^&lbl`](#inner-lbl--anchor-only-inferred-boundary)
-below.
+The postfix `$` pins the whole preceding sequence to its FOLLOW with a
+bare lookahead and synthesizes no recovery branch. It's a sequence-level
+postfix (binds looser than `*`/`?`), and it takes no label — see
+[Anchor-only inferred boundary](#anchor-only-inferred-boundary) below.
 
 ### Atoms
 
@@ -543,20 +544,23 @@ only `..=`, not `..` — the catch necessarily consumes its boundary,
 and `^^lbl .. B` would diverge from the standalone `..` non-consuming
 meaning. The parser rejects it with a hint pointing at `..=`.
 
-### `INNER ^&lbl` — anchor-only inferred boundary
+### Anchor-only inferred boundary
 
-The anchor-only form is the cheap member of the boundary family. Like
-the FOLLOW-inferred `^^lbl`, it synthesizes the boundary `B` from
-`INNER`'s call-site FOLLOW (terminal-expanded), but it lowers to a bare
-`Sequence([INNER, &B])` with **no** recovery `Catch`:
+The postfix `$` is the cheap member of the boundary family. Like the
+FOLLOW-inferred `^^lbl`, it synthesizes the boundary `B` from the
+sequence's call-site FOLLOW (terminal-expanded), but it lowers to a bare
+`Sequence([SEQ, &B])` with **no** recovery `Catch`:
 
 ```peg
-INNER ^&lbl
+SEQ $
 # lowers to
-INNER &B          # B = terminal-expanded FOLLOW(rule)
+SEQ &B            # B = terminal-expanded FOLLOW(rule)
 ```
 
-A prefix-only match of `INNER` fails the `&B` lookahead and backtracks to
+`$` binds the whole preceding sequence (it parses at the catch level, not
+the atom level, so it's looser than `*`/`?`), and it carries no label.
+
+A prefix-only match of `SEQ` fails the `&B` lookahead and backtracks to
 the caller's next ordered-choice alternative. On a speculative
 expression alternative that is exactly what's wanted — a recovery `Catch`
 there would turn every backtrack into a skip-to-boundary scan, which is
@@ -565,15 +569,14 @@ input always has a legal follower, so `&B` succeeds and the rule is
 unaffected (no recovery capture).
 
 This is the leniency-lint discharge of choice when no recovery branch is
-wanted. It also covers the ASI case (`opt_semi = ';'? ^&semi_tail`): the
-follower set *is* the boundary, so the optional `;` needs nothing to
-anchor *to*. The placeholder `Pattern::InferBoundaryCatch { anchor_only:
-true, .. }` is resolved by `analysis::resolve_inferred_boundaries`; no new
-VM machinery.
+wanted. It also covers the ASI case (`opt_semi = ';'? $`): the follower
+set *is* the boundary, so the optional `;` needs nothing to anchor *to*.
+The placeholder `Pattern::InferBoundaryCatch { anchor_only: true, .. }` is
+resolved by `analysis::resolve_inferred_boundaries`; no new VM machinery.
 
 The partial-match leniency lint (`lint_partial_match`) flags a
 trailing-nullable rule called unanchored; resolve a flag by anchoring the
-rule to its FOLLOW (`^&lbl`, or `^^lbl B` / `^^lbl` when recovery is also
+rule to its FOLLOW (`$`, or `^^lbl B` / `^^lbl` when recovery is also
 wanted) or by restructuring it so the trailing optional can't win on a
 prefix. There is no opt-out ascription.
 
@@ -886,8 +889,8 @@ concrete use case.
 - **`CompileError`** — source is well-formed but semantically invalid.
   Examples: `NonTerminal("foo")` with no matching rule, a start rule
   that doesn't exist, partial-match leniency on a call site that is not
-  anchored to its FOLLOW (`^&lbl`, or `^^lbl B` / `^^lbl`), an `^^lbl`
-  whose call-site FOLLOW set is empty so no boundary can be inferred.
+  anchored to its FOLLOW (`$`, or `^^lbl B` / `^^lbl`), an inferred-boundary
+  anchor whose call-site FOLLOW set is empty so no boundary can be inferred.
 - **`Error`** — unified wrapper returned by `pegc::compile(source)`.
   `From<ParseError>` and `From<CompileError>` are provided.
 

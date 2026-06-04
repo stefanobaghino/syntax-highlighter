@@ -30,7 +30,7 @@ sqlite = (statement stmt_sep?)*^[;] {
                    / reindex_stmt
                    / analyze_stmt
 
-    select_stmt = with_clause? select_core compound_tail* order_clause? limit_clause? ^&select_tail
+    select_stmt = with_clause? select_core compound_tail* order_clause? limit_clause? $
 
     with_clause = kw_with (kw_recursive)? cte_defn (@punctuation ',' cte_defn)*
     cte_defn = @type bare_ident
@@ -39,7 +39,7 @@ sqlite = (statement stmt_sep?)*^[;] {
 
     select_core = kw_select ((kw_distinct / kw_all))? result_list
                            (from_clause)? (where_clause)? (group_clause)? (having_clause)?
-                           (window_clause)? ^&core_tail
+                           (window_clause)? $
 
     result_list = result_column (@punctuation ',' result_column)*
     result_column = (table_star / @operator '*' / aliased_expr)
@@ -59,11 +59,11 @@ sqlite = (statement stmt_sep?)*^[;] {
     from_clause = kw_from table_or_subquery (join_clause)*
     table_or_subquery = @punctuation '(' select_stmt @punctuation ')' (table_alias)?
                       / qualified_table_name (table_alias)?
-    qualified_table_name = @type bare_ident_nonkw (@punctuation '.' @type bare_ident_nonkw)? ^&qtn_tail
+    qualified_table_name = @type bare_ident_nonkw (@punctuation '.' @type bare_ident_nonkw)? $
     table_alias = kw_as @variable bare_ident_nonkw
                 / @variable bare_ident_nonkw
 
-    join_clause = join_op table_or_subquery (join_constraint)? ^&join_tail {
+    join_clause = join_op table_or_subquery (join_constraint)? $ {
         join_op = @punctuation ','
                 / kw_natural (join_type)? kw_join
                 / join_type kw_join
@@ -92,7 +92,7 @@ sqlite = (statement stmt_sep?)*^[;] {
     order_item = (expr ((kw_asc / kw_desc))?) ^^bad_order_item
 
     limit_clause = kw_limit expr (kw_offset expr
-                                                / @punctuation ',' expr)? ^&limit_tail
+                                                / @punctuation ',' expr)? $
 
     window_clause = kw_window named_window (@punctuation ',' named_window)* {
         named_window = @variable bare_ident_nonkw kw_as window_defn
@@ -195,7 +195,7 @@ sqlite = (statement stmt_sep?)*^[;] {
     # `UNSIGNED BIG INT`.
     type_name = @type bare_ident_nonkw (@type bare_ident_nonkw)*
                          (@punctuation '(' signed_number
-                              (@punctuation ',' signed_number)? @punctuation ')')? ^&type_tail
+                              (@punctuation ',' signed_number)? @punctuation ')')? $
 
     signed_number = (@operator '-' / @operator '+')? @number number_body
 
@@ -371,7 +371,7 @@ sqlite = (statement stmt_sep?)*^[;] {
 
     function_call = @function bare_ident_nonkw @punctuation '(' func_args? @punctuation ')'
                             (filter_clause)?
-                            (kw_over window_ref)? ^&fn_tail {
+                            (kw_over window_ref)? $ {
         func_args = @operator '*'
                   / (kw_distinct)? expr (@punctuation ',' expr)*
     }

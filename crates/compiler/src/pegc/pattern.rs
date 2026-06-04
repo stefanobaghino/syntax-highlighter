@@ -174,13 +174,15 @@ pub enum Pattern {
     /// An `InferBoundaryCatch` should never reach the compiler or any
     /// downstream analysis — the resolver runs first and replaces it.
     ///
-    /// When `anchor_only` is set (surface `^&lbl`), the resolver lowers
-    /// it to a bare `Sequence([inner, AndPredicate(B)])` with **no**
-    /// recovery `Catch`: the rule is anchored to its FOLLOW boundary so
-    /// a prefix-only match fails and backtracks, but no skip-to-boundary
-    /// recovery scan is synthesized. This is the cheap, speculative-safe
-    /// anchor used to discharge the leniency lint without the
-    /// recovery-on-backtrack cost a `Catch` incurs.
+    /// When `anchor_only` is set (surface postfix `$`), the resolver
+    /// lowers it to a bare `Sequence([inner, AndPredicate(B)])` with
+    /// **no** recovery `Catch`: the rule is anchored to its FOLLOW
+    /// boundary so a prefix-only match fails and backtracks, but no
+    /// skip-to-boundary recovery scan is synthesized. This is the cheap,
+    /// speculative-safe anchor used to discharge the leniency lint without
+    /// the recovery-on-backtrack cost a `Catch` incurs. The `$` form
+    /// carries no label (the field is empty); only the recovery-bearing
+    /// `^^lbl` inferred form uses it.
     InferBoundaryCatch {
         inner: Box<Pattern>,
         label: String,

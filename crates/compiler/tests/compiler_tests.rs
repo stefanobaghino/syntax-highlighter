@@ -1773,12 +1773,12 @@ fn lint_partial_match_clean_resync_nested_constituent_flagged() {
 
 #[test]
 fn anchor_only_inferred_lowers_to_bare_and_predicate_not_catch() {
-    // `^&lbl` lowers to `Seq([inner, &B])` — a bare FOLLOW anchor with no
-    // recovery catch — distinct from `^^lbl`, which wraps the body in a
+    // Postfix `$` lowers to `Seq([inner, &B])` — a bare FOLLOW anchor with
+    // no recovery catch — distinct from `^^lbl`, which wraps the body in a
     // `Catch`. The cheap backtrack-on-failure of the bare `&B` is what
     // makes the anchor safe in speculative positions a recovery scan would
     // blow up.
-    let mut g = parse("root = 'a' ('b')? ^&tail\n").expect("anchored parses");
+    let mut g = parse("root = 'a' ('b')? $\n").expect("anchored parses");
     resolve_inferred_boundaries(&mut g).expect("boundaries resolve");
     match &g.rules["root"] {
         Pattern::Sequence { items, .. } => {
@@ -1799,7 +1799,7 @@ fn anchor_only_inferred_lowers_to_bare_and_predicate_not_catch() {
 
 #[test]
 fn lint_partial_match_real_sqlite_grammar_function_call_anchored() {
-    // The shipped grammar anchors `function_call` with `^&fn_tail`: its
+    // The shipped grammar anchors `function_call` with a postfix `$`: its
     // trailing `(filter_clause)? (kw_over window_ref)?` optionals are
     // pinned to the expression FOLLOW, so the speculative call from
     // `primary` is discharged. Stripping the anchor re-exposes the
@@ -1816,10 +1816,12 @@ fn lint_partial_match_real_sqlite_grammar_function_call_anchored() {
         "function_call is anchored; should not be flagged"
     );
 
-    let stripped_src = source.replace(" ^&fn_tail", "");
+    // `(kw_over window_ref)? $` is unique to function_call — strip just
+    // that anchor, leaving the other rules' `$` in place.
+    let stripped_src = source.replace("(kw_over window_ref)? $", "(kw_over window_ref)?");
     assert!(
         stripped_src != source,
-        "expected to strip the `^&fn_tail` anchor from the fixture"
+        "expected to strip function_call's `$` anchor from the fixture"
     );
     let mut stripped = parse(&stripped_src).expect("stripped grammar parses");
     resolve_inferred_boundaries(&mut stripped).expect("boundaries resolve");
@@ -1833,11 +1835,11 @@ fn lint_partial_match_real_sqlite_grammar_function_call_anchored() {
 
 #[test]
 fn lint_partial_match_real_go_grammar_opt_semi_anchored() {
-    // `opt_semi = ';'? ^&semi_tail` is a *nullable* body: without the
-    // trailing-`&B` precision in `trailing_first`, the reverse tail-walk
-    // would still see the `';'?` and flag it. The anchor pins it to the
-    // statement-follower FOLLOW (the ASI boundary), discharging it; strip
-    // the anchor and the leniency lint flags it again.
+    // `opt_semi = ';'? $` is a *nullable* body: without the trailing-`&B`
+    // precision in `trailing_first`, the reverse tail-walk would still see
+    // the `';'?` and flag it. The anchor pins it to the statement-follower
+    // FOLLOW (the ASI boundary), discharging it; strip the anchor and the
+    // leniency lint flags it again.
     let source = std::fs::read_to_string(workspace_root().join("grammars/go.peg"))
         .expect("go.peg fixture present");
 
@@ -1850,10 +1852,13 @@ fn lint_partial_match_real_go_grammar_opt_semi_anchored() {
         "opt_semi is anchored; should not be flagged"
     );
 
-    let stripped_src = source.replace(" ^&semi_tail", "");
+    let stripped_src = source.replace(
+        "opt_semi = @punctuation ';'? $",
+        "opt_semi = @punctuation ';'?",
+    );
     assert!(
         stripped_src != source,
-        "expected to strip the `^&semi_tail` anchor from the fixture"
+        "expected to strip opt_semi's `$` anchor from the fixture"
     );
     let mut stripped = parse(&stripped_src).expect("stripped grammar parses");
     resolve_inferred_boundaries(&mut stripped).expect("boundaries resolve");

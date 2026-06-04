@@ -35,9 +35,9 @@ go = package_clause import_decl* (top_decl)*^ {
     top_decl = decl
                / func_decl
                / method_decl {
-        func_decl = kw_func @function ident type_params? fn_signature block? ^&fd_tail
+        func_decl = kw_func @function ident type_params? fn_signature block? $
 
-        method_decl = kw_func method_receiver @function ident fn_signature block? ^&md_tail {
+        method_decl = kw_func method_receiver @function ident fn_signature block? $ {
             method_receiver = @punctuation '(' (@variable ident)? type_expr @punctuation ')'
         }
     }
@@ -59,7 +59,7 @@ go = package_clause import_decl* (top_decl)*^ {
              / ident_list type_expr
              / ident_list @operator '=' expr_list
 
-    const_spec = const_ident_list type_expr? (@operator '=' expr_list)? ^&cs_tail {
+    const_spec = const_ident_list type_expr? (@operator '=' expr_list)? $ {
         const_ident_list = @constant ident (@punctuation ',' @constant ident)*
     }
 
@@ -78,7 +78,7 @@ go = package_clause import_decl* (top_decl)*^ {
     type_term = @operator '~' type_expr
               / type_expr
 
-    fn_signature = fn_params fn_result? ^&fs_tail {
+    fn_signature = fn_params fn_result? $ {
         fn_result = fn_params
                   / type_expr
     }
@@ -129,13 +129,13 @@ go = package_clause import_decl* (top_decl)*^ {
                      / @operator '*'? type_name string_lit?
     }
 
-    type_name = @type qualified_ident type_args? ^&tn_tail {
+    type_name = @type qualified_ident type_args? $ {
         type_args = @punctuation '[' type_arg_list @punctuation ']' {
             type_arg_list = type_expr (@punctuation ',' type_expr)* (@punctuation ',')?
         }
     }
 
-    qualified_ident = ident (@punctuation '.' ident)? ^&qi_tail
+    qualified_ident = ident (@punctuation '.' ident)? $
 
     block = @punctuation '{' (stmt* @punctuation '}' ^^block_close ..= @punctuation '}')
 
@@ -429,5 +429,5 @@ go = package_clause import_decl* (top_decl)*^ {
                              / 'delete' / 'imag' / 'len' / 'make' / 'new' / 'panic'
                              / 'print' / 'println' / 'real' / 'recover'
 
-    opt_semi = @punctuation ';'? ^&semi_tail
+    opt_semi = @punctuation ';'? $
 }

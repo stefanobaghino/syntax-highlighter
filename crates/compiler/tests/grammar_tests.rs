@@ -759,6 +759,26 @@ fn inferred_catch_at_end_of_rule_parses_to_placeholder() {
 }
 
 #[test]
+fn postfix_dollar_parses_to_anchor_only_placeholder() {
+    // `$` is the anchor-only inferred boundary: an `InferBoundaryCatch`
+    // with `anchor_only: true` and no label, binding the whole preceding
+    // sequence. The resolver lowers it to `Seq([inner, &B])`.
+    let g = parse("r = 'a' 'b'? $");
+    assert_eq!(
+        g.rules["r"],
+        Pattern::InferBoundaryCatch {
+            inner: Box::new(Pattern::seq(vec![
+                Pattern::literal("a"),
+                Pattern::optional(Pattern::literal("b")),
+            ])),
+            label: String::new(),
+            anchor_only: true,
+            span: Span::SYNTHETIC,
+        },
+    );
+}
+
+#[test]
 fn inferred_catch_before_choice_separator() {
     let g = parse("r = 'a' ^^lbl / 'b'");
     assert_eq!(

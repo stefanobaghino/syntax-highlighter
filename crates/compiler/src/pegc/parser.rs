@@ -212,7 +212,7 @@ impl Grammar {
     ///    boundary from FOLLOW.
     /// 2. Run [`lint_partial_match`]; any finding is a fatal
     ///    `CompileError::PartialMatchLeniency`. Resolve a flagged call by
-    ///    anchoring the rule to its FOLLOW (`^&lbl`, or `^^lbl B` / `^^lbl`
+    ///    anchoring the rule to its FOLLOW (`$`, or `^^lbl B` / `^^lbl`
     ///    when recovery is also wanted) or restructuring the rule.
     /// 3. Inject auto-ignore calls into every non-atomic rule's body
     ///    (no-op when the grammar has no `ignore` rule).
@@ -753,11 +753,13 @@ impl<'a> Parser<'a> {
     ///   emits `Pattern::InferBoundaryCatch { inner, label }` and the
     ///   compile-time resolver synthesizes `B` from the call site's
     ///   FOLLOW set.
-    /// - `inner ^&label` — **anchor-only inferred boundary.** Like the
-    ///   bare `^^label` inferred form (boundary synthesized from FOLLOW),
-    ///   but lowers to `Seq([inner, &B])` with no recovery `Catch`. The
-    ///   anchor makes a prefix-only match fail and backtrack without the
-    ///   recovery-scan cost a `Catch` carries in speculative positions.
+    /// - `inner $` — **anchor-only inferred boundary** (postfix, no
+    ///   label). Like the bare `^^label` inferred form (boundary
+    ///   synthesized from FOLLOW), but lowers to `Seq([inner, &B])` with
+    ///   no recovery `Catch`. The anchor makes a prefix-only match fail
+    ///   and backtrack without the recovery-scan cost a `Catch` carries in
+    ///   speculative positions. Parsed here, at the catch level, so it
+    ///   binds the whole preceding sequence rather than a single atom.
     ///
     /// The label identifier must touch the discriminator `^` (bare)
     /// or the second `^` of `^^` (anchored). `^_` / `^^_` are
@@ -772,6 +774,23 @@ impl<'a> Parser<'a> {
         let mut lhs = self.parse_sequence()?;
         loop {
             self.skip_ws();
+            // Postfix `$` — anchor-only inferred boundary. Binds the whole
+            // preceding sequence to its FOLLOW via `&B` (lowered to
+            // `Seq([inner, &B])` with no recovery `Catch`): a prefix-only
+            // match fails the `&B` lookahead and backtracks (cheap), with
+            // none of the recovery-on-backtrack scan cost a `Catch` incurs.
+            // The boundary is always FOLLOW-inferred; `$` takes no label.
+            if self.peek() == Some(b'$') {
+                let span = self.span();
+                self.pos += 1;
+                lhs = Pattern::InferBoundaryCatch {
+                    inner: Box::new(lhs),
+                    label: String::new(),
+                    anchor_only: true,
+                    span,
+                };
+                continue;
+            }
             if self.peek() != Some(b'^') {
                 break;
             }
@@ -817,35 +836,6 @@ impl<'a> Parser<'a> {
                 // returned when it hit the first `^`, so absorb the
                 // continuation here and rejoin under a Sequence.
                 let mut items = vec![catch_pat];
-                loop {
-                    self.skip_ws();
-                    if !self.at_prefix_start() {
-                        break;
-                    }
-                    items.push(self.parse_prefix()?);
-                }
-                lhs = Pattern::seq(items);
-            } else if self.peek() == Some(b'&') {
-                // `INNER ^&lbl` — anchor-only inferred boundary. Like the
-                // bare `^^lbl` inferred form, but lowers to `Seq([inner,
-                // &B])` with no recovery `Catch`: a prefix-only match
-                // fails the `&B` lookahead and backtracks (cheap), with
-                // none of the recovery-on-backtrack scan cost a `Catch`
-                // incurs. Used to discharge the leniency lint on
-                // speculative rules. The boundary `B` is always
-                // FOLLOW-inferred (no atom is parsed); the label is
-                // retained for diagnostic symmetry with `^^`.
-                self.pos += 1;
-                let label = self.parse_catch_label("^&")?;
-                let anchor = Pattern::InferBoundaryCatch {
-                    inner: Box::new(lhs),
-                    label,
-                    anchor_only: true,
-                    span: catch_span,
-                };
-                // Trailing sequence atoms after `^&lbl` belong to the
-                // enclosing sequence, mirroring the `^^lbl` path.
-                let mut items = vec![anchor];
                 loop {
                     self.skip_ws();
                     if !self.at_prefix_start() {
