@@ -26,11 +26,11 @@ pub enum CompileError {
     },
     /// `lint_partial_match` returned a non-empty result. Each finding
     /// names a `(rule, caller)` pair where a trailing-nullable rule's
-    /// partial-match leniency reaches an unguarded scope. Anchor with
-    /// `^^lbl B` (or `^^lbl`) when the leniency is a bug, or mark the
-    /// rule `name: partial` when the leniency is intentional. Each
-    /// [`LintFinding`] carries the call-site's span so the rendered
-    /// message points directly at the unanchored call.
+    /// partial-match leniency reaches an unguarded scope. Anchor the rule
+    /// to its FOLLOW (`^&lbl`, or `^^lbl B` / `^^lbl` when recovery is also
+    /// wanted) or restructure it so the trailing optional can't win on a
+    /// prefix. Each [`LintFinding`] carries the call-site's span so the
+    /// rendered message points directly at the unanchored call.
     PartialMatchLeniency(Vec<LintFinding>),
     /// One or more literals are reachable from both a `reserved` rule and
     /// a `preferred` rule, so the synthesized `reserved` and `preferred`
@@ -476,9 +476,6 @@ impl Compiler {
                 self.patch_jump(success_commit, done);
                 self.emit(Instruction::RecoverScopeEnd);
             }
-            // Transparent at runtime — the `~` marker affects only
-            // the lint walker. See `Pattern::Lenient` documentation.
-            Pattern::Lenient { inner, .. } => self.compile_pat(inner),
             // The FOLLOW-inferred resolver must run before bytecode
             // emission; reaching this arm is a bug.
             Pattern::InferBoundaryCatch { .. } => {
@@ -688,8 +685,7 @@ fn check_refs(
         | Pattern::Optional { inner, .. }
         | Pattern::NotPredicate { inner, .. }
         | Pattern::AndPredicate { inner, .. }
-        | Pattern::Capture { inner, .. }
-        | Pattern::Lenient { inner, .. } => check_refs(_rule, inner, rules, rule_params),
+        | Pattern::Capture { inner, .. } => check_refs(_rule, inner, rules, rule_params),
         Pattern::Catch {
             inner, recovery, ..
         } => {

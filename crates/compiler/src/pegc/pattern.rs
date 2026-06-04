@@ -163,15 +163,6 @@ pub enum Pattern {
         recovery: Box<Pattern>,
         span: Span,
     },
-    /// Author-local marker that a pattern is intentionally lenient — the
-    /// `lint_partial_match` walker treats this as an opaque barrier and
-    /// does not descend into it for call-site detection. At runtime the
-    /// wrapper is transparent: the compiler emits exactly the inner
-    /// pattern's bytecode. Surface syntax: the `name: partial` ascription.
-    Lenient {
-        inner: Box<Pattern>,
-        span: Span,
-    },
     /// Boundary-anchored catch with the boundary inferred from the
     /// call site's FOLLOW set. Placeholder produced at parse time by
     /// the `^^lbl` surface form; resolved before bytecode emission by
@@ -247,7 +238,6 @@ impl Pattern {
             | Pattern::NonTerminal { span, .. }
             | Pattern::Capture { span, .. }
             | Pattern::Catch { span, .. }
-            | Pattern::Lenient { span, .. }
             | Pattern::InferBoundaryCatch { span, .. }
             | Pattern::IndentCombinator { span, .. }
             | Pattern::IndentOp { span, .. } => *span,
@@ -361,13 +351,6 @@ impl Pattern {
         }
     }
 
-    pub fn lenient(inner: Pattern) -> Pattern {
-        Pattern::Lenient {
-            inner: Box::new(inner),
-            span: Span::SYNTHETIC,
-        }
-    }
-
     /// Labeled catch — equivalent to `inner ^label recovery` in source.
     /// The label is a diagnostic tag flowed into `RecoveryDiagnostic` so
     /// `pegdb recoveries explain` can cluster firings by it.
@@ -445,10 +428,6 @@ impl Pattern {
                 inner: Box::new(inner.strip_spans()),
                 label: label.clone(),
                 recovery: Box::new(recovery.strip_spans()),
-                span: Span::SYNTHETIC,
-            },
-            Pattern::Lenient { inner, .. } => Pattern::Lenient {
-                inner: Box::new(inner.strip_spans()),
                 span: Span::SYNTHETIC,
             },
             Pattern::InferBoundaryCatch {

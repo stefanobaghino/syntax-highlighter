@@ -151,7 +151,6 @@ fn top_level_demands_anchor(pat: &Pattern, needs: &HashSet<String>) -> bool {
         | Pattern::NotPredicate { inner, .. }
         | Pattern::AndPredicate { inner, .. }
         | Pattern::Capture { inner, .. }
-        | Pattern::Lenient { inner, .. }
         | Pattern::InferBoundaryCatch { inner, .. } => top_level_demands_anchor(inner, needs),
         Pattern::Catch {
             inner, recovery, ..
@@ -196,7 +195,6 @@ fn describe_top_level_demand(pat: &Pattern, needs: &HashSet<String>) -> Option<S
         | Pattern::NotPredicate { inner, .. }
         | Pattern::AndPredicate { inner, .. }
         | Pattern::Capture { inner, .. }
-        | Pattern::Lenient { inner, .. }
         | Pattern::InferBoundaryCatch { inner, .. } => describe_top_level_demand(inner, needs),
         Pattern::Catch {
             inner, recovery, ..
@@ -273,7 +271,6 @@ fn rewrite(
         | Pattern::NotPredicate { inner, .. }
         | Pattern::AndPredicate { inner, .. }
         | Pattern::Capture { inner, .. }
-        | Pattern::Lenient { inner, .. }
         | Pattern::InferBoundaryCatch { inner, .. } => rewrite(inner, anchor, needs, rule, fresh),
         Pattern::Catch {
             inner, recovery, ..
@@ -562,7 +559,6 @@ mod tests {
             | Pattern::NotPredicate { inner, .. }
             | Pattern::AndPredicate { inner, .. }
             | Pattern::Capture { inner, .. }
-            | Pattern::Lenient { inner, .. }
             | Pattern::InferBoundaryCatch { inner, .. } => contains_indent_op(inner),
             Pattern::Catch {
                 inner, recovery, ..

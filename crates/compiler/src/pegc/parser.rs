@@ -148,9 +148,8 @@ struct ParsedRule {
     name_byte: usize,
     body_byte_start: usize,
     body_byte_end: usize,
-    /// The rule body, with `Pattern::Lenient` already wrapped when the
-    /// rule was ascribed `partial`. `NonTerminal` names are still the
-    /// authored short names; resolution rewrites them to flat keys.
+    /// The rule body. `NonTerminal` names are still the authored short
+    /// names; resolution rewrites them to flat keys.
     body: Pattern,
     atomic: bool,
     percent: bool,
@@ -212,9 +211,9 @@ impl Grammar {
     ///    via [`resolve_inferred_boundaries`] — synthesizes each
     ///    boundary from FOLLOW.
     /// 2. Run [`lint_partial_match`]; any finding is a fatal
-    ///    `CompileError::PartialMatchLeniency`. Anchor real bugs with
-    ///    `^^lbl B` (or `^^lbl`); mark intentional leniency with the
-    ///    `name: partial` ascription at the rule definition.
+    ///    `CompileError::PartialMatchLeniency`. Resolve a flagged call by
+    ///    anchoring the rule to its FOLLOW (`^&lbl`, or `^^lbl B` / `^^lbl`
+    ///    when recovery is also wanted) or restructuring the rule.
     /// 3. Inject auto-ignore calls into every non-atomic rule's body
     ///    (no-op when the grammar has no `ignore` rule).
     /// 4. Wrap `root`'s body with `ignore? body ignore? !.` (the
@@ -378,9 +377,6 @@ impl<'a> Parser<'a> {
         // contextual — recognized only in this slot, usable as ordinary
         // rule names / references everywhere else.
         //
-        // - `partial` declares every call to the rule intentionally
-        //   lenient, suppressing `lint_partial_match` findings at its
-        //   call sites; the body is wrapped in `Pattern::Lenient`.
         // - `atomic` opts the rule out of `ignore` auto-insertion.
         // - `reserved` implies `atomic` and appends a `boundary` call
         //   inside the rule's terminal captures; its literals seed the
@@ -388,13 +384,11 @@ impl<'a> Parser<'a> {
         // - `preferred` is the sibling of `reserved` whose literals feed
         //   `preferred` instead and stay identifier-eligible.
         //
-        // `atomic` / `reserved` / `preferred` are mutually exclusive;
-        // `partial` composes with any and, when present, must be first.
+        // `atomic` / `reserved` / `preferred` are mutually exclusive.
         let name_span = self.span();
         let name_byte = self.pos;
         let name = self.parse_ident()?;
         self.skip_ws();
-        let mut lenient_span: Option<Span> = None;
         let mut definition_atomic = false;
         let mut definition_percent = false;
         let mut definition_preferred = false;
@@ -406,21 +400,8 @@ impl<'a> Parser<'a> {
                 if !matches!(self.peek(), Some(c) if is_ident_start(c)) {
                     break;
                 }
-                let kw_span = self.span();
                 let kw = self.parse_ident()?;
                 match kw.as_str() {
-                    "partial" => {
-                        if lenient_span.is_some() {
-                            return Err(self.err("duplicate `partial` ascription".into()));
-                        }
-                        if definition_atomic || definition_percent {
-                            return Err(self.err(
-                                "`partial` must come before `atomic` / `reserved` / `preferred`"
-                                    .into(),
-                            ));
-                        }
-                        lenient_span = Some(kw_span);
-                    }
                     "atomic" | "reserved" | "preferred" => {
                         if definition_atomic || definition_percent {
                             return Err(self.err(
@@ -434,7 +415,7 @@ impl<'a> Parser<'a> {
                     }
                     other => {
                         return Err(self.err(format!(
-                            "unknown ascription `{other}`; expected `partial`, `atomic`, \
+                            "unknown ascription `{other}`; expected `atomic`, \
                              `reserved`, or `preferred`"
                         )));
                     }
@@ -443,25 +424,18 @@ impl<'a> Parser<'a> {
             }
             if count == 0 {
                 return Err(self.err(
-                    "`:` must be followed by at least one ascription (`partial`, \
-                     `atomic`, `reserved`, `preferred`)"
+                    "`:` must be followed by at least one ascription (`atomic`, \
+                     `reserved`, `preferred`)"
                         .into(),
                 ));
             }
         }
-        let definition_lenient = lenient_span.is_some();
         self.skip_ws();
         self.expect_str("=")?;
         self.skip_ws();
         let body_byte_start = self.pos;
-        let mut body = self.parse_choice()?;
+        let body = self.parse_choice()?;
         let body_byte_end = self.pos;
-        if let Some(span) = lenient_span {
-            body = Pattern::Lenient {
-                inner: Box::new(body),
-                span,
-            };
-        }
         // `reserved` and `preferred` are compiler-generated (see
         // `synthesize_reserved_preferred`); an author definition would be
         // silently overwritten, so reject it outright. Grammars may still
@@ -478,7 +452,7 @@ impl<'a> Parser<'a> {
         // compiler, so every ascription is meaningless on them and
         // rejected. Disabling whitespace auto-insertion is done by
         // omitting `ignore`, not by ascribing it.
-        if (definition_atomic || definition_percent || definition_preferred || definition_lenient)
+        if (definition_atomic || definition_percent || definition_preferred)
             && (name == IGNORE_RULE || name == BOUNDARY_RULE)
         {
             let disable_hint = if name == IGNORE_RULE {
@@ -488,7 +462,7 @@ impl<'a> Parser<'a> {
                 ""
             };
             return Err(self.err(format!(
-                "the `{name}` rule cannot carry an ascription (`partial`, `atomic`, \
+                "the `{name}` rule cannot carry an ascription (`atomic`, \
                  `reserved`, `preferred`){disable_hint}"
             )));
         }
@@ -543,10 +517,7 @@ impl<'a> Parser<'a> {
             atomic: definition_atomic,
             percent: definition_percent,
             preferred: definition_preferred,
-            has_ascription: definition_atomic
-                || definition_percent
-                || definition_preferred
-                || definition_lenient,
+            has_ascription: definition_atomic || definition_percent || definition_preferred,
             children,
         })
     }
@@ -720,7 +691,6 @@ impl<'a> Parser<'a> {
             | Pattern::NotPredicate { inner, .. }
             | Pattern::AndPredicate { inner, .. }
             | Pattern::Capture { inner, .. }
-            | Pattern::Lenient { inner, .. }
             | Pattern::InferBoundaryCatch { inner, .. } => Self::rewrite_refs(inner, stack),
             Pattern::Catch {
                 inner, recovery, ..

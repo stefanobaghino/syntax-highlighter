@@ -820,14 +820,6 @@ fn inferred_vs_explicit_no_ambiguity() {
     );
 }
 
-// ---- Partial ascription (definition-level only) ---------------
-//
-// Definition-level `name: partial = body` parsing is verified
-// end-to-end by the `partial_ascription_*` tests in
-// `tests/compiler_tests.rs`. A call-site leniency form was considered
-// during design and dropped before landing: empirically zero shipped
-// grammars used it after the pivot to definition-level marking.
-
 #[test]
 fn catch_accepts_underscore_prefixed_labels() {
     // `_foo` (underscore prefix, not bare `_`) stays a valid label.
@@ -1179,19 +1171,6 @@ fn end_to_end_inferred_catch_clean_input_no_recovery() {
         .filter(|c| prog.capture_kinds[c.kind.0 as usize] == "recovery")
         .count();
     assert_eq!(recovery_captures, 0, "clean input should emit no recovery");
-}
-
-#[test]
-fn end_to_end_lenient_marker_is_runtime_transparent() {
-    use syntax_highlighter::pegvm::VM;
-    // The marker rides a non-special helper rule — `root` (like
-    // `ignore` / `boundary`) rejects every ascription.
-    let plain = parse("root = r {\nr = 'x'+\n}").compile().unwrap();
-    let lenient = parse("root = r {\nr: partial = 'x'+\n}").compile().unwrap();
-    assert_eq!(plain.code, lenient.code, "`partial` is runtime-transparent");
-    let r = VM::new(&lenient.code, b"xxx").run();
-    assert!(r.complete);
-    assert_eq!(r.matched, 3);
 }
 
 #[test]

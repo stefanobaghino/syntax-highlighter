@@ -1918,74 +1918,6 @@ fn lint_partial_match_real_sqlite_grammar_unanchored_aliased_expr_flagged() {
     );
 }
 
-// ---- Partial ascription (name: partial = body) ---------------
-
-#[test]
-fn partial_ascription_wraps_rule_body() {
-    // `name: partial = body` parses the body with a top-level
-    // `Pattern::Lenient` wrap, exposing the intent to the lint. The
-    // ascription rides a non-root child (the top-level root rejects
-    // every ascription), so `r` nests under `root`.
-    let g = parse("root = r {\nr: partial = 'a'?\n}").expect("parse");
-    assert_eq!(
-        g.rules["r"].strip_spans(),
-        Pattern::lenient(Pattern::optional(Pattern::literal("a"))),
-    );
-}
-
-#[test]
-fn partial_must_precede_main_ascription() {
-    // `partial` composes with `atomic` / `reserved` / `preferred` but
-    // must be written first; the reversed order is a parse error. The
-    // ascription rides a non-root child (the top-level root rejects
-    // every ascription).
-    parse("root = r {\nr: partial atomic = 'a'\n}").expect("partial-first order parses");
-    let err =
-        parse("root = r {\nr: atomic partial = 'a'\n}").expect_err("partial after main must error");
-    assert!(
-        err.message.contains("`partial` must come before"),
-        "unexpected error: {}",
-        err.message
-    );
-}
-
-#[test]
-fn definition_lenient_suppresses_lint_at_every_call_site() {
-    // Use the shape the lint reliably flags: a top-level bare `*^`
-    // (byte-by-byte recovery) loop calling a trailing-Optional rule. The
-    // bare skip is not a clean resync, so leg 2 leaves it flagged.
-    let unmarked = parse("root = (r)*^ {\nr = 'x' 'y'?\n}").expect("parse unmarked");
-    assert!(
-        lint_partial_match(&unmarked)
-            .iter()
-            .any(|f| f.rule == "r" && f.caller == "root"),
-        "baseline: unmarked grammar should flag r"
-    );
-
-    let marked = parse("root = (r)*^ {\nr: partial = 'x' 'y'?\n}").expect("parse marked");
-    let findings = lint_partial_match(&marked);
-    assert!(
-        !findings.iter().any(|f| f.rule == "r"),
-        "definition-level `r: partial` should suppress all r-related findings, got: {findings:?}"
-    );
-}
-
-#[test]
-fn definition_lenient_marker_is_runtime_transparent() {
-    // The `name: partial =` wrap compiles to the same bytecode as the
-    // bare form. The marker rides a non-special helper rule — `root`
-    // (like `ignore` / `boundary`) rejects every ascription.
-    let plain = parse("root = r {\nr = 'x'+\n}")
-        .expect("parse plain")
-        .compile()
-        .expect("compile plain");
-    let marked = parse("root = r {\nr: partial = 'x'+\n}")
-        .expect("parse marked")
-        .compile()
-        .expect("compile marked");
-    assert_eq!(plain.code, marked.code);
-}
-
 // ---- Compile-fatal lint integration ---------------------------
 
 #[test]
@@ -2003,13 +1935,6 @@ fn compile_errors_on_partial_match_leniency() {
         }
         other => panic!("expected PartialMatchLeniency, got: {other:?}"),
     }
-}
-
-#[test]
-fn compile_succeeds_with_definition_lenient_on_flagged_rule() {
-    let g = parse("root = (r)*^ {\nr: partial = 'x' 'y'?\n}").expect("parse");
-    g.compile()
-        .expect("compile should succeed with definition-level `r: partial`");
 }
 
 #[test]
@@ -2341,11 +2266,11 @@ fn ascription_on_special_rule_is_rejected() {
     // The three special rules — the start rule `root` and the two
     // auto-insertion targets `ignore` (whitespace) and `boundary` (word
     // boundary) — are structural slots, not lexable tokens: every
-    // ascription (`partial`, `atomic`, `reserved`, `preferred`) is
-    // rejected on all of them. Disabling whitespace auto-insertion is
-    // done by omitting `ignore`, not by ascribing it.
+    // ascription (`atomic`, `reserved`, `preferred`) is rejected on all
+    // of them. Disabling whitespace auto-insertion is done by omitting
+    // `ignore`, not by ascribing it.
     for name in ["root", "ignore", "boundary"] {
-        for asc in ["partial", "atomic", "reserved", "preferred"] {
+        for asc in ["atomic", "reserved", "preferred"] {
             let src = format!("{name}: {asc} = 'a'");
             let err = parse(&src).expect_err("an ascription on a special rule must error");
             assert!(
@@ -2361,23 +2286,6 @@ fn ascription_on_special_rule_is_rejected() {
             );
         }
     }
-}
-
-#[test]
-fn partial_composes_with_reserved() {
-    // `partial reserved` combines the leniency marker with the
-    // reserved-word ascription (partial written first).
-    let src =
-        "root = r {\nignore = (\\s)*\nboundary = !'x'\nr: partial reserved = @keyword 'if'\n}";
-    let g = parse(src).unwrap_or_else(|e| panic!("parse {src:?}: {}", e.message));
-    assert!(
-        g.percent_rules.contains("r"),
-        "{src:?} should mark r percent"
-    );
-    assert!(
-        matches!(g.rules["r"], Pattern::Lenient { .. }),
-        "{src:?} should wrap r in Lenient"
-    );
 }
 
 #[test]

@@ -102,8 +102,6 @@ pub(crate) fn pattern_nullable(pat: &Pattern, nullable: &HashSet<String>) -> boo
         // "matches empty after success" path — nullability follows
         // inner.
         Pattern::Catch { inner, .. } => pattern_nullable(inner, nullable),
-        // `~` is runtime-transparent.
-        Pattern::Lenient { inner, .. } => pattern_nullable(inner, nullable),
         // Pre-resolution placeholder for `^^lbl`. Nullability follows
         // inner just like `Catch` — the eventual recovery body
         // `(!B .)*` is always nullable but only contributes on
@@ -170,7 +168,6 @@ fn collect_first_calls(pat: &Pattern, nullable: &HashSet<String>, out: &mut Hash
             collect_first_calls(inner, nullable, out);
             collect_first_calls(recovery, nullable, out);
         }
-        Pattern::Lenient { inner, .. } => collect_first_calls(inner, nullable, out),
         // Pre-resolution placeholder for `^^lbl`. Only the inner can
         // route a first-call edge — the synthesized recovery
         // `(!B .)*` has no non-terminals other than B, and the
@@ -373,9 +370,6 @@ fn pattern_first(pat: &Pattern, nullable: &HashSet<String>) -> FollowSet {
             // in FIRST.
             out.extend(pattern_first(inner, nullable));
         }
-        Pattern::Lenient { inner, .. } => {
-            out.extend(pattern_first(inner, nullable));
-        }
         // Pre-resolution placeholder for `^^lbl`. The eventual recovery
         // body `(!B .)*` fires only on failure (same as Catch) so it
         // doesn't appear in FIRST; only the inner does.
@@ -512,9 +506,6 @@ fn collect_follow(
             // for cross-check).
             collect_follow(inner, nullable, trailing, follow, changed);
             collect_follow(recovery, nullable, trailing, follow, changed);
-        }
-        Pattern::Lenient { inner, .. } => {
-            collect_follow(inner, nullable, trailing, follow, changed);
         }
         // Pre-resolution placeholder for `^^lbl`. Treat like `Catch`'s
         // success arm: inner inherits the catch's trailing. The
@@ -850,9 +841,6 @@ fn trailing_first(pat: &Pattern, nullable: &HashSet<String>) -> FollowSet {
         Pattern::Catch { inner, .. } => {
             out.extend(trailing_first(inner, nullable));
         }
-        // Definition-level `name: partial` opts the rule out of being a flag
-        // target: its `trailing_first` is empty regardless of body shape.
-        Pattern::Lenient { .. } => {}
         _ => {}
     }
     out
@@ -965,13 +953,6 @@ fn walk_for_call_sites<'a>(
                 ctx,
                 findings,
             );
-        }
-        // `Lenient` at a rule's body root makes the rule's `trailing_first`
-        // empty — so the rule never appears as a flag target. The walker
-        // still descends transparently to find unrelated unguarded calls
-        // the lenient rule's body may itself contain.
-        Pattern::Lenient { inner, .. } => {
-            walk_for_call_sites(inner, caller, continuations, absorber, ctx, findings);
         }
         // The resolver runs before the lint, so the lint should
         // never see an unresolved boundary-anchored catch.
@@ -1207,19 +1188,6 @@ fn find_callsite_unguarded<'a>(
                 found_callsite,
             )
         }
-        // Propagation walks through the lenient marker transparently;
-        // the marker only suppresses the IMMEDIATE call's flag (handled
-        // in `walk_for_call_sites`), not deeper detection or outward
-        // propagation from nested rules' leniency.
-        Pattern::Lenient { inner, .. } => find_callsite_unguarded(
-            inner,
-            probe,
-            continuations,
-            absorber,
-            ctx,
-            visited_callers,
-            found_callsite,
-        ),
         Pattern::InferBoundaryCatch { .. } => {
             unreachable!(
                 "Pattern::InferBoundaryCatch must be resolved by \
@@ -1545,12 +1513,6 @@ fn resolve_in_pattern(
             )?),
             span: *span,
         }),
-        Pattern::Lenient { inner, span } => Ok(Pattern::Lenient {
-            inner: Box::new(resolve_in_pattern(
-                inner, trailing, nullable, first, rule_name,
-            )?),
-            span: *span,
-        }),
         Pattern::Catch {
             inner,
             label,
@@ -1779,8 +1741,7 @@ pub fn tally_non_terminal_refs(pat: &Pattern, out: &mut HashMap<String, usize>) 
         | Pattern::Optional { inner, .. }
         | Pattern::NotPredicate { inner, .. }
         | Pattern::AndPredicate { inner, .. }
-        | Pattern::Capture { inner, .. }
-        | Pattern::Lenient { inner, .. } => tally_non_terminal_refs(inner, out),
+        | Pattern::Capture { inner, .. } => tally_non_terminal_refs(inner, out),
         Pattern::Catch {
             inner, recovery, ..
         } => {
@@ -1818,8 +1779,7 @@ fn collect_non_terminal_refs(pat: &Pattern, out: &mut HashSet<String>) {
         | Pattern::Optional { inner, .. }
         | Pattern::NotPredicate { inner, .. }
         | Pattern::AndPredicate { inner, .. }
-        | Pattern::Capture { inner, .. }
-        | Pattern::Lenient { inner, .. } => collect_non_terminal_refs(inner, out),
+        | Pattern::Capture { inner, .. } => collect_non_terminal_refs(inner, out),
         Pattern::Catch {
             inner, recovery, ..
         } => {
@@ -1851,8 +1811,7 @@ fn body_contains_catch(pat: &Pattern) -> bool {
         | Pattern::Optional { inner, .. }
         | Pattern::NotPredicate { inner, .. }
         | Pattern::AndPredicate { inner, .. }
-        | Pattern::Capture { inner, .. }
-        | Pattern::Lenient { inner, .. } => body_contains_catch(inner),
+        | Pattern::Capture { inner, .. } => body_contains_catch(inner),
     }
 }
 
@@ -1878,7 +1837,7 @@ fn auto_insertion_active(grammar: &Grammar) -> bool {
 /// recurse the runtime indefinitely.
 ///
 /// The walker descends transparently through `Choice`, `Optional`,
-/// `Capture`, `Catch`, `Lenient`, `AndPredicate`, `NotPredicate`, and
+/// `Capture`, `Catch`, `AndPredicate`, `NotPredicate`, and
 /// stops at `NonTerminal` and the atom leaves (`Literal`, `CharClass`,
 /// `AnyChar`). Crossing a `NonTerminal` would pull ignore into the
 /// callee's body — which the callee handles by its own auto-insertion
@@ -1952,8 +1911,7 @@ fn inject_ignore_in(pat: &mut Pattern) {
         Pattern::Optional { inner, .. }
         | Pattern::NotPredicate { inner, .. }
         | Pattern::AndPredicate { inner, .. }
-        | Pattern::Capture { inner, .. }
-        | Pattern::Lenient { inner, .. } => inject_ignore_in(inner),
+        | Pattern::Capture { inner, .. } => inject_ignore_in(inner),
         Pattern::Catch {
             inner, recovery, ..
         } => {
@@ -2089,8 +2047,7 @@ fn contains_capture(pat: &Pattern) -> bool {
         | Pattern::RepeatOne { inner, .. }
         | Pattern::Optional { inner, .. }
         | Pattern::NotPredicate { inner, .. }
-        | Pattern::AndPredicate { inner, .. }
-        | Pattern::Lenient { inner, .. } => contains_capture(inner),
+        | Pattern::AndPredicate { inner, .. } => contains_capture(inner),
         Pattern::Catch {
             inner, recovery, ..
         } => contains_capture(inner) || contains_capture(recovery),
@@ -2269,9 +2226,7 @@ fn keyword_entries(
             Some(vec![s.chars().map(CharSet::singleton).collect()])
         }
         Pattern::CharClass { set, .. } => Some(vec![vec![set.clone()]]),
-        Pattern::Capture { inner, .. } | Pattern::Lenient { inner, .. } => {
-            keyword_entries(inner, rules, visiting)
-        }
+        Pattern::Capture { inner, .. } => keyword_entries(inner, rules, visiting),
         Pattern::OrderedChoice { alts, .. } => {
             let mut out = Vec::new();
             for a in alts {
@@ -2438,8 +2393,7 @@ mod tests {
             | Pattern::Optional { inner, .. }
             | Pattern::NotPredicate { inner, .. }
             | Pattern::AndPredicate { inner, .. }
-            | Pattern::Capture { inner, .. }
-            | Pattern::Lenient { inner, .. } => count_boundary(inner),
+            | Pattern::Capture { inner, .. } => count_boundary(inner),
             Pattern::Catch {
                 inner, recovery, ..
             } => count_boundary(inner) + count_boundary(recovery),
