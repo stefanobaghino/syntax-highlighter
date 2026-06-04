@@ -47,19 +47,16 @@ root = body {
   Defining it is only required when the grammar has at least one
   `reserved` rule.
 - Rules may carry postfix **ascriptions** between the name and `=`,
-  `name: kw [kw ...] =`: `partial` (the intentional-leniency marker),
-  `atomic` (no `ignore` injected inside this rule's body), `reserved`
-  (atomic *and* appends a trailing `boundary` call inside the rule's terminal
-  captures), and `preferred` (a sibling of `reserved` for
-  identifier-eligible distinguished tokens). The keywords are
-  *contextual* — special only in this slot, usable as ordinary rule
-  names elsewhere. `atomic` / `reserved` / `preferred` are mutually
-  exclusive (each makes a rule atomic); `partial` composes with any and,
-  when present, must be written first (`name: partial atomic =`). The
-  root rule and the special rules `ignore` and `boundary` carry no
-  ascriptions at all (any ascription on them is a parse error);
-  whitespace auto-insertion is disabled by omitting `ignore`, not by
-  ascribing it.
+  `name: kw [kw ...] =`: `atomic` (no `ignore` injected inside this
+  rule's body), `reserved` (atomic *and* appends a trailing `boundary`
+  call inside the rule's terminal captures), and `preferred` (a sibling
+  of `reserved` for identifier-eligible distinguished tokens). The
+  keywords are *contextual* — special only in this slot, usable as
+  ordinary rule names elsewhere. `atomic` / `reserved` / `preferred` are
+  mutually exclusive (each makes a rule atomic). The root rule and the
+  special rules `ignore` and `boundary` carry no ascriptions at all (any
+  ascription on them is a parse error); whitespace auto-insertion is
+  disabled by omitting `ignore`, not by ascribing it.
 - Two special rules, **`reserved`** and **`preferred`**, are
   *synthesized* by the compiler from the `reserved` / `preferred` rules
   (see below) — a grammar references them (`!reserved`) but never
@@ -111,12 +108,14 @@ postfix    p*      p+      p?      p{n}    p*^     p+^     p*^[cs]   p+^[cs]
 prefix     !p      &p
 sequence   p1 p2 p3          (juxtaposition)
 catch      p1 ^label p2      p1 ^^label B      p1 ^^label
+anchor     seq $
 choice     p1 / p2 / p3
 ```
 
-Rule definitions may carry a `name: partial =` ascription to mark
-the whole rule as intentionally lenient — see
-[`name: partial`](#name-partial--intentional-leniency-ascription) below.
+The postfix `$` pins the whole preceding sequence to its FOLLOW with a
+bare lookahead and synthesizes no recovery branch. It's a sequence-level
+postfix (binds looser than `*`/`?`), and it takes no label — see
+[Anchor-only inferred boundary](#anchor-only-inferred-boundary) below.
 
 ### Atoms
 
@@ -545,35 +544,48 @@ only `..=`, not `..` — the catch necessarily consumes its boundary,
 and `^^lbl .. B` would diverge from the standalone `..` non-consuming
 meaning. The parser rejects it with a hint pointing at `..=`.
 
-### `name: partial` — intentional-leniency ascription
+### Anchor-only inferred boundary
 
-The static `lint_partial_match` check flags trailing-nullable rules
-called unanchored — but on shipped grammars almost every flag is a
-"partial-match leniency intentionally absorbed by outer `*^`-style
-recovery" that the static analysis can't statically prove safe. The
-`partial` ascription is the author's intent signal: "yes, this rule's
-leniency is known, don't flag any call to it." Wraps the rule's body
-in `Pattern::Lenient`, which the lint walker treats as an opaque
-barrier and the compiler treats as transparent (emits the inner's
-bytecode unchanged).
+The postfix `$` is the cheap member of the boundary family. Like the
+FOLLOW-inferred `^^lbl`, it synthesizes the boundary `B` from the
+sequence's call-site FOLLOW (terminal-expanded), but it lowers to a bare
+`Sequence([SEQ, &B])` with **no** recovery `Catch`:
 
 ```peg
-opt_semi: partial = (@punctuation ';' ws)?
+SEQ $
+# lowers to
+SEQ &B            # B = terminal-expanded FOLLOW(rule)
 ```
 
-Whether the runtime invariant the ascription assumes — typically an
-outer `*^` / `*^[;]` / `^block_close` recovery scope absorbing the
-leniency — actually holds is currently a convention recorded in
-adjacent comments and unenforced by the lint; see `#113` for the
-planned tightening.
+`$` binds the whole preceding sequence (it parses at the catch level, not
+the atom level, so it's looser than `*`/`?`), and it carries no label.
+
+A prefix-only match of `SEQ` fails the `&B` lookahead and backtracks to
+the caller's next ordered-choice alternative. On a speculative
+expression alternative that is exactly what's wanted — a recovery `Catch`
+there would turn every backtrack into a skip-to-boundary scan, which is
+ruinous on hot rules; the bare lookahead is backtrack-cheap. Well-formed
+input always has a legal follower, so `&B` succeeds and the rule is
+unaffected (no recovery capture).
+
+This is the leniency-lint discharge of choice when no recovery branch is
+wanted. It also covers the ASI case (`opt_semi = ';'? $`): the follower
+set *is* the boundary, so the optional `;` needs nothing to anchor *to*.
+The placeholder `Pattern::InferBoundaryCatch { anchor_only: true, .. }` is
+resolved by `analysis::resolve_inferred_boundaries`; no new VM machinery.
+
+The partial-match leniency lint (`lint_partial_match`) flags a
+trailing-nullable rule called unanchored; resolve a flag by anchoring the
+rule to its FOLLOW (`$`, or `^^lbl B` / `^^lbl` when recovery is also
+wanted) or by restructuring it so the trailing optional can't win on a
+prefix. There is no opt-out ascription.
 
 ### Reserved rule names
 
 The grammar's entry rule and two rule *names* get compile-time
 treatment. All are structural slots the compiler wraps or injects, not
-lexable tokens, so none accepts an ascription — `partial` / `atomic` /
-`reserved` / `preferred` on the root rule, `ignore`, or `boundary` is a
-parse error.
+lexable tokens, so none accepts an ascription — `atomic` / `reserved` /
+`preferred` on the root rule, `ignore`, or `boundary` is a parse error.
 
 - **the root** — the single top-level declaration (conventionally
   named `root`); it is the entry by position, not by name. The
@@ -652,7 +664,7 @@ parse error.
 The `atomic` ascription opts the rule out of `ignore`
 auto-insertion: the rewriter walks the body but does not splice
 `ignore` between `Sequence` items or prepend one to `Repeat`
-iterations. `partial` composes with it (`name: partial atomic =`).
+iterations.
 
 ```peg
 string_lit: atomic = '"' (str_escape / !'"' .)* '"'
@@ -704,8 +716,7 @@ emits those longest-first so maximal munch still holds.)
 
 - Requires a `boundary` rule; with none defined, the synthesized
   `NonTerminal("boundary")` surfaces as `CompileError::UndefinedRule("boundary")`.
-- Composes with `partial` (written first); mutually exclusive with
-  `atomic` / `preferred`.
+- Mutually exclusive with `atomic` / `preferred`.
 - Rejected on the reserved rules `root` / `ignore` / `boundary`.
 
 ### `name: preferred` — preferred-word ascription
@@ -877,10 +888,9 @@ concrete use case.
   character-class range out of order, unknown escape.
 - **`CompileError`** — source is well-formed but semantically invalid.
   Examples: `NonTerminal("foo")` with no matching rule, a start rule
-  that doesn't exist, partial-match leniency on a call site that's
-  neither anchored (`^^lbl B`) nor explicitly marked intentional
-  (`name: partial`), an `^^lbl` whose call-site FOLLOW set is empty
-  so no boundary can be inferred.
+  that doesn't exist, partial-match leniency on a call site that is not
+  anchored to its FOLLOW (`$`, or `^^lbl B` / `^^lbl`), an inferred-boundary
+  anchor whose call-site FOLLOW set is empty so no boundary can be inferred.
 - **`Error`** — unified wrapper returned by `pegc::compile(source)`.
   `From<ParseError>` and `From<CompileError>` are provided.
 

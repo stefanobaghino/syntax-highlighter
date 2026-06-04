@@ -163,15 +163,6 @@ pub enum Pattern {
         recovery: Box<Pattern>,
         span: Span,
     },
-    /// Author-local marker that a pattern is intentionally lenient — the
-    /// `lint_partial_match` walker treats this as an opaque barrier and
-    /// does not descend into it for call-site detection. At runtime the
-    /// wrapper is transparent: the compiler emits exactly the inner
-    /// pattern's bytecode. Surface syntax: the `name: partial` ascription.
-    Lenient {
-        inner: Box<Pattern>,
-        span: Span,
-    },
     /// Boundary-anchored catch with the boundary inferred from the
     /// call site's FOLLOW set. Placeholder produced at parse time by
     /// the `^^lbl` surface form; resolved before bytecode emission by
@@ -182,9 +173,20 @@ pub enum Pattern {
     ///
     /// An `InferBoundaryCatch` should never reach the compiler or any
     /// downstream analysis — the resolver runs first and replaces it.
+    ///
+    /// When `anchor_only` is set (surface postfix `$`), the resolver
+    /// lowers it to a bare `Sequence([inner, AndPredicate(B)])` with
+    /// **no** recovery `Catch`: the rule is anchored to its FOLLOW
+    /// boundary so a prefix-only match fails and backtracks, but no
+    /// skip-to-boundary recovery scan is synthesized. This is the cheap,
+    /// speculative-safe anchor used to discharge the leniency lint without
+    /// the recovery-on-backtrack cost a `Catch` incurs. The `$` form
+    /// carries no label (the field is empty); only the recovery-bearing
+    /// `^^lbl` inferred form uses it.
     InferBoundaryCatch {
         inner: Box<Pattern>,
         label: String,
+        anchor_only: bool,
         span: Span,
     },
     /// A declarative indentation combinator — `deeper(outer) as i`,
@@ -238,7 +240,6 @@ impl Pattern {
             | Pattern::NonTerminal { span, .. }
             | Pattern::Capture { span, .. }
             | Pattern::Catch { span, .. }
-            | Pattern::Lenient { span, .. }
             | Pattern::InferBoundaryCatch { span, .. }
             | Pattern::IndentCombinator { span, .. }
             | Pattern::IndentOp { span, .. } => *span,
@@ -352,13 +353,6 @@ impl Pattern {
         }
     }
 
-    pub fn lenient(inner: Pattern) -> Pattern {
-        Pattern::Lenient {
-            inner: Box::new(inner),
-            span: Span::SYNTHETIC,
-        }
-    }
-
     /// Labeled catch — equivalent to `inner ^label recovery` in source.
     /// The label is a diagnostic tag flowed into `RecoveryDiagnostic` so
     /// `pegdb recoveries explain` can cluster firings by it.
@@ -438,13 +432,15 @@ impl Pattern {
                 recovery: Box::new(recovery.strip_spans()),
                 span: Span::SYNTHETIC,
             },
-            Pattern::Lenient { inner, .. } => Pattern::Lenient {
-                inner: Box::new(inner.strip_spans()),
-                span: Span::SYNTHETIC,
-            },
-            Pattern::InferBoundaryCatch { inner, label, .. } => Pattern::InferBoundaryCatch {
+            Pattern::InferBoundaryCatch {
+                inner,
+                label,
+                anchor_only,
+                ..
+            } => Pattern::InferBoundaryCatch {
                 inner: Box::new(inner.strip_spans()),
                 label: label.clone(),
+                anchor_only: *anchor_only,
                 span: Span::SYNTHETIC,
             },
             Pattern::IndentCombinator { op, arg, bind, .. } => Pattern::IndentCombinator {

@@ -15,10 +15,11 @@ pub enum CompileError {
     /// `Grammar::new`, which bypass the parser) whose map lacks a
     /// `"root"` entry.
     MissingRootRule,
-    /// One or more `^^lbl` catches have no following context to infer
-    /// their boundary from. Emitted by `resolve_inferred_boundaries`.
-    /// `span` is the source position of the `^^lbl` placeholder in the
-    /// grammar; rendered as `{line}:{col}:` in [`Display`].
+    /// An inferred-boundary anchor (`^^lbl` catch or postfix `$`) has no
+    /// following context to infer its boundary from. Emitted by
+    /// `resolve_inferred_boundaries`. `span` is the source position of the
+    /// placeholder; rendered as `{line}:{col}:` in [`Display`]. An empty
+    /// `label` marks the `$` form (which carries none).
     CannotInferBoundary {
         rule: String,
         label: String,
@@ -26,11 +27,11 @@ pub enum CompileError {
     },
     /// `lint_partial_match` returned a non-empty result. Each finding
     /// names a `(rule, caller)` pair where a trailing-nullable rule's
-    /// partial-match leniency reaches an unguarded scope. Anchor with
-    /// `^^lbl B` (or `^^lbl`) when the leniency is a bug, or mark the
-    /// rule `name: partial` when the leniency is intentional. Each
-    /// [`LintFinding`] carries the call-site's span so the rendered
-    /// message points directly at the unanchored call.
+    /// partial-match leniency reaches an unguarded scope. Anchor the rule
+    /// to its FOLLOW (`$`, or `^^lbl B` / `^^lbl` when recovery is also
+    /// wanted) or restructure it so the trailing optional can't win on a
+    /// prefix. Each [`LintFinding`] carries the call-site's span so the
+    /// rendered message points directly at the unanchored call.
     PartialMatchLeniency(Vec<LintFinding>),
     /// One or more literals are reachable from both a `reserved` rule and
     /// a `preferred` rule, so the synthesized `reserved` and `preferred`
@@ -75,6 +76,11 @@ impl std::fmt::Display for CompileError {
             CompileError::MissingRootRule => write!(
                 f,
                 "grammar must define an entry rule (the single top-level declaration)"
+            ),
+            CompileError::CannotInferBoundary { rule, label, span } if label.is_empty() => write!(
+                f,
+                "{span}: cannot infer a FOLLOW boundary for the `$` anchor in rule `{rule}`: \
+                 no following context. Either remove the anchor or restructure the rule."
             ),
             CompileError::CannotInferBoundary { rule, label, span } => write!(
                 f,
@@ -476,9 +482,6 @@ impl Compiler {
                 self.patch_jump(success_commit, done);
                 self.emit(Instruction::RecoverScopeEnd);
             }
-            // Transparent at runtime — the `~` marker affects only
-            // the lint walker. See `Pattern::Lenient` documentation.
-            Pattern::Lenient { inner, .. } => self.compile_pat(inner),
             // The FOLLOW-inferred resolver must run before bytecode
             // emission; reaching this arm is a bug.
             Pattern::InferBoundaryCatch { .. } => {
@@ -688,8 +691,7 @@ fn check_refs(
         | Pattern::Optional { inner, .. }
         | Pattern::NotPredicate { inner, .. }
         | Pattern::AndPredicate { inner, .. }
-        | Pattern::Capture { inner, .. }
-        | Pattern::Lenient { inner, .. } => check_refs(_rule, inner, rules, rule_params),
+        | Pattern::Capture { inner, .. } => check_refs(_rule, inner, rules, rule_params),
         Pattern::Catch {
             inner, recovery, ..
         } => {

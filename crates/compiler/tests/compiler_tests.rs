@@ -5,7 +5,8 @@ use syntax_highlighter::pegvm::{
     Capture, CaptureKind, CharSet, Instruction, Label, LabelId, MatchResult, MemoId, RuleKind, VM,
 };
 use syntax_highlighter_compiler::pegc::analysis::{
-    compute_follow, lint_partial_match, FollowElement, LintFinding, LintKind,
+    compute_follow, lint_partial_match, resolve_inferred_boundaries, FollowElement, LintFinding,
+    LintKind,
 };
 use syntax_highlighter_compiler::pegc::{compile_pattern, parse, Grammar, Pattern, Span};
 
@@ -1661,11 +1662,14 @@ fn lint_partial_match_validated_by_disjoint_consumer() {
 }
 
 #[test]
-fn lint_partial_match_absorbed_by_outer_catch_flagged() {
+fn lint_partial_match_clean_resync_catch_discharged() {
     // root = (a)*^[;]
     // a = 'x' 'y'?
-    // a's leniency at the call site is absorbed by the *^ recovery
-    // wrapper — exactly the PR #101 shape.
+    // a's leniency is absorbed by a *clean-resync* catch: the recovery
+    // skips to the `;` sync token, so a leak surfaces as a visible
+    // recovery span at the statement boundary rather than silent loss.
+    // Leg 2 (clean-resync dominator) discharges it — `a` is the whole
+    // iteration body, nothing meaningful sits between it and `;`.
     let mut rules = HashMap::new();
     let recovery_body = Pattern::repeat(Pattern::seq(vec![
         Pattern::not_predicate(Pattern::literal(";")),
@@ -1686,8 +1690,184 @@ fn lint_partial_match_absorbed_by_outer_catch_flagged() {
         ]),
     );
     let g = Grammar::new(rules);
+    assert!(
+        lint_partial_match(&g).is_empty(),
+        "clean-resync sync-set catch should discharge the leniency"
+    );
+}
+
+#[test]
+fn lint_partial_match_bare_skip_catch_flagged() {
+    // root = (a)*^
+    // a = 'x' 'y'?
+    // Same shape but the recovery is the bare byte-by-byte skip (`.`) of a
+    // plain `*^`: a leak is absorbed one byte at a time — exactly the PR
+    // #101 footgun (the partial match silently "succeeds"). Not a clean
+    // resync, so the call still flags.
+    let mut rules = HashMap::new();
+    let call_inside_catch = Pattern::repeat(Pattern::Catch {
+        inner: Box::new(Pattern::nt("a")),
+        label: "recovery".into(),
+        recovery: Box::new(Pattern::capture("recovery", Pattern::any_char())),
+        span: Span::SYNTHETIC,
+    });
+    rules.insert("root".into(), call_inside_catch);
+    rules.insert(
+        "a".into(),
+        Pattern::seq(vec![
+            Pattern::literal("x"),
+            Pattern::optional(Pattern::literal("y")),
+        ]),
+    );
+    let g = Grammar::new(rules);
     let findings = lint_partial_match(&g);
     assert_eq!(findings, vec![finding("a", "root")]);
+}
+
+#[test]
+fn lint_partial_match_clean_resync_nested_constituent_flagged() {
+    // root = (item)*^[;]
+    // item = c (',' c)*
+    // c    = 'x' 'y'?
+    // `c` sits *inside* `item`, with a meaningful `(',' c)*` tail before
+    // the `;` boundary — the minimized `aliased_expr` shape. A leak in `c`
+    // would let the sync-set swallow the remaining `, c` constituents, so
+    // the clean catch is too coarse here: leg 2 must keep `c` flagged
+    // (the fix is a constituent-level boundary, like sqlite's
+    // `^^bad_column`), even though the statement-level `item` discharges.
+    let mut rules = HashMap::new();
+    let catch = Pattern::repeat(Pattern::Catch {
+        inner: Box::new(Pattern::nt("item")),
+        label: "recovery".into(),
+        recovery: Box::new(Pattern::seq(vec![
+            Pattern::repeat(Pattern::seq(vec![
+                Pattern::not_predicate(Pattern::literal(";")),
+                Pattern::any_char(),
+            ])),
+            Pattern::literal(";"),
+        ])),
+        span: Span::SYNTHETIC,
+    });
+    rules.insert("root".into(), catch);
+    rules.insert(
+        "item".into(),
+        Pattern::seq(vec![
+            Pattern::nt("c"),
+            Pattern::repeat(Pattern::seq(vec![Pattern::literal(","), Pattern::nt("c")])),
+        ]),
+    );
+    rules.insert(
+        "c".into(),
+        Pattern::seq(vec![
+            Pattern::literal("x"),
+            Pattern::optional(Pattern::literal("y")),
+        ]),
+    );
+    let g = Grammar::new(rules);
+    let findings = lint_partial_match(&g);
+    assert!(
+        findings.iter().any(|f| f.rule == "c" && f.caller == "item"),
+        "nested constituent with a meaningful tail must stay flagged: {findings:?}"
+    );
+}
+
+#[test]
+fn anchor_only_inferred_lowers_to_bare_and_predicate_not_catch() {
+    // Postfix `$` lowers to `Seq([inner, &B])` — a bare FOLLOW anchor with
+    // no recovery catch — distinct from `^^lbl`, which wraps the body in a
+    // `Catch`. The cheap backtrack-on-failure of the bare `&B` is what
+    // makes the anchor safe in speculative positions a recovery scan would
+    // blow up.
+    let mut g = parse("root = 'a' ('b')? $\n").expect("anchored parses");
+    resolve_inferred_boundaries(&mut g).expect("boundaries resolve");
+    match &g.rules["root"] {
+        Pattern::Sequence { items, .. } => {
+            assert!(
+                matches!(items.last(), Some(Pattern::AndPredicate { .. })),
+                "anchored body ends in `&B`: {:?}",
+                g.rules["root"]
+            );
+            assert!(
+                !matches!(items.first(), Some(Pattern::Catch { .. })),
+                "anchor-only must not synthesize a Catch: {:?}",
+                g.rules["root"]
+            );
+        }
+        other => panic!("expected `Seq([inner, &B])`, got {other:?}"),
+    }
+}
+
+#[test]
+fn lint_partial_match_real_sqlite_grammar_function_call_anchored() {
+    // The shipped grammar anchors `function_call` with a postfix `$`: its
+    // trailing `(filter_clause)? (kw_over window_ref)?` optionals are
+    // pinned to the expression FOLLOW, so the speculative call from
+    // `primary` is discharged. Stripping the anchor re-exposes the
+    // prefix-leniency footgun, so the lint must flag it.
+    let source = std::fs::read_to_string(workspace_root().join("grammars/sqlite.peg"))
+        .expect("sqlite.peg fixture present");
+
+    let mut anchored = parse(&source).expect("sqlite.peg parses");
+    resolve_inferred_boundaries(&mut anchored).expect("boundaries resolve");
+    assert!(
+        !lint_partial_match(&anchored)
+            .iter()
+            .any(|f| f.rule == "function_call"),
+        "function_call is anchored; should not be flagged"
+    );
+
+    // `(kw_over window_ref)? $` is unique to function_call — strip just
+    // that anchor, leaving the other rules' `$` in place.
+    let stripped_src = source.replace("(kw_over window_ref)? $", "(kw_over window_ref)?");
+    assert!(
+        stripped_src != source,
+        "expected to strip function_call's `$` anchor from the fixture"
+    );
+    let mut stripped = parse(&stripped_src).expect("stripped grammar parses");
+    resolve_inferred_boundaries(&mut stripped).expect("boundaries resolve");
+    assert!(
+        lint_partial_match(&stripped)
+            .iter()
+            .any(|f| f.rule == "function_call"),
+        "function_call must flag once the anchor is stripped"
+    );
+}
+
+#[test]
+fn lint_partial_match_real_go_grammar_opt_semi_anchored() {
+    // `opt_semi = ';'? $` is a *nullable* body: without the trailing-`&B`
+    // precision in `trailing_first`, the reverse tail-walk would still see
+    // the `';'?` and flag it. The anchor pins it to the statement-follower
+    // FOLLOW (the ASI boundary), discharging it; strip the anchor and the
+    // leniency lint flags it again.
+    let source = std::fs::read_to_string(workspace_root().join("grammars/go.peg"))
+        .expect("go.peg fixture present");
+
+    let mut anchored = parse(&source).expect("go.peg parses");
+    resolve_inferred_boundaries(&mut anchored).expect("boundaries resolve");
+    assert!(
+        !lint_partial_match(&anchored)
+            .iter()
+            .any(|f| f.rule == "opt_semi"),
+        "opt_semi is anchored; should not be flagged"
+    );
+
+    let stripped_src = source.replace(
+        "opt_semi = @punctuation ';'? $",
+        "opt_semi = @punctuation ';'?",
+    );
+    assert!(
+        stripped_src != source,
+        "expected to strip opt_semi's `$` anchor from the fixture"
+    );
+    let mut stripped = parse(&stripped_src).expect("stripped grammar parses");
+    resolve_inferred_boundaries(&mut stripped).expect("boundaries resolve");
+    assert!(
+        lint_partial_match(&stripped)
+            .iter()
+            .any(|f| f.rule == "opt_semi"),
+        "nullable opt_semi must flag once the anchor is stripped"
+    );
 }
 
 #[test]
@@ -1697,7 +1877,10 @@ fn lint_partial_match_real_sqlite_grammar_aliased_expr_anchored() {
     // must not flag aliased_expr → result_column.
     let source = std::fs::read_to_string(workspace_root().join("grammars/sqlite.peg"))
         .expect("sqlite.peg fixture present");
-    let g = parse(&source).expect("sqlite.peg parses");
+    let mut g = parse(&source).expect("sqlite.peg parses");
+    // The lint runs after boundary resolution (the `^^lbl` catches the
+    // grammar now carries must be lowered first).
+    resolve_inferred_boundaries(&mut g).expect("boundaries resolve");
     let findings = lint_partial_match(&g);
     let bad = findings
         .iter()
@@ -1716,10 +1899,12 @@ fn lint_partial_match_real_sqlite_grammar_unanchored_aliased_expr_flagged() {
     let source = std::fs::read_to_string(workspace_root().join("grammars/sqlite.peg"))
         .expect("sqlite.peg fixture present");
     let mut g = parse(&source).expect("sqlite.peg parses");
-    // Replace result_column's body with an unanchored version. Under
-    // lexical scoping `table_star` / `aliased_expr` nest inside
-    // `result_column`, so their flat keys are the mangled
+    // Resolve the grammar's `^^lbl` catches first (the lint's
+    // precondition), then replace result_column's body with an unanchored
+    // version. Under lexical scoping `table_star` / `aliased_expr` nest
+    // inside `result_column`, so their flat keys are the mangled
     // `result_column::…` names — reference those so the choice resolves.
+    resolve_inferred_boundaries(&mut g).expect("boundaries resolve");
     g.rules.insert(
         "result_column".into(),
         Pattern::choice(vec![
@@ -1738,79 +1923,13 @@ fn lint_partial_match_real_sqlite_grammar_unanchored_aliased_expr_flagged() {
     );
 }
 
-// ---- Partial ascription (name: partial = body) ---------------
-
-#[test]
-fn partial_ascription_wraps_rule_body() {
-    // `name: partial = body` parses the body with a top-level
-    // `Pattern::Lenient` wrap, exposing the intent to the lint. The
-    // ascription rides a non-root child (the top-level root rejects
-    // every ascription), so `r` nests under `root`.
-    let g = parse("root = r {\nr: partial = 'a'?\n}").expect("parse");
-    assert_eq!(
-        g.rules["r"].strip_spans(),
-        Pattern::lenient(Pattern::optional(Pattern::literal("a"))),
-    );
-}
-
-#[test]
-fn partial_must_precede_main_ascription() {
-    // `partial` composes with `atomic` / `reserved` / `preferred` but
-    // must be written first; the reversed order is a parse error. The
-    // ascription rides a non-root child (the top-level root rejects
-    // every ascription).
-    parse("root = r {\nr: partial atomic = 'a'\n}").expect("partial-first order parses");
-    let err =
-        parse("root = r {\nr: atomic partial = 'a'\n}").expect_err("partial after main must error");
-    assert!(
-        err.message.contains("`partial` must come before"),
-        "unexpected error: {}",
-        err.message
-    );
-}
-
-#[test]
-fn definition_lenient_suppresses_lint_at_every_call_site() {
-    // Use the Catch-absorbed shape the lint reliably flags: a
-    // top-level `*^[;]` recovery loop calling a trailing-Optional rule.
-    let unmarked = parse("root = (r)*^[;] {\nr = 'x' 'y'?\n}").expect("parse unmarked");
-    assert!(
-        lint_partial_match(&unmarked)
-            .iter()
-            .any(|f| f.rule == "r" && f.caller == "root"),
-        "baseline: unmarked grammar should flag r"
-    );
-
-    let marked = parse("root = (r)*^[;] {\nr: partial = 'x' 'y'?\n}").expect("parse marked");
-    let findings = lint_partial_match(&marked);
-    assert!(
-        !findings.iter().any(|f| f.rule == "r"),
-        "definition-level `r: partial` should suppress all r-related findings, got: {findings:?}"
-    );
-}
-
-#[test]
-fn definition_lenient_marker_is_runtime_transparent() {
-    // The `name: partial =` wrap compiles to the same bytecode as the
-    // bare form. The marker rides a non-special helper rule — `root`
-    // (like `ignore` / `boundary`) rejects every ascription.
-    let plain = parse("root = r {\nr = 'x'+\n}")
-        .expect("parse plain")
-        .compile()
-        .expect("compile plain");
-    let marked = parse("root = r {\nr: partial = 'x'+\n}")
-        .expect("parse marked")
-        .compile()
-        .expect("compile marked");
-    assert_eq!(plain.code, marked.code);
-}
-
 // ---- Compile-fatal lint integration ---------------------------
 
 #[test]
 fn compile_errors_on_partial_match_leniency() {
-    // `*^[;]` Catch-absorbed shape — the lint reliably flags this.
-    let g = parse("root = (r)*^[;] {\nr = 'x' 'y'?\n}").expect("parse");
+    // Bare `*^` byte-by-byte recovery shape — the lint reliably flags
+    // this (no clean resync, so leg 2 does not discharge it).
+    let g = parse("root = (r)*^ {\nr = 'x' 'y'?\n}").expect("parse");
     let err = g.compile().expect_err("compile should fail");
     match err {
         syntax_highlighter_compiler::pegc::CompileError::PartialMatchLeniency(findings) => {
@@ -1821,13 +1940,6 @@ fn compile_errors_on_partial_match_leniency() {
         }
         other => panic!("expected PartialMatchLeniency, got: {other:?}"),
     }
-}
-
-#[test]
-fn compile_succeeds_with_definition_lenient_on_flagged_rule() {
-    let g = parse("root = (r)*^[;] {\nr: partial = 'x' 'y'?\n}").expect("parse");
-    g.compile()
-        .expect("compile should succeed with definition-level `r: partial`");
 }
 
 #[test]
@@ -1880,7 +1992,7 @@ fn bracketed_close_catch_runs_recovery_path() {
 
 #[test]
 fn compile_error_display_lists_findings() {
-    let g = parse("root = (r)*^[;] {\nr = 'x' 'y'?\n}").expect("parse");
+    let g = parse("root = (r)*^ {\nr = 'x' 'y'?\n}").expect("parse");
     let err = g.compile().expect_err("compile should fail");
     let msg = format!("{err}");
     assert!(msg.contains("partial-match leniency"));
@@ -2008,11 +2120,11 @@ fn all_shipped_grammars_compile_clean() {
 
 #[test]
 fn partial_match_leniency_carries_call_site_span_in_display() {
-    // `(r)*^[;]` is the catch-absorbed shape that reliably flags — the
-    // `r` reference at line 1, col 9 is the call site the lint
-    // surfaces. The rendered Display must include `{line}:{col}` so
+    // Bare `(r)*^` is the byte-by-byte recovery shape that reliably
+    // flags — the `r` reference at line 1, col 9 is the call site the
+    // lint surfaces. The rendered Display must include `{line}:{col}` so
     // grammar authors can jump to the unanchored call directly.
-    let src = "root = (r)*^[;] {\nr = 'x' 'y'?\n}";
+    let src = "root = (r)*^ {\nr = 'x' 'y'?\n}";
     let g = parse(src).expect("parses");
     let err = g.compile().expect_err("partial-match leniency expected");
     let rendered = format!("{err}");
@@ -2028,7 +2140,7 @@ fn partial_match_leniency_finding_carries_call_site_span() {
     // the Display impl is a thin formatting layer over it. Pin the
     // structured field directly so callers (e.g. editor diagnostics)
     // get the same position the rendered text reports.
-    let src = "root = (r)*^[;] {\nr = 'x' 'y'?\n}";
+    let src = "root = (r)*^ {\nr = 'x' 'y'?\n}";
     let g = parse(src).expect("parses");
     let findings = lint_partial_match(&g);
     let f = findings
@@ -2159,11 +2271,11 @@ fn ascription_on_special_rule_is_rejected() {
     // The three special rules — the start rule `root` and the two
     // auto-insertion targets `ignore` (whitespace) and `boundary` (word
     // boundary) — are structural slots, not lexable tokens: every
-    // ascription (`partial`, `atomic`, `reserved`, `preferred`) is
-    // rejected on all of them. Disabling whitespace auto-insertion is
-    // done by omitting `ignore`, not by ascribing it.
+    // ascription (`atomic`, `reserved`, `preferred`) is rejected on all
+    // of them. Disabling whitespace auto-insertion is done by omitting
+    // `ignore`, not by ascribing it.
     for name in ["root", "ignore", "boundary"] {
-        for asc in ["partial", "atomic", "reserved", "preferred"] {
+        for asc in ["atomic", "reserved", "preferred"] {
             let src = format!("{name}: {asc} = 'a'");
             let err = parse(&src).expect_err("an ascription on a special rule must error");
             assert!(
@@ -2179,23 +2291,6 @@ fn ascription_on_special_rule_is_rejected() {
             );
         }
     }
-}
-
-#[test]
-fn partial_composes_with_reserved() {
-    // `partial reserved` combines the leniency marker with the
-    // reserved-word ascription (partial written first).
-    let src =
-        "root = r {\nignore = (\\s)*\nboundary = !'x'\nr: partial reserved = @keyword 'if'\n}";
-    let g = parse(src).unwrap_or_else(|e| panic!("parse {src:?}: {}", e.message));
-    assert!(
-        g.percent_rules.contains("r"),
-        "{src:?} should mark r percent"
-    );
-    assert!(
-        matches!(g.rules["r"], Pattern::Lenient { .. }),
-        "{src:?} should wrap r in Lenient"
-    );
 }
 
 #[test]

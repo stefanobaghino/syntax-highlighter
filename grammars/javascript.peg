@@ -77,7 +77,7 @@ javascript = (stmt)*^ {
          / expr opt_semi
 
     # ASI: `;` accepted but never required at statement boundaries.
-    opt_semi: partial = @punctuation ';'?
+    opt_semi = @punctuation ';'? $
     empty_stmt = @punctuation ';'
 
     import_decl = kw_import import_body opt_semi {
@@ -105,7 +105,7 @@ javascript = (stmt)*^ {
         export_default_body = fn_decl
                             / class_decl
                             / expr opt_semi
-        export_named: partial = @punctuation '{' export_specifier_list? @punctuation '}' (kw_from string_lit)? opt_semi {
+        export_named = @punctuation '{' export_specifier_list? @punctuation '}' (kw_from string_lit)? opt_semi $ {
             export_specifier_list = export_specifier (@punctuation ',' export_specifier)* (@punctuation ',')?
             export_specifier = @variable ident_name kw_as @variable ident_name
                              / @variable ident
@@ -135,11 +135,11 @@ javascript = (stmt)*^ {
 
     var_decl = (kw_var / kw_let / kw_const) var_declarator_list {
         var_declarator_list = var_declarator (@punctuation ',' var_declarator)*
-        var_declarator: partial = pattern (@operator '=' expr_no_comma)?
+        var_declarator = pattern (@operator '=' expr_no_comma)? $
     }
 
-    if_stmt: partial = kw_if @punctuation '(' expr @punctuation ')' stmt
-                       (kw_else stmt)?
+    if_stmt = kw_if @punctuation '(' expr @punctuation ')' stmt
+                       (kw_else stmt)? $
     for_stmt = kw_for kw_await? @punctuation '(' for_head @punctuation ')' stmt {
         for_head = for_c_style
                  / for_in_of
@@ -159,14 +159,14 @@ javascript = (stmt)*^ {
                     / kw_default @punctuation ':' (!switch_case_term stmt)*
         switch_case_term = kw_case / kw_default / @punctuation '}'
     }
-    try_stmt: partial = kw_try block catch_clause? finally_clause? {
+    try_stmt = kw_try block (catch_clause finally_clause? / finally_clause) $ {
         catch_clause = kw_catch (@punctuation '(' pattern @punctuation ')')? block
         finally_clause = kw_finally block
     }
     throw_stmt = kw_throw expr opt_semi
-    return_stmt: partial = kw_return expr? opt_semi
-    break_stmt: partial = kw_break (@variable ident)? opt_semi
-    continue_stmt: partial = kw_continue (@variable ident)? opt_semi
+    return_stmt = kw_return expr? opt_semi $
+    break_stmt = kw_break (@variable ident)? opt_semi $
+    continue_stmt = kw_continue (@variable ident)? opt_semi $
     debugger_stmt = kw_debugger opt_semi
     labeled_stmt = @variable ident @punctuation ':' stmt
     block = @punctuation '{' (stmt* @punctuation '}' ^^block_close ..= @punctuation '}')
@@ -218,10 +218,10 @@ javascript = (stmt)*^ {
                        / expr_no_comma
         }
 
-        expr_yield: partial = kw_yield @operator '*'? expr_assign?
+        expr_yield = kw_yield @operator '*'? expr_assign? $
     }
 
-    expr_conditional: partial = expr_nullish (@operator '?' expr_no_comma @punctuation ':' expr_no_comma)?
+    expr_conditional = expr_nullish (@operator '?' expr_no_comma @punctuation ':' expr_no_comma)? $
 
     expr_nullish = expr_nullish @operator '??' !'=' expr_lor / expr_lor
     expr_lor = expr_lor @operator '||' !'=' expr_land / expr_land

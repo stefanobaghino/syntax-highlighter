@@ -30,16 +30,16 @@ sqlite = (statement stmt_sep?)*^[;] {
                    / reindex_stmt
                    / analyze_stmt
 
-    select_stmt: partial = with_clause? select_core compound_tail* order_clause? limit_clause?
+    select_stmt = with_clause? select_core compound_tail* order_clause? limit_clause? $
 
     with_clause = kw_with (kw_recursive)? cte_defn (@punctuation ',' cte_defn)*
     cte_defn = @type bare_ident
                (@punctuation '(' ident_list @punctuation ')')?
                kw_as @punctuation '(' select_stmt @punctuation ')'
 
-    select_core: partial = kw_select ((kw_distinct / kw_all))? result_list
+    select_core = kw_select ((kw_distinct / kw_all))? result_list
                            (from_clause)? (where_clause)? (group_clause)? (having_clause)?
-                           (window_clause)?
+                           (window_clause)? $
 
     result_list = result_column (@punctuation ',' result_column)*
     result_column = (table_star / @operator '*' / aliased_expr)
@@ -59,11 +59,11 @@ sqlite = (statement stmt_sep?)*^[;] {
     from_clause = kw_from table_or_subquery (join_clause)*
     table_or_subquery = @punctuation '(' select_stmt @punctuation ')' (table_alias)?
                       / qualified_table_name (table_alias)?
-    qualified_table_name: partial = @type bare_ident_nonkw (@punctuation '.' @type bare_ident_nonkw)?
+    qualified_table_name = @type bare_ident_nonkw (@punctuation '.' @type bare_ident_nonkw)? $
     table_alias = kw_as @variable bare_ident_nonkw
                 / @variable bare_ident_nonkw
 
-    join_clause: partial = join_op table_or_subquery (join_constraint)? {
+    join_clause = join_op table_or_subquery (join_constraint)? $ {
         join_op = @punctuation ','
                 / kw_natural (join_type)? kw_join
                 / join_type kw_join
@@ -89,10 +89,10 @@ sqlite = (statement stmt_sep?)*^[;] {
     having_clause = kw_having expr
 
     order_clause = kw_order kw_by order_item (@punctuation ',' order_item)*
-    order_item: partial = expr ((kw_asc / kw_desc))?
+    order_item = (expr ((kw_asc / kw_desc))?) ^^bad_order_item
 
-    limit_clause: partial = kw_limit expr (kw_offset expr
-                                                / @punctuation ',' expr)?
+    limit_clause = kw_limit expr (kw_offset expr
+                                                / @punctuation ',' expr)? $
 
     window_clause = kw_window named_window (@punctuation ',' named_window)* {
         named_window = @variable bare_ident_nonkw kw_as window_defn
@@ -123,12 +123,12 @@ sqlite = (statement stmt_sep?)*^[;] {
                       / kw_ties
     }
 
-    insert_stmt: partial = with_clause? insert_prefix kw_into qualified_table_name
-                           (kw_as @variable bare_ident_nonkw)?
-                           (@punctuation '(' ident_list @punctuation ')')?
-                           insert_source
-                           (upsert_clause)*
-                           (returning_clause)? {
+    insert_stmt = with_clause? insert_prefix kw_into qualified_table_name
+                  (kw_as @variable bare_ident_nonkw)?
+                  (@punctuation '(' ident_list @punctuation ')')?
+                  insert_source
+                  (upsert_clause)*
+                  (returning_clause)? {
         insert_prefix = kw_insert (kw_or conflict_action)?
                       / kw_replace
 
@@ -160,20 +160,20 @@ sqlite = (statement stmt_sep?)*^[;] {
 
     returning_clause = kw_returning result_list
 
-    update_stmt: partial = with_clause? kw_update (kw_or conflict_action)?
-                          qualified_table_name (table_alias)?
-                          kw_set update_set_list
-                          (from_clause)?
-                          (where_clause)?
-                          order_clause?
-                          limit_clause?
-                          (returning_clause)?
+    update_stmt = with_clause? kw_update (kw_or conflict_action)?
+                  qualified_table_name (table_alias)?
+                  kw_set update_set_list
+                  (from_clause)?
+                  (where_clause)?
+                  order_clause?
+                  limit_clause?
+                  (returning_clause)?
 
-    delete_stmt: partial = with_clause? kw_delete kw_from qualified_table_name (table_alias)?
-                          (where_clause)?
-                          order_clause?
-                          limit_clause?
-                          (returning_clause)?
+    delete_stmt = with_clause? kw_delete kw_from qualified_table_name (table_alias)?
+                  (where_clause)?
+                  order_clause?
+                  limit_clause?
+                  (returning_clause)?
 
     create_table_stmt = kw_create ((kw_temporary / kw_temp))? kw_table
                         (kw_if kw_not kw_exists)?
@@ -187,15 +187,15 @@ sqlite = (statement stmt_sep?)*^[;] {
         table_option = kw_without kw_rowid / kw_strict
     }
 
-    column_def: partial = @variable bare_ident_nonkw
-                          (type_name)?
-                          (column_constraint)*
+    column_def = @variable bare_ident_nonkw
+                 (type_name)?
+                 (column_constraint)*
 
     # SQLite accepts multi-word type names like `DOUBLE PRECISION` and
     # `UNSIGNED BIG INT`.
-    type_name: partial = @type bare_ident_nonkw (@type bare_ident_nonkw)*
+    type_name = @type bare_ident_nonkw (@type bare_ident_nonkw)*
                          (@punctuation '(' signed_number
-                              (@punctuation ',' signed_number)? @punctuation ')')?
+                              (@punctuation ',' signed_number)? @punctuation ')')? $
 
     signed_number = (@operator '-' / @operator '+')? @number number_body
 
@@ -220,10 +220,10 @@ sqlite = (statement stmt_sep?)*^[;] {
         / kw_foreign kw_key @punctuation '(' ident_list @punctuation ')'
               foreign_key_clause
 
-    foreign_key_clause: partial = kw_references @type bare_ident_nonkw
-                                 (@punctuation '(' ident_list @punctuation ')')?
-                                 (fk_action)*
-                                 (fk_deferrable)? {
+    foreign_key_clause = kw_references @type bare_ident_nonkw
+                         (@punctuation '(' ident_list @punctuation ')')?
+                         (fk_action)*
+                         (fk_deferrable)? {
         fk_action = kw_on (kw_delete / kw_update) fk_action_body
                   / kw_match @variable bare_ident_nonkw {
             fk_action_body = kw_set (kw_null / kw_default)
@@ -231,7 +231,7 @@ sqlite = (statement stmt_sep?)*^[;] {
                            / kw_restrict
                            / kw_no kw_action
         }
-        fk_deferrable: partial = (kw_not)? kw_deferrable (kw_initially (kw_immediate / kw_deferred))?
+        fk_deferrable = (kw_not)? kw_deferrable (kw_initially (kw_immediate / kw_deferred))?
     }
 
     conflict_clause = kw_on kw_conflict conflict_action
@@ -246,12 +246,12 @@ sqlite = (statement stmt_sep?)*^[;] {
        / kw_drop (kw_column)? @variable bare_ident_nonkw
      )
 
-    create_index_stmt: partial = kw_create (kw_unique)? kw_index
-                                (kw_if kw_not kw_exists)?
-                                qualified_table_name
-                                kw_on @type bare_ident_nonkw
-                                @punctuation '(' indexed_col_list @punctuation ')'
-                                (where_clause)?
+    create_index_stmt = kw_create (kw_unique)? kw_index
+                        (kw_if kw_not kw_exists)?
+                        qualified_table_name
+                        kw_on @type bare_ident_nonkw
+                        @punctuation '(' indexed_col_list @punctuation ')'
+                        (where_clause)?
 
     drop_index_stmt = kw_drop kw_index (kw_if kw_exists)? qualified_table_name
 
@@ -282,32 +282,32 @@ sqlite = (statement stmt_sep?)*^[;] {
 
     drop_trigger_stmt = kw_drop kw_trigger (kw_if kw_exists)? qualified_table_name
 
-    begin_stmt: partial = kw_begin ((kw_deferred / kw_immediate / kw_exclusive))?
+    begin_stmt = kw_begin ((kw_deferred / kw_immediate / kw_exclusive))?
                           (kw_transaction)?
-    commit_stmt: partial = (kw_commit / kw_end) (kw_transaction)?
-    rollback_stmt: partial = kw_rollback (kw_transaction)?
+    commit_stmt = (kw_commit / kw_end) (kw_transaction)?
+    rollback_stmt = kw_rollback (kw_transaction)?
                              (kw_to (kw_savepoint)? @variable bare_ident_nonkw)?
     savepoint_stmt = kw_savepoint @variable bare_ident_nonkw
     release_stmt = kw_release (kw_savepoint)? @variable bare_ident_nonkw
 
-    pragma_stmt: partial = kw_pragma qualified_table_name
+    pragma_stmt = kw_pragma qualified_table_name
                            (@operator '=' pragma_value
                             / @punctuation '(' pragma_value @punctuation ')')? {
         pragma_value = signed_number / string_lit / @variable bare_ident
     }
 
-    vacuum_stmt: partial = kw_vacuum (@type bare_ident_nonkw)? (kw_into string_lit)?
+    vacuum_stmt = kw_vacuum (@type bare_ident_nonkw)? (kw_into string_lit)?
 
     attach_stmt = kw_attach (kw_database)? expr kw_as
                   @type bare_ident_nonkw
     detach_stmt = kw_detach (kw_database)? @type bare_ident_nonkw
 
-    reindex_stmt: partial = kw_reindex (qualified_table_name)?
-    analyze_stmt: partial = kw_analyze (qualified_table_name)?
+    reindex_stmt = kw_reindex (qualified_table_name)?
+    analyze_stmt = kw_analyze (qualified_table_name)?
 
     explain_stmt = kw_explain (kw_query kw_plan)? statement_body
 
-    create_virtual_table_stmt: partial =
+    create_virtual_table_stmt =
         kw_create kw_virtual kw_table
         (kw_if kw_not kw_exists)?
         qualified_table_name
@@ -369,9 +369,9 @@ sqlite = (statement stmt_sep?)*^[;] {
 
     paren_primary = @punctuation '(' (select_stmt / expr) @punctuation ')'
 
-    function_call: partial = @function bare_ident_nonkw @punctuation '(' func_args? @punctuation ')'
+    function_call = @function bare_ident_nonkw @punctuation '(' func_args? @punctuation ')'
                             (filter_clause)?
-                            (kw_over window_ref)? {
+                            (kw_over window_ref)? $ {
         func_args = @operator '*'
                   / (kw_distinct)? expr (@punctuation ',' expr)*
     }

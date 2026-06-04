@@ -149,8 +149,8 @@ c = (external_decl)*^ {
     labeled_stmt = @variable ident @punctuation ':' stmt
                  / kw_case expr_cond @punctuation ':' stmt
                  / kw_default @punctuation ':' stmt
-    if_stmt: partial = kw_if @punctuation '(' expr @punctuation ')' stmt
-                       (kw_else stmt)?
+    if_stmt = kw_if @punctuation '(' expr @punctuation ')' stmt
+              (kw_else stmt)?
     for_stmt = kw_for @punctuation '(' for_init expr? @punctuation ';' expr? @punctuation ')' stmt
     for_init = decl
              / expr? @punctuation ';'
@@ -174,7 +174,7 @@ c = (external_decl)*^ {
                   / @operator '=' !'='
     }
 
-    expr_cond: partial = expr_lor (@operator '?' expr @punctuation ':' expr_assign)?
+    expr_cond = expr_lor (@operator '?' expr @punctuation ':' expr_assign)?
 
     expr_lor = expr_lor @operator '||' expr_land / expr_land
     expr_land = expr_land @operator '&&' expr_bor / expr_bor

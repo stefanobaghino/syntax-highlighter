@@ -62,8 +62,8 @@ css = (statement)*^ {
                     / rule
                     / @punctuation ';'
         {
-            declaration: partial = @property prop_ident @punctuation ':' value_list
-                                   @keyword '!important'? (@punctuation ';' / &'}')
+            declaration = @property prop_ident @punctuation ':' value_list
+                          @keyword '!important'? (@punctuation ';' / &'}')
             {
                 prop_ident: atomic = '--' ident_body+
                                     / '-'? ident
@@ -96,7 +96,7 @@ css = (statement)*^ {
     hex_color: atomic = @constant ('#' [\da-fA-F]+)
 
     number_with_unit = @number num_body {
-        num_body: partial atomic = [+\-]? (num_float / \d+) num_unit? {
+        num_body: atomic = [+\-]? (num_float / \d+) num_unit? {
             num_float: atomic = \d* '.' \d+
                                / \d+ '.' \d*
             num_unit = '%'

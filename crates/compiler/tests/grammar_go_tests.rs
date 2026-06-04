@@ -431,6 +431,26 @@ fn non_ascii_identifier_in_short_var_decl() {
 }
 
 #[test]
+fn non_ascii_identifier_in_expression_position() {
+    // A non-ASCII identifier used as a bare operand (not just a binding
+    // LHS) must parse to completion and colour as a variable. The ASCII
+    // operand path uses `[a-z_]` / `[A-Z]`, so this exercises the general
+    // `@variable ident` fallback in `expr_primary`; without it the operand
+    // falls through to the `@type` path and only "completes" via recovery.
+    let input = "package main\n\nfunc f() { g(世界); _ = 値 + 1 }\n";
+    let (caps, kinds) = assert_complete_full(input);
+    let var_spans: Vec<&str> = caps
+        .iter()
+        .filter(|c| kinds[c.kind.0 as usize] == "variable")
+        .map(|c| &input[c.start..c.end])
+        .collect();
+    assert!(
+        var_spans.contains(&"世界") && var_spans.contains(&"値"),
+        "expected non-ASCII operands `世界` and `値` as variables; got {var_spans:?}"
+    );
+}
+
+#[test]
 fn bound_predeclared_name_is_always_a_variable() {
     // Predeclared names are `%?` (preferred), not reserved, so `int`
     // shadows as an identifier wherever a binding identifier is expected
