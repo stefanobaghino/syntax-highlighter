@@ -182,9 +182,18 @@ pub enum Pattern {
     ///
     /// An `InferBoundaryCatch` should never reach the compiler or any
     /// downstream analysis — the resolver runs first and replaces it.
+    ///
+    /// When `anchor_only` is set (surface `^&lbl`), the resolver lowers
+    /// it to a bare `Sequence([inner, AndPredicate(B)])` with **no**
+    /// recovery `Catch`: the rule is anchored to its FOLLOW boundary so
+    /// a prefix-only match fails and backtracks, but no skip-to-boundary
+    /// recovery scan is synthesized. This is the cheap, speculative-safe
+    /// anchor used to discharge the leniency lint without the
+    /// recovery-on-backtrack cost a `Catch` incurs.
     InferBoundaryCatch {
         inner: Box<Pattern>,
         label: String,
+        anchor_only: bool,
         span: Span,
     },
     /// A declarative indentation combinator — `deeper(outer) as i`,
@@ -442,9 +451,15 @@ impl Pattern {
                 inner: Box::new(inner.strip_spans()),
                 span: Span::SYNTHETIC,
             },
-            Pattern::InferBoundaryCatch { inner, label, .. } => Pattern::InferBoundaryCatch {
+            Pattern::InferBoundaryCatch {
+                inner,
+                label,
+                anchor_only,
+                ..
+            } => Pattern::InferBoundaryCatch {
                 inner: Box::new(inner.strip_spans()),
                 label: label.clone(),
+                anchor_only: *anchor_only,
                 span: Span::SYNTHETIC,
             },
             Pattern::IndentCombinator { op, arg, bind, .. } => Pattern::IndentCombinator {

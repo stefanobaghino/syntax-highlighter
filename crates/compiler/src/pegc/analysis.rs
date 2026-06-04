@@ -1558,7 +1558,12 @@ fn resolve_in_pattern(
                 span: *span,
             })
         }
-        Pattern::InferBoundaryCatch { inner, label, span } => {
+        Pattern::InferBoundaryCatch {
+            inner,
+            label,
+            anchor_only,
+            span,
+        } => {
             if trailing.is_empty() {
                 return Err(CompileError::CannotInferBoundary {
                     rule: rule_name.into(),
@@ -1578,12 +1583,21 @@ fn resolve_in_pattern(
                 follow_set_to_boundary_pattern(&expand_follow_to_terminals(trailing, first));
             // Resolve nested catches inside the inner first.
             let resolved_inner = resolve_in_pattern(inner, trailing, nullable, first, rule_name)?;
-            Ok(lower_inferred_boundary_catch(
-                resolved_inner,
-                label.clone(),
-                boundary,
-                *span,
-            ))
+            if *anchor_only {
+                // Anchor-only: `Seq([inner, &B])`, no recovery catch.
+                Ok(lower_inferred_boundary_anchor(
+                    resolved_inner,
+                    boundary,
+                    *span,
+                ))
+            } else {
+                Ok(lower_inferred_boundary_catch(
+                    resolved_inner,
+                    label.clone(),
+                    boundary,
+                    *span,
+                ))
+            }
         }
     }
 }
@@ -1652,6 +1666,26 @@ fn lower_inferred_boundary_catch(
         }),
         label,
         recovery: Box::new(recovery),
+        span,
+    }
+}
+
+/// Lower an anchor-only inferred boundary (`^&lbl`) to `Sequence([inner,
+/// &B])`. Unlike [`lower_inferred_boundary_catch`], no recovery `Catch`
+/// is synthesized: the trailing `AndPredicate(B)` makes a prefix-only
+/// match fail and backtrack to the caller's next ordered-choice
+/// alternative, which is backtrack-cheap in the speculative positions
+/// where a recovery-on-backtrack scan would be ruinous. The `&B`
+/// lookahead is non-consuming, so well-formed input — which always has a
+/// legal follower — is unaffected. `boundary` is the terminal-expanded
+/// FOLLOW set (see the `InferBoundaryCatch` arm of `resolve_in_pattern`).
+fn lower_inferred_boundary_anchor(inner: Pattern, boundary: Pattern, span: Span) -> Pattern {
+    let lookahead = Pattern::AndPredicate {
+        inner: Box::new(boundary),
+        span,
+    };
+    Pattern::Sequence {
+        items: vec![inner, lookahead],
         span,
     }
 }

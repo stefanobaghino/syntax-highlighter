@@ -1772,6 +1772,66 @@ fn lint_partial_match_clean_resync_nested_constituent_flagged() {
 }
 
 #[test]
+fn anchor_only_inferred_lowers_to_bare_and_predicate_not_catch() {
+    // `^&lbl` lowers to `Seq([inner, &B])` — a bare FOLLOW anchor with no
+    // recovery catch — distinct from `^^lbl`, which wraps the body in a
+    // `Catch`. The cheap backtrack-on-failure of the bare `&B` is what
+    // makes the anchor safe in speculative positions a recovery scan would
+    // blow up.
+    let mut g = parse("root = 'a' ('b')? ^&tail\n").expect("anchored parses");
+    resolve_inferred_boundaries(&mut g).expect("boundaries resolve");
+    match &g.rules["root"] {
+        Pattern::Sequence { items, .. } => {
+            assert!(
+                matches!(items.last(), Some(Pattern::AndPredicate { .. })),
+                "anchored body ends in `&B`: {:?}",
+                g.rules["root"]
+            );
+            assert!(
+                !matches!(items.first(), Some(Pattern::Catch { .. })),
+                "anchor-only must not synthesize a Catch: {:?}",
+                g.rules["root"]
+            );
+        }
+        other => panic!("expected `Seq([inner, &B])`, got {other:?}"),
+    }
+}
+
+#[test]
+fn lint_partial_match_real_sqlite_grammar_function_call_anchored() {
+    // The shipped grammar anchors `function_call` with `^&fn_tail`: its
+    // trailing `(filter_clause)? (kw_over window_ref)?` optionals are
+    // pinned to the expression FOLLOW, so the speculative call from
+    // `primary` is discharged. Stripping the anchor re-exposes the
+    // prefix-leniency footgun, so the lint must flag it.
+    let source = std::fs::read_to_string(workspace_root().join("grammars/sqlite.peg"))
+        .expect("sqlite.peg fixture present");
+
+    let mut anchored = parse(&source).expect("sqlite.peg parses");
+    resolve_inferred_boundaries(&mut anchored).expect("boundaries resolve");
+    assert!(
+        !lint_partial_match(&anchored)
+            .iter()
+            .any(|f| f.rule == "function_call"),
+        "function_call is anchored; should not be flagged"
+    );
+
+    let stripped_src = source.replace(" ^&fn_tail", "");
+    assert!(
+        stripped_src != source,
+        "expected to strip the `^&fn_tail` anchor from the fixture"
+    );
+    let mut stripped = parse(&stripped_src).expect("stripped grammar parses");
+    resolve_inferred_boundaries(&mut stripped).expect("boundaries resolve");
+    assert!(
+        lint_partial_match(&stripped)
+            .iter()
+            .any(|f| f.rule == "function_call"),
+        "function_call must flag once the anchor is stripped"
+    );
+}
+
+#[test]
 fn lint_partial_match_real_sqlite_grammar_aliased_expr_anchored() {
     // The shipped grammar has the PR #101 fix: aliased_expr is anchored
     // via `&(ws result_column_boundary)` inside result_column. The lint

@@ -752,6 +752,7 @@ fn inferred_catch_at_end_of_rule_parses_to_placeholder() {
         Pattern::InferBoundaryCatch {
             inner: Box::new(Pattern::literal("a")),
             label: "lbl".into(),
+            anchor_only: false,
             span: Span::SYNTHETIC,
         },
     );
@@ -766,6 +767,7 @@ fn inferred_catch_before_choice_separator() {
             Pattern::InferBoundaryCatch {
                 inner: Box::new(Pattern::literal("a")),
                 label: "lbl".into(),
+                anchor_only: false,
                 span: Span::SYNTHETIC,
             },
             Pattern::literal("b"),
@@ -782,6 +784,7 @@ fn inferred_catch_before_paren_close() {
             Pattern::InferBoundaryCatch {
                 inner: Box::new(Pattern::literal("a")),
                 label: "lbl".into(),
+                anchor_only: false,
                 span: Span::SYNTHETIC,
             },
             Pattern::literal("c"),
@@ -809,6 +812,7 @@ fn inferred_vs_explicit_no_ambiguity() {
             Pattern::InferBoundaryCatch {
                 inner: Box::new(Pattern::literal("a")),
                 label: "lbl".into(),
+                anchor_only: false,
                 span: Span::SYNTHETIC,
             },
             Pattern::literal("b"),

@@ -369,9 +369,9 @@ sqlite = (statement stmt_sep?)*^[;] {
 
     paren_primary = @punctuation '(' (select_stmt / expr) @punctuation ')'
 
-    function_call: partial = @function bare_ident_nonkw @punctuation '(' func_args? @punctuation ')'
+    function_call = @function bare_ident_nonkw @punctuation '(' func_args? @punctuation ')'
                             (filter_clause)?
-                            (kw_over window_ref)? {
+                            (kw_over window_ref)? ^&fn_tail {
         func_args = @operator '*'
                   / (kw_distinct)? expr (@punctuation ',' expr)*
     }
