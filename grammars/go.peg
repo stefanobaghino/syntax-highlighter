@@ -135,11 +135,7 @@ go = package_clause import_decl* (top_decl)*^ {
         }
     }
 
-    # holdout: a bare `^&` FOLLOW anchor here turns a valid parse of a
-    # non-ASCII identifier in trailing expression position (e.g. `x := 世界`)
-    # from complete into a partial match — ASCII identifiers are unaffected.
-    # Root cause not yet isolated; kept lenient until it is.
-    qualified_ident: partial = ident (@punctuation '.' ident)?
+    qualified_ident = ident (@punctuation '.' ident)? ^&qi_tail
 
     block = @punctuation '{' (stmt* @punctuation '}' ^^block_close ..= @punctuation '}')
 
@@ -290,6 +286,7 @@ go = package_clause import_decl* (top_decl)*^ {
                                                  / @type predeclared_type
                                                  / @function predeclared_fn &(@punctuation '(')
                                                  / @variable lower_ident
+                                                 / @variable ident
                                                  / paren_expr {
                                         composite_lit = @type qualified_ident composite_body
                                                       / kw_map @punctuation '[' type_expr @punctuation ']' type_expr composite_body
@@ -328,6 +325,7 @@ go = package_clause import_decl* (top_decl)*^ {
                                                     / @type predeclared_type
                                                     / @function predeclared_fn &(@punctuation '(')
                                                     / @variable lower_ident
+                                                    / @variable ident
                                                     / paren_expr
                                 }
                             }
