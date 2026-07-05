@@ -130,11 +130,12 @@ pub struct Grammar {
 #[derive(Debug, Clone)]
 pub struct RuleHeader {
     pub name: String,
-    /// Byte offset of the rule's identifier (after any leading `~` / `*`).
+    /// Byte offset of the rule's identifier.
     pub name_byte: usize,
     /// Byte offset of the first non-whitespace byte after `=`.
     pub body_byte_start: usize,
-    /// Byte offset just past the last byte consumed for the body.
+    /// Byte offset just past the body's last non-trivia byte — trailing
+    /// whitespace and comments are excluded.
     pub body_byte_end: usize,
 }
 
@@ -294,6 +295,14 @@ struct Parser<'a> {
     /// rather than O(offset). Every Pattern node carries a [`Span`];
     /// the per-node lookup dominates parser cost without this.
     line_starts: Vec<usize>,
+    /// Byte offset just past the last non-trivia byte consumed so far.
+    /// `skip_ws` maintains it (see there); `parse_rule_def` reads it to
+    /// end a rule's body range before trailing whitespace and comments.
+    last_solid_end: usize,
+    /// Where the previous `skip_ws` stopped. Distinguishes "solid bytes
+    /// consumed since the last skip" from a second back-to-back
+    /// `skip_ws` call, which must not move the watermark.
+    ws_end: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -310,6 +319,8 @@ impl<'a> Parser<'a> {
             src,
             pos: 0,
             line_starts,
+            last_solid_end: 0,
+            ws_end: 0,
         }
     }
 
@@ -435,7 +446,15 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         let body_byte_start = self.pos;
         let body = self.parse_choice()?;
-        let body_byte_end = self.pos;
+        // `parse_choice` returns through a trailing `skip_ws`, so
+        // `self.pos` sits past any whitespace and comments that follow
+        // the body; the watermark ends the range at the body's last
+        // solid byte instead.
+        let body_byte_end = self.last_solid_end.max(body_byte_start);
+        debug_assert!(
+            body_byte_end > body_byte_start,
+            "rule body consumed no solid bytes"
+        );
         // `reserved` and `preferred` are compiler-generated (see
         // `synthesize_reserved_preferred`); an author definition would be
         // silently overwritten, so reject it outright. Grammars may still
@@ -1677,6 +1696,15 @@ impl<'a> Parser<'a> {
     }
 
     fn skip_ws(&mut self) {
+        // `skip_ws` is the only trivia consumer, so `pos > ws_end` here
+        // means solid bytes were consumed since the previous skip; that
+        // guard keeps a back-to-back `skip_ws` (e.g. a sequence's
+        // trailing skip followed by a caller's loop-top skip) from
+        // dragging the watermark past the trivia the first one ate.
+        debug_assert!(self.pos >= self.ws_end, "parser position moved backwards");
+        if self.pos > self.ws_end {
+            self.last_solid_end = self.pos;
+        }
         loop {
             match self.peek() {
                 Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'\r') => self.pos += 1,
@@ -1691,6 +1719,7 @@ impl<'a> Parser<'a> {
                 _ => break,
             }
         }
+        self.ws_end = self.pos;
     }
 
     fn peek(&self) -> Option<u8> {

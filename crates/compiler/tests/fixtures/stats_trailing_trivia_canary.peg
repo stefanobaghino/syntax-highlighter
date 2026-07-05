@@ -1,0 +1,6 @@
+root = a b {
+    a = [fF]
+    # --- section ---
+    b = 'y' # trailing note
+}
+# trailing file comment
