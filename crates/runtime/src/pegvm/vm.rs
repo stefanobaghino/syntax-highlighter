@@ -45,7 +45,8 @@ impl ArgKey {
 /// `CaptureBegin` fires before any inner one's). `CaptureEnd` only
 /// fills in the matching capture's `end` — it doesn't reorder.
 /// Consumers that reconstruct nesting can walk a stack keyed on `end`
-/// (see `walk` in `src/walk.rs` for the canonical traversal).
+/// (see `walk` in `src/walk.rs` for the canonical flat traversal, and
+/// `fold_captures` in `src/fold.rs` for the bottom-up typed fold).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Capture {
     pub kind: CaptureKind,

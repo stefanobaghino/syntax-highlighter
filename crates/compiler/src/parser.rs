@@ -169,6 +169,21 @@ impl Parser {
         &self.program.capture_kinds
     }
 
+    /// Fold the most recent parse's captures bottom-up into
+    /// caller-typed values — see
+    /// [`syntax_highlighter::fold::fold_captures`] for the exact
+    /// semantics (post-order closure calls, children in source order,
+    /// forest roots returned in source order). Works on partial
+    /// parses too: the capture stream is a valid forest in every
+    /// case. The closure receives byte ranges into
+    /// [`Parser::input`]; slice it yourself for leaf text.
+    pub fn fold_captures<T, F>(&self, f: F) -> Vec<T>
+    where
+        F: FnMut(&str, std::ops::Range<usize>, Vec<T>) -> T,
+    {
+        syntax_highlighter::fold::fold_captures(&self.captures, &self.program.capture_kinds, f)
+    }
+
     /// Rule names indexed by `MemoId.0` — see
     /// [`syntax_highlighter::pegvm::Program::rule_names`]. Used by diagnostic
     /// consumers to resolve [`RecoveryDiagnostic::rule_stack`] entries
