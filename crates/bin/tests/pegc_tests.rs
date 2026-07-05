@@ -169,6 +169,31 @@ fn stats_emits_correct_counts_for_canary_grammar() {
     assert!(lines.next().is_none(), "canary should emit one rule record");
 }
 
+// `stats_trailing_trivia_canary.peg` places comment trivia after each
+// kind of rule body — a section divider between nested rules, a
+// same-line trailing comment, a comment before the closing `}`, and a
+// trailing file comment. `body_chars` must count only the body itself
+// (#137: the parser used to end body ranges past the trailing trivia,
+// and `.trim()` cannot strip comments).
+#[test]
+fn stats_body_chars_excludes_trailing_comment_blocks() {
+    let path = "crates/compiler/tests/fixtures/stats_trailing_trivia_canary.peg";
+    assert_exists(path);
+    let (code, stdout, stderr) = run(&["stats", path]);
+    assert_eq!(code, 0, "stderr was: {stderr}");
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 4, "expected 1 header + 3 per-rule: {lines:?}");
+    let mut by_rule: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    for line in &lines[1..] {
+        let rule = json_field_str(line, "rule").expect("rule present");
+        by_rule.insert(rule, line);
+    }
+    // root = `a b` (3), a = `[fF]` (4), b = `'y'` (3).
+    assert_eq!(json_field_str(by_rule["\"root\""], "body_chars"), Some("3"));
+    assert_eq!(json_field_str(by_rule["\"a\""], "body_chars"), Some("4"));
+    assert_eq!(json_field_str(by_rule["\"b\""], "body_chars"), Some("3"));
+}
+
 // Multi-rule fixture pinning per-rule reference counting: `a` is
 // referenced three times (twice from `root`, once from `b`), `b` once
 // (from `root`), and `root` zero times.

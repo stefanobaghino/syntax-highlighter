@@ -1626,3 +1626,74 @@ fn case_insensitive_literal_unterminated_errors() {
         err.message
     );
 }
+
+// ---------------------------------------------------------------------
+// RuleHeader body ranges: `body_byte_end` must sit just past the body's
+// last non-trivia byte, whatever token the body happens to end on —
+// trailing whitespace and comments belong to the gap, not the body.
+// Positional assertions, so these use `parse_src` directly.
+
+/// Slice `src` by the named rule's header body range.
+fn body_slice<'a>(src: &'a str, rule: &str) -> &'a str {
+    let g = parse_src(src).expect("parse failed");
+    let h = g
+        .rule_headers
+        .iter()
+        .find(|h| h.name == rule)
+        .expect("rule header present");
+    &src[h.body_byte_start..h.body_byte_end]
+}
+
+#[test]
+fn body_range_excludes_trailing_comment() {
+    assert_eq!(body_slice("r = 'x' # note\n", "r"), "'x'");
+}
+
+#[test]
+fn body_range_excludes_trailing_comment_block_before_next_rule() {
+    let src = "r = a {\n    a = 'x'\n    # divider\n    # more\n    b = a 'y'\n}\n";
+    assert_eq!(body_slice(src, "a"), "'x'");
+    assert_eq!(body_slice(src, "b"), "a 'y'");
+}
+
+#[test]
+fn body_range_ends_at_postfix_repeat() {
+    assert_eq!(body_slice("r = 'x'*\n", "r"), "'x'*");
+}
+
+#[test]
+fn body_range_ends_at_exact_count() {
+    assert_eq!(body_slice("r = 'x'{3}\n", "r"), "'x'{3}");
+}
+
+#[test]
+fn body_range_ends_at_boundary_anchor() {
+    assert_eq!(body_slice("r = a $ {\n    a = 'x'\n}\n", "a"), "'x'");
+    assert_eq!(body_slice("r = a $ {\n    a = 'x'\n}\n", "r"), "a $");
+}
+
+#[test]
+fn body_range_ends_at_sync_set() {
+    assert_eq!(body_slice("r = 'x'*^[;]\n", "r"), "'x'*^[;]");
+}
+
+#[test]
+fn body_range_of_parent_stops_before_scope_block() {
+    assert_eq!(
+        body_slice("r = a b {\n    a = 'x'\n    b = 'y'\n}\n", "r"),
+        "a b"
+    );
+}
+
+#[test]
+fn body_range_of_last_nested_rule_stops_before_closing_brace() {
+    assert_eq!(
+        body_slice("r = a {\n    a = 'x'\n    # last words\n}\n", "a"),
+        "'x'"
+    );
+}
+
+#[test]
+fn body_range_at_eof_without_newline() {
+    assert_eq!(body_slice("r = 'x'", "r"), "'x'");
+}
