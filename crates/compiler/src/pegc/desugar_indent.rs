@@ -482,6 +482,7 @@ mod tests {
             preferred_rules: HashSet::new(),
             rule_headers: Vec::new(),
             rule_params,
+            layout: None,
         }
     }
 

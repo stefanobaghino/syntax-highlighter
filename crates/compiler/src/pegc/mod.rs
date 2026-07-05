@@ -29,13 +29,15 @@
 pub mod analysis;
 pub mod compiler;
 pub mod desugar_indent;
+pub mod emit;
 pub mod parser;
 pub mod pattern;
 pub mod unicode_properties;
 
 pub use analysis::{tally_non_terminal_refs, LintFinding, LintKind};
 pub use compiler::{compile_pattern, CompileError};
-pub use parser::{parse, Grammar, ParseError, RuleHeader};
+pub use emit::{emit, emit_with_edits, EmitError, LayoutEdit};
+pub use parser::{parse, BlockLayout, Grammar, ParseError, RuleHeader, RuleLayout};
 pub use pattern::{IndentArg, IndentOp, IndentOpKind, Pattern, Span};
 
 use syntax_highlighter::pegvm::Program;

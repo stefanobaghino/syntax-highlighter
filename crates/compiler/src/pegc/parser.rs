@@ -107,13 +107,18 @@ pub struct Grammar {
     /// [`RESERVED_RULE`] and instead collected into [`PREFERRED_RULE`] by
     /// [`synthesize_reserved_preferred`](super::analysis::synthesize_reserved_preferred).
     pub preferred_rules: HashSet<String>,
-    /// Per-rule source ranges, in declaration order. Populated by
-    /// [`parse`]; empty for grammars built via [`Grammar::new`] (which
-    /// has no source text). `pegc stats` uses these to slice the
-    /// grammar source for the `body_chars` field; the reserved-name
-    /// position check in [`Grammar::compile`] also walks the names in
-    /// order to verify `root` is the first rule.
+    /// Per-rule source ranges, in declaration order. Derived by
+    /// [`parse`] from [`Grammar::layout`] (pre-order over the scope
+    /// tree); empty for grammars built via [`Grammar::new`] (which has
+    /// no source text). `pegc stats` uses these to slice the grammar
+    /// source for the `body_chars` field.
     pub rule_headers: Vec<RuleHeader>,
+    /// Source layout of the grammar's scope tree, rooted at the one
+    /// top-level rule. Populated by [`parse`]; `None` for grammars
+    /// built via [`Grammar::new`] (which has no source text). The
+    /// substrate for layout-preserving re-emission — see
+    /// [`emit`](super::emit).
+    pub layout: Option<RuleLayout>,
     /// Declared parameter names of each parameterized rule, keyed by flat
     /// rule name (e.g. `suite` → `["outer"]`). The parameters are the
     /// integer indentation columns a rule is called with; the compiler
@@ -139,6 +144,43 @@ pub struct RuleHeader {
     pub body_byte_end: usize,
 }
 
+/// Source layout of one rule: byte offsets of its structural pieces,
+/// nested per the scope tree. All offsets are into the same source
+/// string passed to [`parse`]. The recorded pieces plus the verbatim
+/// gaps between them tile the rule's full source extent, which is what
+/// lets [`emit`](super::emit) reproduce unedited source byte-for-byte.
+#[derive(Debug, Clone)]
+pub struct RuleLayout {
+    /// Flat (mangled) rule name — the same key as [`Grammar::rules`],
+    /// e.g. `parent::child` for nested rules.
+    pub name: String,
+    /// Byte range of the rule's identifier as authored (the short
+    /// name, not the flat one).
+    pub name_range: std::ops::Range<usize>,
+    /// Byte range of the ascription list, from the `:` through the
+    /// last keyword. `None` when the rule has no ascriptions.
+    pub ascriptions: Option<std::ops::Range<usize>>,
+    /// Byte offset of the `=`.
+    pub eq_byte: usize,
+    /// Byte range of the rule body — trailing trivia excluded, same
+    /// bounds as the rule's [`RuleHeader`].
+    pub body_range: std::ops::Range<usize>,
+    /// The `{ … }` scope block, when present (`Some` even when the
+    /// block is empty).
+    pub block: Option<BlockLayout>,
+}
+
+/// Byte offsets of a rule's `{ … }` scope block and the layouts of the
+/// rules declared inside it, in declaration order.
+#[derive(Debug, Clone)]
+pub struct BlockLayout {
+    /// Byte offset of the `{`.
+    pub open_brace: usize,
+    /// Byte offset of the `}`.
+    pub close_brace: usize,
+    pub children: Vec<RuleLayout>,
+}
+
 /// One node of the parsed scope tree, before name resolution. A rule
 /// owns its body and the nested rules declared in its `{ … }` block.
 /// [`Parser::resolve_scopes`] flattens the tree into [`Grammar::rules`].
@@ -147,8 +189,14 @@ struct ParsedRule {
     /// Source span of the rule's name, for scope-resolution diagnostics.
     name_span: Span,
     name_byte: usize,
+    /// Byte range of the ascription list (`:` through last keyword).
+    asc_range: Option<(usize, usize)>,
+    /// Byte offset of the `=`.
+    eq_byte: usize,
     body_byte_start: usize,
     body_byte_end: usize,
+    /// Byte offsets of the scope block's `{` and `}`, when present.
+    block_braces: Option<(usize, usize)>,
     /// The rule body. `NonTerminal` names are still the authored short
     /// names; resolution rewrites them to flat keys.
     body: Pattern,
@@ -179,6 +227,7 @@ impl Grammar {
             preferred_rules: HashSet::new(),
             rule_headers: Vec::new(),
             rule_params: HashMap::new(),
+            layout: None,
         }
     }
 
@@ -194,6 +243,7 @@ impl Grammar {
             preferred_rules: HashSet::new(),
             rule_headers: Vec::new(),
             rule_params: HashMap::new(),
+            layout: None,
         }
     }
 
@@ -237,6 +287,7 @@ impl Grammar {
             preferred_rules: self.preferred_rules.clone(),
             rule_headers: self.rule_headers.clone(),
             rule_params: self.rule_params.clone(),
+            layout: self.layout.clone(),
         };
         desugar_indent(&mut resolved)?;
         resolve_inferred_boundaries(&mut resolved)?;
@@ -403,7 +454,9 @@ impl<'a> Parser<'a> {
         let mut definition_atomic = false;
         let mut definition_percent = false;
         let mut definition_preferred = false;
+        let mut asc_range: Option<(usize, usize)> = None;
         if self.peek() == Some(b':') {
+            let asc_start = self.pos;
             self.pos += 1;
             let mut count = 0usize;
             loop {
@@ -412,6 +465,7 @@ impl<'a> Parser<'a> {
                     break;
                 }
                 let kw = self.parse_ident()?;
+                asc_range = Some((asc_start, self.pos));
                 match kw.as_str() {
                     "atomic" | "reserved" | "preferred" => {
                         if definition_atomic || definition_percent {
@@ -442,6 +496,7 @@ impl<'a> Parser<'a> {
             }
         }
         self.skip_ws();
+        let eq_byte = self.pos;
         self.expect_str("=")?;
         self.skip_ws();
         let body_byte_start = self.pos;
@@ -490,13 +545,16 @@ impl<'a> Parser<'a> {
         // consumed inside `parse_postfix`, so any `{` that reaches this
         // point opens a scope.
         self.skip_ws();
+        let mut block_braces: Option<(usize, usize)> = None;
         let children = if self.peek() == Some(b'{') {
+            let open_brace = self.pos;
             self.pos += 1;
             let mut kids = Vec::new();
             loop {
                 self.skip_ws();
                 match self.peek() {
                     Some(b'}') => {
+                        block_braces = Some((open_brace, self.pos));
                         self.pos += 1;
                         break;
                     }
@@ -530,8 +588,11 @@ impl<'a> Parser<'a> {
             name,
             name_span,
             name_byte,
+            asc_range,
+            eq_byte,
             body_byte_start,
             body_byte_end,
+            block_braces,
             body,
             atomic: definition_atomic,
             percent: definition_percent,
@@ -551,7 +612,6 @@ impl<'a> Parser<'a> {
         let mut atomic: HashSet<String> = HashSet::new();
         let mut percent: HashSet<String> = HashSet::new();
         let mut preferred: HashSet<String> = HashSet::new();
-        let mut rule_headers: Vec<RuleHeader> = Vec::new();
         // Indentation parameters are synthesized later by `desugar_indent`
         // from the `%root` / `%align` / `%indent` operators; the surface
         // has no parameter syntax, so resolution leaves this empty.
@@ -562,7 +622,7 @@ impl<'a> Parser<'a> {
         // grammar can recurse into / reference its entry rule).
         let mut stack: Vec<HashMap<String, String>> =
             vec![HashMap::from([(root.name.clone(), root_flat.clone())])];
-        self.resolve_rule(
+        let layout = self.resolve_rule(
             root,
             root_flat.clone(),
             true,
@@ -571,8 +631,10 @@ impl<'a> Parser<'a> {
             &mut atomic,
             &mut percent,
             &mut preferred,
-            &mut rule_headers,
         )?;
+
+        let mut rule_headers: Vec<RuleHeader> = Vec::new();
+        Self::flatten_headers(&layout, &mut rule_headers);
 
         // `boundary`, like `ignore`, is exempt from ignore auto-insertion:
         // its body is a bare boundary predicate that must stay adjacent to
@@ -590,13 +652,31 @@ impl<'a> Parser<'a> {
             preferred_rules: preferred,
             rule_headers,
             rule_params,
+            layout: Some(layout),
         })
+    }
+
+    /// Flatten a layout tree into [`RuleHeader`]s in declaration order
+    /// (pre-order: a rule before the rules nested in its block).
+    fn flatten_headers(layout: &RuleLayout, out: &mut Vec<RuleHeader>) {
+        out.push(RuleHeader {
+            name: layout.name.clone(),
+            name_byte: layout.name_range.start,
+            body_byte_start: layout.body_range.start,
+            body_byte_end: layout.body_range.end,
+        });
+        if let Some(block) = &layout.block {
+            for child in &block.children {
+                Self::flatten_headers(child, out);
+            }
+        }
     }
 
     /// Resolve a single rule and recurse into its scope. `flat_name` is
     /// the rule's unique key; `is_root` marks the top-level declaration,
     /// whose direct children are the grammar's globals (bare names);
-    /// deeper rules are mangled `parent::name`.
+    /// deeper rules are mangled `parent::name`. Returns the rule's
+    /// [`RuleLayout`] (children resolved recursively).
     #[allow(clippy::too_many_arguments)]
     fn resolve_rule(
         &self,
@@ -608,8 +688,7 @@ impl<'a> Parser<'a> {
         atomic: &mut HashSet<String>,
         percent: &mut HashSet<String>,
         preferred: &mut HashSet<String>,
-        headers: &mut Vec<RuleHeader>,
-    ) -> Result<(), ParseError> {
+    ) -> Result<RuleLayout, ParseError> {
         // Build the child scope frame (name → flat key) before resolving
         // any body, so sibling references and forward references resolve.
         let mut frame: HashMap<String, String> = HashMap::new();
@@ -659,13 +738,8 @@ impl<'a> Parser<'a> {
         if rule.atomic || rule.percent {
             atomic.insert(flat_name.clone());
         }
-        headers.push(RuleHeader {
-            name: flat_name,
-            name_byte: rule.name_byte,
-            body_byte_start: rule.body_byte_start,
-            body_byte_end: rule.body_byte_end,
-        });
 
+        let mut child_layouts: Vec<RuleLayout> = Vec::with_capacity(rule.children.len());
         for child in rule.children {
             let child_flat = stack
                 .last()
@@ -673,12 +747,28 @@ impl<'a> Parser<'a> {
                 .get(&child.name)
                 .expect("child registered in frame above")
                 .clone();
-            self.resolve_rule(
-                child, child_flat, false, stack, out, atomic, percent, preferred, headers,
-            )?;
+            child_layouts.push(self.resolve_rule(
+                child, child_flat, false, stack, out, atomic, percent, preferred,
+            )?);
         }
         stack.pop();
-        Ok(())
+
+        debug_assert!(
+            rule.block_braces.is_some() || child_layouts.is_empty(),
+            "children without a scope block"
+        );
+        Ok(RuleLayout {
+            name: flat_name,
+            name_range: rule.name_byte..rule.name_byte + rule.name.len(),
+            ascriptions: rule.asc_range.map(|(s, e)| s..e),
+            eq_byte: rule.eq_byte,
+            body_range: rule.body_byte_start..rule.body_byte_end,
+            block: rule.block_braces.map(|(open, close)| BlockLayout {
+                open_brace: open,
+                close_brace: close,
+                children: child_layouts,
+            }),
+        })
     }
 
     /// Rewrite every `NonTerminal` name in `pat` to the flat key it

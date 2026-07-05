@@ -1697,3 +1697,42 @@ fn body_range_of_last_nested_rule_stops_before_closing_brace() {
 fn body_range_at_eof_without_newline() {
     assert_eq!(body_slice("r = 'x'", "r"), "'x'");
 }
+
+// ---------------------------------------------------------------------
+// RuleLayout: the structural offsets `parse` retains for
+// layout-preserving re-emission. The emitter's own behavior lives in
+// `layout_tests.rs`; this pins the recorded offsets themselves.
+
+#[test]
+fn layout_records_structural_offsets() {
+    let src = "root = kw {\n    kw: reserved = 'if'\n}\n";
+    let g = parse_src(src).expect("parse failed");
+    let layout = g.layout.as_ref().expect("layout present");
+    assert_eq!(layout.name, "root");
+    assert_eq!(&src[layout.name_range.clone()], "root");
+    assert!(layout.ascriptions.is_none());
+    assert_eq!(&src[layout.eq_byte..layout.eq_byte + 1], "=");
+    assert_eq!(&src[layout.body_range.clone()], "kw");
+    let block = layout.block.as_ref().expect("block present");
+    assert_eq!(&src[block.open_brace..block.open_brace + 1], "{");
+    assert_eq!(&src[block.close_brace..block.close_brace + 1], "}");
+    assert_eq!(block.children.len(), 1);
+    let kw = &block.children[0];
+    assert_eq!(kw.name, "kw");
+    assert_eq!(&src[kw.name_range.clone()], "kw");
+    assert_eq!(
+        &src[kw.ascriptions.clone().expect("ascription recorded")],
+        ": reserved"
+    );
+    assert_eq!(&src[kw.body_range.clone()], "'if'");
+    assert!(kw.block.is_none());
+}
+
+#[test]
+fn layout_absent_for_hand_built_grammars() {
+    use std::collections::HashMap;
+    let mut rules = HashMap::new();
+    rules.insert("root".to_string(), Pattern::literal("x"));
+    let g = syntax_highlighter_compiler::pegc::Grammar::new(rules);
+    assert!(g.layout.is_none());
+}
